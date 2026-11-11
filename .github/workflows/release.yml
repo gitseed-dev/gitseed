@@ -76,7 +76,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Control Plane image (ghcr.io/gitseed-dev/gitseed)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -91,7 +91,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=control-plane
 
       - name: Build Runner Sandbox image (ghcr.io/gitseed-dev/runner)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./apps/runner
           file: ./apps/runner/Dockerfile
