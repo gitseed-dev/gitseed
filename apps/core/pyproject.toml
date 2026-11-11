@@ -22,7 +22,7 @@ dependencies = [
   "alembic",
   "httpx",
   "gitseed-common",
-  "psycopg[binary]>=3.3.6",
+  "psycopg[binary]>=3.3.8",
   "pwdlib[argon2]",
   "cryptography",
   "redis",
