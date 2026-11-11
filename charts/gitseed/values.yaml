@@ -1,0 +1,242 @@
+# Default values for gitseed.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Override `image.repository` and `runnerImage.repository` to point at self-built images
+# pushed to your cluster's container registry (e.g. `registry.internal/gitseed/gitseed`).
+image:
+  repository: ghcr.io/gitseed-dev/gitseed
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+runnerImage:
+  repository: ghcr.io/gitseed-dev/runner
+  # Overrides the runner image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+
+# Bootstrap Admin & Security
+auth:
+  adminEmail: "admin@gitseed.local"
+  adminName: "Admin"
+  # Leave empty to auto-generate and log on initial bootstrap
+  adminPassword: ""
+  # Leave empty to auto-generate a 48-char random secret on initial Helm install (or provide existingSecret).
+  secretKey: ""
+  # IMPORTANT for GitOps (ArgoCD / Flux): client-side `helm template` cannot call Kubernetes `lookup()`,
+  # so always pre-create a Secret and set `auth.existingSecret` to prevent GITSEED_SECRET_KEY rotation on sync.
+  existingSecret: ""
+
+gitops:
+  # Set true in ArgoCD / Flux pipelines to fail template rendering if `auth.existingSecret` is not configured.
+  requireExistingSecret: false
+
+# Environment ("development" or "production")
+environment: "production"
+config:
+  environment: "production"
+debug: false
+autoMigrate: true
+
+# Kubernetes Compute Pre-Seeding & Namespace Isolation
+compute:
+  # Pre-seed an "In-Cluster Kubernetes" compute backend on first startup ("kubernetes", "docker", "auto", "none")
+  bootstrapProvider: "kubernetes"
+  kubernetesApiUrl: "https://kubernetes.default.svc"
+  # Isolation mode:
+  # - "workload": separates SDLC stage Jobs into runnerNamespace and Sandboxes/Terminals into sandboxNamespace
+  # - "project": isolates per project (<runnerNamespace>-<project_slug> and <sandboxNamespace>-<project_slug>)
+  # - "shared": runs both SDLC stage Jobs and Sandboxes in the release namespace (or runnerNamespace)
+  namespaceIsolation: "workload"
+  # Automatically create the dedicated runnerNamespace and sandboxNamespace
+  createNamespaces: true
+  # Defaults to "<release-namespace>-runners" when empty and namespaceIsolation != "shared"
+  runnerNamespace: ""
+  # Defaults to "<release-namespace>-sandboxes" when empty and namespaceIsolation != "shared"
+  sandboxNamespace: ""
+  # Optional ServiceAccount name used by spawned runner Jobs
+  runnerServiceAccount: ""
+  # Create NetworkPolicies in runner and sandbox namespaces to restrict pod-to-control-plane traffic
+  networkPolicy:
+    enabled: true
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Control Plane Components
+api:
+  replicaCount: 1
+  port: 8420
+  # Session affinity ensures live PTY/WebSocket/VS Code streams stay routed to the same pod when replicaCount > 1
+  sessionAffinity: "ClientIP"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  persistence:
+    enabled: true
+    storageClass: ""
+    # ReadWriteOnce works out of the box on standard single-node and cloud block StorageClasses;
+    # switch to ReadWriteMany only when scaling api.replicaCount > 1 or scheduling api and scheduler across multiple nodes.
+    accessMode: ReadWriteOnce
+    size: 10Gi
+
+persistence:
+  artifacts:
+    # ReadWriteOnce works out of the box on standard single-node and cloud block StorageClasses;
+    # switch to ReadWriteMany only when scaling api.replicaCount > 1 or scheduling api and scheduler across multiple nodes.
+    accessMode: ReadWriteOnce
+
+scheduler:
+  enabled: true
+  replicaCount: 1
+  pollSeconds: 3.0
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+mcp:
+  enabled: true
+  replicaCount: 1
+  port: 8422
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+egressProxy:
+  enabled: true
+  replicaCount: 1
+  port: 3128
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+web:
+  enabled: true
+  replicaCount: 1
+  port: 8421
+  sandboxPort: 8423
+  publicUrl: "http://localhost:8421"
+  # Dedicated cookie-less origin serving /api/v1/vscode/* for Embedded VS Code webviews.
+  sandboxOrigin: "http://127.0.0.1:8423"
+  corsOrigins: "http://localhost:8421,http://127.0.0.1:8421"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+litellm:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/berriai/litellm-database
+    tag: main-v1.67.4-stable
+    pullPolicy: IfNotPresent
+  port: 4000
+  masterKey: "sk-gitseed-litellm-master-key"
+  saltKey: "sk-gitseed-litellm-salt-key"
+  databaseName: "litellm"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# Bundled PostgreSQL (disable and configure externalDatabase for managed cloud DB)
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  auth:
+    username: "gitseed"
+    password: "gitseed_password"
+    database: "gitseed"
+  port: 5432
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+externalDatabase:
+  host: ""
+  port: 5432
+  username: "gitseed"
+  password: ""
+  database: "gitseed"
+
+# Bundled Valkey (Redis-compatible, BSD-3-Clause; disable and set externalRedis.url for external Redis)
+valkey:
+  enabled: true
+  image:
+    repository: valkey/valkey
+    tag: "8-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    # Leave empty to auto-generate a 32-char random password on initial Helm install
+    password: ""
+  port: 6379
+  persistence:
+    enabled: false
+    storageClass: ""
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+externalRedis:
+  url: ""
+
+service:
+  type: ClusterIP
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: gitseed.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

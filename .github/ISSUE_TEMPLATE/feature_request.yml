@@ -1,0 +1,20 @@
+name: Feature Request
+description: Propose a capability, runtime integration, or workflow improvement for GitSeed
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What workflow or problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How should this work across the GitSeed control plane, CLI/TUI, MCP server, or Web UI?
+    validations:
+      required: true
+

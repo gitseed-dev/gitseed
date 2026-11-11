@@ -1,0 +1,30 @@
+[project]
+name = "gitseed-common"
+version = "0.1.0"
+description = "Shared Pydantic v2 schemas, stage output contracts, and domain enums for GitSeed"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+authors = [{ name = "Trent Seed" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = [
+  "pydantic>=2.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/gitseed-dev/gitseed"
+Repository = "https://github.com/gitseed-dev/gitseed"
+Issues = "https://github.com/gitseed-dev/gitseed/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitseed_common"]

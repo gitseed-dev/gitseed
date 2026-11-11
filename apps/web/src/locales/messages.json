@@ -1,0 +1,729 @@
+{
+  "common": {
+    "appName": "GitSeed",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "controlPlaneStatus": "Control Plane Status",
+    "initializing": "Initializing GitSeed Control Plane...",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save Changes",
+    "review": "Review",
+    "all": "All",
+    "viewAll": "View all",
+    "id": "ID",
+    "disabled": "Disabled",
+    "cardsView": "Card view",
+    "listView": "List view",
+    "boardView": "Board view",
+    "clearFilters": "Clear filters",
+    "adminOrgWidePrefix": "Org-wide {title}",
+    "projectOverridesLink": "{project} overrides live in Project settings",
+    "allProjects": "All Projects",
+    "pagination": {
+      "showing": "Showing {start}–{end} of {total}",
+      "perPage": "Per page",
+      "prev": "Previous",
+      "next": "Next"
+    },
+    "operatorReview": {
+      "filterAll": "All ({count})",
+      "filterBlocked": "Blocked ({count})",
+      "filterApprovals": "Approvals ({count})",
+      "filterCiFailed": "CI Failed ({count})"
+    }
+  },
+  "details": {
+    "project": {
+      "overview": "Overview",
+      "code": "Code",
+      "run": "Sessions",
+      "members": "Members",
+      "settings": "Settings",
+      "generalTitle": "General & Governance",
+      "emptyMembers": "No team members found for this filter.",
+      "meta": {
+        "monthlyBudget": "Monthly Budget Limit"
+      },
+      "viewStageSeeds": "View {stage} seeds",
+      "settingsConfig": {
+        "inheritsOrgPolicy": "Inherits org policy",
+        "resetToDefault": "Reset to default",
+        "oneOverride": "1 override",
+        "overridesCount": "{count} overrides",
+        "inherited": "Inherited"
+      },
+      "actions": {
+        "focus": "Focus",
+        "unfocus": "Unfocus",
+        "createSeed": "New seed"
+      },
+      "spendBySeedTitle": "Top 5 seeds by spend"
+    },
+    "user": {
+      "projectsHeading": "Projects",
+      "addToProject": "Add to Project",
+      "removeFromProject": "Remove from Project",
+      "approvesPrefix": "approves",
+      "noApprovals": "no approvals",
+      "orgRoleLabel": "Org Role",
+      "orgRoleHint": "Controls org settings: Backends, Agents, Policies, Users.",
+      "rolePickerHint": "Maintainer: Approves Idea, Plan, and Merge gates.\nDeveloper: Creates seeds and runs tasks.\nViewer: Read-only access.",
+      "copyId": "Copy ID ({id})",
+      "actions": {
+        "activate": "Reactivate",
+        "deactivate": "Suspend"
+      },
+      "passwordUpdated": "Password updated",
+      "savePassword": "Save Password",
+      "personalThemeLabel": "Theme Preference",
+      "personalThemeDesc": "Personal theme for your account (overrides organization default)",
+      "resetThemeToOrgDefault": "Use org default",
+      "followingOrgDefault": "Following org default"
+    }
+  },
+  "nav": {
+    "dashboard": "Overview",
+    "seeds": "Seeds",
+    "projects": "Projects",
+    "settings": "Settings",
+    "users": "Users",
+    "agents": "Agents",
+    "backends": "Backends",
+    "routes": "Policies",
+    "telemetry": "Activity",
+    "sessions": "Sessions",
+    "guide": "How It Works",
+    "sectionWorkspace": "Workspace",
+    "sectionAdmin": "Administration",
+    "sectionResources": "Resources",
+    "collapseSidebar": "Collapse sidebar",
+    "expandSidebar": "Expand sidebar",
+    "switchProject": "Switch project scope",
+    "searchProjects": "Search projects...",
+    "noProjectsFound": "No projects match your search",
+    "manageProjects": "Manage Projects"
+  },
+  "topbar": {
+    "switchToLight": "Switch to Light Mode",
+    "switchToDark": "Switch to Dark Mode",
+    "logout": "Log Out",
+    "viewProfile": "View Profile"
+  },
+  "auth": {
+    "headline": "Your SDLC, run by agents, governed by you.",
+    "selfHosted": "Self-hosted",
+    "emailLabel": "Email Address",
+    "emailPlaceholder": "admin@gitseed.dev",
+    "passwordLabel": "Password",
+    "signInButton": "Sign In",
+    "authenticating": "Signing in...",
+    "invite": {
+      "title": "Accept Your GitSeed Invite",
+      "joiningAs": "Joining as",
+      "sessionSwitchNotice": "Currently signed in as {currentEmail}. Activating this invite will switch your session to {targetEmail}.",
+      "verifying": "Verifying invitation...",
+      "preferredName": "Preferred Name",
+      "setPassword": "Set Password (min 8 characters)",
+      "confirmPassword": "Confirm Password",
+      "activating": "Activating Account...",
+      "activateAndSignIn": "Activate Account & Sign In",
+      "backToSignIn": "Back to Sign In",
+      "missingToken": "Missing invitation token in URL.",
+      "invalidOrExpired": "Invalid or expired invitation link.",
+      "passwordTooShort": "Password must be at least 8 characters.",
+      "passwordMismatch": "Passwords do not match.",
+      "acceptFailed": "Failed to accept invitation."
+    }
+  },
+  "dashboard": {
+    "greetingMorning": "Good morning, {name}",
+    "greetingAfternoon": "Good afternoon, {name}",
+    "greetingEvening": "Good evening, {name}",
+    "ingestSeed": "New seed",
+    "attentionTitle": "Needs you",
+    "allNominal": "You’re all caught up",
+    "allNominalDesc": "Nothing needs your approval right now.",
+    "statusLine": "{reviewPart} · {agentsPart}",
+    "statusLineReviewItems": "{count} need you",
+    "statusLineReviewItemOne": "1 needs you",
+    "statusLineAllNominal": "All systems healthy",
+    "statusLineAwaitingBackends": "Setup required · Pre-configured agents waiting for backend connection",
+    "statusLineAwaitingProject": "Backends connected · Agents standing by · Create a project to link a repository",
+    "statusLineAgentsWorking": "{count} agents working",
+    "statusLineAgentWorkingOne": "1 agent working",
+    "statusLineAgentsWorkingNone": "No agents running",
+    "createdLabel": "created",
+    "mergedLabel": "merged",
+    "mergedThisWeekLabel": "merged this week",
+    "agentsWorkingTitle": "Agents working",
+    "agentsWorkingEmpty": "No agents running",
+    "agentsWorkingEmptyDesc": "Running and queued agent work appears here.",
+    "agentsWaitingForBackendsTitle": "Agents waiting for backend connection",
+    "agentsWaitingForBackendsDesc": "Default stage agents (@ideator, @planner, @coder, @reviewer, @merger) are pre-configured and standing by. Connect Git and Inference backends in Step 1 to dispatch work.",
+    "queuedSummaryCount": "{count} queued",
+    "disconnectedBannerTitle": "Control plane server or runner is unreachable.",
+    "disconnectedBannerSub": "Agents may be paused until connectivity is restored.",
+    "disconnectedRetry": "Retry connection",
+    "disconnectedRetrying": "Checking...",
+    "disconnectedStatus": "System status",
+    "activityTitle": "Recent activity",
+    "activityEmpty": "No recent telemetry recorded",
+    "spendTrendTitle": "30-day usage",
+    "spendTrendsEmptyTitle": "No spend activity yet",
+    "spendTrendsEmptyDesc": "Trends appear after the first seed runs"
+  },
+  "projects": {
+    "title": "Projects",
+    "subtitle": "Workspaces and repositories where seeds are built",
+    "create": "New project",
+    "idle": "Idle",
+    "filters": {
+      "all": "All",
+      "active": "Active",
+      "needsAction": "Needs you",
+      "blocked": "Blocked",
+      "archived": "Archived"
+    },
+    "public": "Public",
+    "private": "Private",
+    "searchPlaceholder": "Search projects...",
+    "emptyTitle": "No projects yet",
+    "emptySubtitle": "Create your first project to link Git repositories, set monthly budgets, and start running seeds.",
+    "createFirst": "New project",
+    "noMatch": "No projects match the active filters.",
+    "clearFilter": "Clear filters",
+    "connectFirstRepoTitle": "Connect your first repo",
+    "connectFirstRepoDesc": "Add a repository to begin routing requirements, running containerized agents, and merging pull requests.",
+    "connectRepo": "Connect repository",
+    "blockedCount": "{count} blocked",
+    "noDescription": "No description configured for this project.",
+    "table": {
+      "project": "Project",
+      "spend": "Spend",
+      "members": "Members",
+      "actions": "Actions",
+      "needsYou": "Needs you",
+      "pipeline": "Pipeline",
+      "lastActivity": "Last activity",
+      "repository": "Repository"
+    },
+    "actions": {
+      "open": "Open",
+      "settings": "Settings",
+      "archive": "Archive",
+      "unarchive": "Restore",
+      "edit": "Edit Project",
+      "focus": "Focus Project",
+      "unfocus": "Clear Project Focus"
+    },
+    "focusedBadge": "Focused",
+    "targetRepos": "Target Repositories",
+    "pipelineOpen": "{count} open",
+    "dialog": {
+      "archiveTitle": "Archive Project",
+      "archiveMessage": "Are you sure you want to archive {name}? It will be hidden from the active project list.",
+      "archiveConfirm": "Archive Project"
+    },
+    "status": {
+      "nominal": "Nominal"
+    }
+  },
+  "backends": {
+    "title": "Backends",
+    "subtitle": "Inference, Git, tools and compute that agents can use",
+    "register": "Register Backend",
+    "filterType": "Type:",
+    "searchAllPlaceholder": "Search backends...",
+    "noMatch": "No infrastructure backends match the filter.",
+    "clearFilter": "Clear filters",
+    "unhealthyNotice": "Backend unreachable or unhealthy",
+    "types": {
+      "git": "Git",
+      "inference": "Inference",
+      "models": "Inference",
+      "tools": "Tools",
+      "compute": "Compute"
+    },
+    "tabs": {
+      "all": "All"
+    },
+    "table": {
+      "backend": "Backend",
+      "type": "Type",
+      "usedBy": "Used by",
+      "capacity": "Capacity",
+      "access": "Access",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "status": {
+      "healthy": "Healthy",
+      "unreachable": "Unreachable",
+      "disabled": "Disabled"
+    },
+    "unrestricted": "All agents",
+    "actions": {
+      "delete": "Delete Backend",
+      "viewDetail": "View Details",
+      "testConnection": "Test Connection",
+      "edit": "Edit",
+      "disable": "Disable",
+      "enable": "Enable"
+    },
+    "dialog": {
+      "deleteTitle": "Delete {name}?",
+      "deleteMessage": "This backend will be deregistered immediately. Any orchestrations relying on it will fail over to defaults.",
+      "deleteConfirm": "Deregister"
+    },
+    "pipelineIncompleteTitle": "Pipeline setup incomplete",
+    "pipelineIncompleteSubtitle": "Connect Compute, Inference, and Git backends to run seeds end-to-end."
+  },
+  "routes": {
+    "title": "Policies",
+    "subtitle": "Gates, approvers, limits, and skip rules across each SDLC stage",
+    "searchPlaceholder": "Search policies...",
+    "tabs": {
+      "all": "All",
+      "enforced": "Enforced",
+      "skipped": "Skipped"
+    },
+    "table": {
+      "stage": "Stage",
+      "agent": "Agent",
+      "limits": "Limits",
+      "status": "Status",
+      "actions": "Actions",
+      "enforced": "Enforced",
+      "skipped": "Skipped",
+      "approvalGate": "Approval Gate"
+    },
+    "actions": {
+      "configure": "Configure Policy",
+      "enforce": "Enforce Stage",
+      "skip": "Skip Stage"
+    },
+    "noMatch": "No policies match the active search or filter.",
+    "clearFilter": "Clear filter",
+    "coverageGapTitle": "Stage coverage gap",
+    "coverageGapSingle": "1 enforced stage has no enabled Stage Agent assigned.",
+    "coverageGapPlural": "{count} enforced stages have no enabled Stage Agent assigned."
+  },
+  "telemetry": {
+    "title": "Activity",
+    "subtitle": "Audit trail and lifecycle event feed across your fleet",
+    "exportLog": "Export Log",
+    "allProjects": "All Projects",
+    "projectFilterLabel": "Project:",
+    "emptyFeedTitle": "No activity recorded",
+    "emptyFeedDesc": "No events matched the selected category or project filter.",
+    "categories": {
+      "all": "All",
+      "approvals": "Approvals",
+      "stages": "Stage changes",
+      "agents": "Agent runs",
+      "admin": "Admin"
+    },
+    "searchPlaceholder": "Search activity..."
+  },
+  "users": {
+    "title": "Users",
+    "subtitle": "Who can access GitSeed, and what they can approve",
+    "create": "New user",
+    "searchPlaceholder": "Search users...",
+    "tabs": {
+      "all": "All",
+      "active": "Active",
+      "suspended": "Suspended"
+    },
+    "noMatch": "No users match the active filter.",
+    "clearFilter": "Clear search and filters",
+    "noProjects": "No projects assigned",
+    "table": {
+      "user": "User",
+      "role": "Role",
+      "canApprove": "Can approve",
+      "lastActive": "Active",
+      "actions": "⋯"
+    },
+    "canApprove": {
+      "none": "-",
+      "twoApprovalsSatisfied": "Security approver (satisfies 2-approval policy on Security seeds)"
+    },
+    "signIn": {
+      "invitedPending": "Invited · pending"
+    },
+    "roles": {
+      "admin": "Admin",
+      "member": "Member",
+      "maintainer": "Maintainer",
+      "developer": "Developer",
+      "viewer": "Viewer"
+    },
+    "status": {
+      "active": "Active",
+      "suspended": "Suspended"
+    },
+    "actions": {
+      "resendInvite": "Resend Invite"
+    }
+  },
+  "agents": {
+    "title": "Agents",
+    "subtitle": "Reusable agents and the models they run on",
+    "register": "New agent",
+    "searchPlaceholder": "Search agents...",
+    "stageCoverage": {
+      "uncovered": "Uncovered"
+    },
+    "systemAssistant": {
+      "badge": "System Assistant (Ctrl+K)"
+    },
+    "tabs": {
+      "all": "All",
+      "enabled": "Enabled",
+      "paused": "Paused",
+      "archived": "Archived"
+    },
+    "status": {
+      "enabled": "Enabled",
+      "paused": "Paused"
+    },
+    "table": {
+      "agent": "Agent",
+      "usedIn": "Used in",
+      "runtimeModel": "Runtime · Model",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "actions": {
+      "edit": "Edit",
+      "enable": "Enable",
+      "pause": "Pause"
+    },
+    "noMatch": "No agents match your filter criteria.",
+    "clearFilter": "Clear search and filters",
+    "skills": {
+      "title": "Skills",
+      "subtitle": "Define reusable Markdown playbooks and conventions that can be attached to agents.",
+      "create": "New skill",
+      "searchPlaceholder": "Search skills..."
+    }
+  },
+  "modals": {
+    "project": {
+      "createTitle": "New project",
+      "editTitle": "Edit Project",
+      "repositoryLabel": "Repository",
+      "nameLabel": "Name",
+      "namePlaceholder": "e.g. Core API",
+      "slugLabel": "Slug",
+      "slugPlaceholder": "core-api",
+      "slugEdit": "edit",
+      "slugDone": "done",
+      "descLabel": "Description",
+      "descPlaceholder": "High-level mission and repository scope...",
+      "visibilityLabel": "Visibility",
+      "visibilityOptions": {
+        "private": "Private",
+        "public": "Public"
+      },
+      "tagsLabel": "Tags (comma-separated)",
+      "tagsPlaceholder": "core, fastapi, python",
+      "budgetLabel": "Monthly budget",
+      "budgetOrgDefault": "org default",
+      "createButton": "Create project",
+      "saveButton": "Save Changes",
+      "budgetReset": "reset"
+    },
+    "user": {
+      "createTitle": "New user",
+      "nameLabel": "Full Name",
+      "namePlaceholder": "e.g. Sarah Chen",
+      "emailLabel": "Email Address *",
+      "emailPlaceholder": "e.g. sarah.chen@gitseed.dev",
+      "passwordPlaceholder": "At least 8 characters",
+      "confirmPasswordLabel": "Confirm Password *",
+      "confirmPasswordPlaceholder": "Re-enter password",
+      "passwordMismatch": "Passwords do not match.",
+      "passwordTooShort": "Password must be at least 8 characters.",
+      "roleLabel": "Org Role",
+      "orgRoleHint": "Controls only org settings: Backends, Agents, Policies, Users.",
+      "projectRolesLabel": "Projects & Roles",
+      "submitButton": "Create user"
+    },
+    "status": {
+      "title": "System Status",
+      "operational": "Control Plane Operational",
+      "operationalDesc": "All core services, database pools, and session buses are responding normally.",
+      "degraded": "Control Plane Degraded",
+      "degradedDesc": "API is online, but one or more downstream dependencies reported an issue.",
+      "offline": "Control Plane Offline / Unreachable",
+      "offlineDesc": "Unable to communicate with the GitSeed API backend. The service may be stopped or initializing.",
+      "online": "Online",
+      "unreachable": "Unreachable",
+      "connection": "Connection",
+      "latency": "Latency",
+      "version": "Version",
+      "lastHeartbeat": "Last Heartbeat",
+      "justNow": "Just now",
+      "componentBreakdown": "Subsystem Health",
+      "restEngine": "FastAPI REST Server",
+      "database": "PostgreSQL 16 Engine",
+      "sessionStore": "Valkey / Redis Cache",
+      "endpointUrl": "API Endpoint",
+      "refreshButton": "Check Connectivity",
+      "checkingButton": "Checking...",
+      "closeButton": "Close"
+    }
+  },
+  "guide": {
+    "title": "How GitSeed Works",
+    "subtitle": "GitSeed turns software requirements (Seeds) into reviewed, merge-ready code by orchestrating AI agents across a 5-stage SDLC pipeline with human approval gates and spend guardrails.",
+    "sdlcTitle": "What is a Seed & The 5-Stage Pipeline",
+    "sdlcSubtitle": "A Seed is a single unit of engineering work (a feature, bugfix, or refactor) that moves left-to-right through five stages. Ideate, Plan, and Review can be turned off per project, and requesting changes at any gate sends a seed back to that stage's agent.",
+    "stages": {
+      "ideateDesc": "Clarifies the problem statement, scope, and constraints before planning begins.",
+      "planDesc": "Breaks the seed down into ordered implementation tasks and acceptance criteria.",
+      "executeDesc": "Runs coding agents inside isolated compute sandboxes to implement the approved tasks.",
+      "reviewDesc": "Evaluates the implementation against acceptance criteria, quality checks, and human review rules.",
+      "mergeDesc": "Finalizes approved work and merges changes into the target repository branch.",
+      "ideateAgent": "Analyzes the seed prompt and repository context to refine requirements and edge cases.",
+      "ideateGate": "Optional gate to confirm problem scope before decomposing into tasks.",
+      "ideateOut1": "Refined specification",
+      "ideateOut2": "Acceptance criteria",
+      "planAgent": "Inspects target repositories and produces a structured task breakdown and implementation plan.",
+      "planGate": "You review and approve the proposed plan before code execution starts.",
+      "planOut1": "Ordered task list on the Seed",
+      "planOut2": "Target files & verification criteria",
+      "executeAgent": "Writes code, runs tests in a sandboxed runner, and streams live run logs and token spend.",
+      "executeGate": "Automatic or gated transition once tasks and test suites succeed within budget.",
+      "executeOut1": "Code changes & branch commits",
+      "executeOut2": "Run logs, token metrics & cost tracking",
+      "reviewAgent": "Audits diffs, checks test results, and summarizes findings for reviewers.",
+      "reviewGate": "Enforces minimum approver role and distinct-reviewer rules; supports Request Changes.",
+      "reviewOut1": "Review summary & verification status",
+      "reviewOut2": "Recorded approval or change request",
+      "mergeAgent": "Verifies all upstream gates and prepares the final merge operation.",
+      "mergeGate": "Final sign-off gate (typically Maintainer or Admin) before marking the Seed Merged.",
+      "mergeOut1": "Merged repository changes",
+      "mergeOut2": "Complete audit trail in Activity"
+    },
+    "gettingStartedTitle": "Getting Started in 3 Steps",
+    "gettingStartedSubtitle": "Stage policies, local Docker compute, and default agents are pre-configured. Complete these steps to start running seeds.",
+    "completedLabel": "complete",
+    "stepLabel": "Step",
+    "readyBadge": "Ready",
+    "requiredBadge": "Required",
+    "nextStepBadge": "Next step",
+    "lockedStep1Badge": "Requires Step 1",
+    "lockedStep2Badge": "Requires Step 2",
+    "completeStep1First": "Complete Step 1 first",
+    "completeStep2First": "Complete Step 2 first",
+    "steps": {
+      "backendsTitle": "Connect Git & Inference",
+      "backendsDesc": "Register a Git provider (GitHub, GitLab, Bitbucket) and an Inference provider so your pre-configured agents can access repositories and LLMs.",
+      "backendsAction": "Configure Backends",
+      "projectsTitle": "Create a project",
+      "projectsDesc": "Link one or more repositories from your Git backend, set a monthly spend budget, and add team members.",
+      "seedsTitle": "Plant a Seed",
+      "seedsDesc": "Write a requirement or bugfix, pick an autonomy level, and watch it progress from Ideate to Merge.",
+      "seedsAction": "Open Seeds"
+    },
+    "viewStageSeeds": "View {stage} seeds",
+    "stageAgentRoleLabel": "Agent's Job",
+    "stageHumanGateLabel": "Approval Gate",
+    "stageOutputsLabel": "Key Outputs",
+    "autonomyTitle": "Seed Autonomy Modes",
+    "modelTitle": "How the Building Blocks Fit Together",
+    "modelSubtitle": "Four core concepts power every Seed from initial prompt to merged code.",
+    "model": {
+      "projectsTitle": "Projects & Repositories",
+      "projectsSubtitle": "Where work is scoped",
+      "projectsDesc": "Projects link one or more Git repositories, configure sandbox & clean-room guardrails (project.sandbox_config.blocked_paths), track monthly budgets, manage team roles (Maintainer, Developer, Viewer), and optionally override organization stage policies.",
+      "agentsTitle": "Agents & Skills",
+      "agentsSubtitle": "Who performs the work",
+      "agentsDesc": "Agents combine an execution runtime (OpenCode, Claude Code, Codex, Antigravity, Gemini, Grok Build) and LLM model with reusable Markdown Skills that codify your team's architecture and testing conventions.",
+      "policiesTitle": "Stage Policies & Gates",
+      "policiesSubtitle": "How governance is enforced",
+      "policiesDesc": "Stage Policies (pol_...) map each of the 5 SDLC stages to an assigned Agent, configure autonomy, required approvals, minimum approver role, self-approval rules, and cap retries and run timeouts.",
+      "backendsTitle": "Backends & Guardrails",
+      "backendsSubtitle": "What powers execution",
+      "backendsDesc": "Backends connect Git providers, LLM model endpoints, and compute runners. Spend caps and checkpoints pause execution automatically if a Seed approaches its budget."
+    },
+    "setupCompleteBanner": "Setup complete",
+    "showSteps": "Show steps",
+    "hideSteps": "Hide steps",
+    "memberWaitForAdminBackends": "An admin needs to connect a Git backend before seeds can run.",
+    "memberCreateFirstSeedTitle": "Create your first seed"
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Global GitSeed control plane configuration, default policies, and instance preferences",
+    "saveChanges": "Save Changes",
+    "savedSuccess": "Settings updated",
+    "discardChanges": "Discard Changes",
+    "instance": {
+      "title": "Control Plane Instance",
+      "description": "System architecture, deployment mode, and runtime parameters",
+      "versionLabel": "Version",
+      "environmentLabel": "Environment",
+      "databaseLabel": "Database Engine",
+      "controlPlaneHost": "Control Plane Host"
+    },
+    "defaults": {
+      "title": "SDLC & Autonomy Defaults",
+      "description": "Default autonomy limits and circuit-breaker ceilings applied to newly ingested seeds",
+      "autonomy": "Default Autonomy Level",
+      "autonomyDesc": "Baseline autonomy mode assigned to newly created seeds",
+      "autonomyManual": "Human (Manual)",
+      "autonomySupervised": "Supervised (Recommended)",
+      "autonomyFull": "Full Autonomy"
+    },
+    "spend": {
+      "title": "Spend Controls & Governance",
+      "description": "Hard budget caps, progressive spend checkpoints, and runaway burn-rate safeguards",
+      "defaultProjectMonthlyBudget": "Default Project Monthly Budget ($ USD)",
+      "defaultProjectMonthlyBudgetDesc": "Baseline monthly spending ceiling assigned to newly created projects (org default)",
+      "defaultProjectMonthlyBudgetPlaceholder": "100",
+      "maxBudget": "Per-Seed Hard Cap ($ USD)",
+      "maxBudgetDesc": "Hard limit per seed. Leave blank for no cap (unbounded with checkpoints). Seed halts when reached.",
+      "maxBudgetPlaceholder": "No cap",
+      "spendCheckpoint": "Spend Checkpoint Soft Gate ($ USD)",
+      "spendCheckpointDesc": "Pauses execution every $X to verify progress and authorize the next increment",
+      "checkpointRequiredWarning": "When max budget is unset, a spend checkpoint is required to prevent unbounded spend.",
+      "unboundedSafeBadge": "Unbounded spend protection active (soft checkpoint mandatory)",
+      "enforcementEnforced": "Enforced (LiteLLM Virtual Key)",
+      "enforcementEstimated": "Estimated (CLI Subscription)"
+    },
+    "runners": {
+      "title": "Runners & Dispatch Concurrency",
+      "description": "Host container capacity ceilings, per-project isolation limits, and queue scheduling policies",
+      "globalMaxRunners": "Global Max Concurrent Runners",
+      "globalMaxRunnersDesc": "Ceiling on containerized runner agents executing simultaneously on this host (CPU/RAM limit)",
+      "maxSandboxes": "Max Sandbox Sessions",
+      "maxSandboxesDesc": "Separate concurrency pool so interactive project runs never block agent stage runs",
+      "maxRunnersPerProject": "Default Per-Project Concurrency Limit",
+      "maxRunnersPerProjectDesc": "Maximum runners a single project may occupy at once. Set 0 for fair-share up to global ceiling.",
+      "queuePolicy": "Queue Scheduling Policy",
+      "queuePolicyDesc": "Determines execution ordering of queued seeds awaiting an available runner slot",
+      "policyFifo": "First In, First Out (FIFO)",
+      "policyFairShare": "Fair-Share Round Robin",
+      "backendsCallout": "Hardware & model rate limits (e.g. local RTX 5090 at 1–2 vs Cloud LiteLLM at 4–8) are configured per-backend.",
+      "manageBackends": "Configure Backend Concurrency"
+    },
+    "security": {
+      "title": "Security & Isolation",
+      "description": "Container runner isolation and token lifetimes",
+      "patLifetime": "Max PAT Lifetime (days)",
+      "patLifetimeDesc": "Maximum validity period (30–365 days) for newly minted personal access tokens",
+      "runnerSandbox": "Container Sandbox Isolation",
+      "runnerSandboxDesc": "Execute code runs in ephemeral, unprivileged Docker containers"
+    },
+    "appearance": {
+      "title": "Appearance & Canvas",
+      "description": "Visual theme, color modes, and ambient background rendering",
+      "themeLabel": "Interface Theme",
+      "themeDesc": "Select between Dark, Light, or follow your System preference",
+      "themeDark": "Dark",
+      "themeLight": "Light",
+      "themeSystem": "System (Default)",
+      "ambientBg": "Ambient Background Glow",
+      "ambientBgDesc": "Render subtle radial glow gradients behind cards. Disable for a flat, solid canvas.",
+      "ambientActive": "Ambient Glow",
+      "ambientFlat": "Flat Minimal",
+      "showGuideNav": "Show \"How it Works\" in Sidebar",
+      "showGuideNavDesc": "Display the guide and architecture walk-through in the left navigation sidebar",
+      "guideNavVisible": "Visible",
+      "guideNavHidden": "Hidden"
+    }
+  },
+  "coordinator": {
+    "drawerTitle": "Coordinator",
+    "drawerSubtitle": "Autonomous SDLC orchestrator & operator copilot",
+    "tabSearch": "Search",
+    "searchOrAsk": "Ask or search…",
+    "searchOrAskTooltip": "Ask or search ({shortcut})",
+    "searchOrAskPlaceholder": "Search seeds, projects, backends, agents, or ask Coordinator...",
+    "askCoordinatorQuery": "Ask Coordinator: \"{query}\"",
+    "askCoordinatorSubtext": "Ask questions, inspect runs, or dispatch autonomous commands",
+    "sectionSeeds": "Matching Seeds",
+    "sectionProjects": "Matching Projects",
+    "sectionBackends": "Matching Backends",
+    "sectionAgents": "Matching Agents",
+    "sectionUsers": "Matching Users",
+    "sectionPages": "Navigation & Pages",
+    "sectionCoordinator": "AI Coordinator",
+    "quickNavTitle": "Quick Navigation",
+    "activeSeedsTitle": "Active & Attention Seeds",
+    "noMatchHeader": "No matching seeds or pages",
+    "pressEnterToNavigate": "Press Enter ↵ to open",
+    "inputPlaceholder": "Ask the coordinator, inspect runs, or dispatch commands...",
+    "suggestedPrompts": "Suggestions",
+    "copilotSuggestions": {
+      "inProgress": "What's in progress?",
+      "needsAttention": "What needs attention?",
+      "spendBudget": "Token spend & budget"
+    },
+    "globalFleet": "Global Fleet",
+    "inputHint": "Enter ↵ to send • Shift+Enter for new line",
+    "actions": {
+      "clear": "Clear Session",
+      "close": "Close",
+      "send": "Send"
+    }
+  },
+  "seeds": {
+    "title": "Seeds",
+    "subtitle": "Track requirements, plans, and agent execution across Ideate → Plan → Execute → Review → Merge.",
+    "create": "New seed",
+    "createFirst": "New seed",
+    "searchPlaceholder": "Search seeds...",
+    "emptyTitle": "No seeds yet",
+    "emptySubtitle": "Create your first seed to see it move through Ideate → Plan → Execute → Review → Merge with your configured agents and stage gates.",
+    "noMatch": "No seeds match the current filters",
+    "clearFilters": "Clear filters",
+    "filters": {
+      "open": "Open",
+      "needsYou": "Needs You",
+      "running": "Running",
+      "blocked": "Blocked",
+      "merged": "Merged",
+      "closed": "Closed",
+      "queued": "Queued",
+      "stopped": "Stopped",
+      "done": "Done",
+      "all": "All"
+    },
+    "table": {
+      "seed": "Seed",
+      "project": "Project",
+      "stage": "Stage",
+      "status": "Status",
+      "autonomy": "Autonomy",
+      "spend": "Spend",
+      "updated": "Updated",
+      "actions": "Actions"
+    },
+    "actions": {
+      "open": "Open Seed",
+      "edit": "Edit Seed",
+      "reopen": "Reopen Seed",
+      "close": "Close Seed"
+    },
+    "governanceReceipt": {
+      "title": "Governance Receipt",
+      "viewSigned": "View Signed Receipt",
+      "refresh": "Refresh Receipt",
+      "signedBadge": "Ed25519 Signed",
+      "copyJson": "Copy JSON",
+      "downloadJson": "Download",
+      "enforcementEnforced": "Enforced",
+      "enforcementEstimated": "Estimated"
+    },
+    "personalMode": {
+      "badge": "Personal Mode (Single-User Subscription)",
+      "acknowledgement": "I acknowledge that this CLI OAuth backend runs in Personal Mode (single-user subscription, bound to my user account, with estimated spend)."
+    }
+  }
+}

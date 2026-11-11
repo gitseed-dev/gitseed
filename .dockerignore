@@ -1,0 +1,50 @@
+# Git & VCS
+.git
+.gitignore
+.github
+
+# Python virtual environments & caches
+.venv
+venv
+__pycache__
+*.py[cod]
+*$py.class
+*.egg-info
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+htmlcov
+
+# Node / Web frontend build artifacts & local modules
+node_modules
+**/node_modules
+dist
+**/dist
+.pnpm-store
+.vite
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# Local data, logs & editor configs
+data
+dist-charts
+sandboxes
+.gitseed
+*.sqlite
+*.sqlite3
+*.db
+*.log
+logs
+.vscode
+.idea
+.cursor
+.DS_Store
+Thumbs.db
+

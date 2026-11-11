@@ -1,0 +1,108 @@
+{{- if .Values.rbac.create -}}
+{{- $fullname := include "gitseed.fullname" . -}}
+{{- $saName := include "gitseed.serviceAccountName" . -}}
+{{- $runnerNs := include "gitseed.runnerNamespace" . -}}
+{{- $sandboxNs := include "gitseed.sandboxNamespace" . -}}
+# Role in the SDLC Stage Runner Namespace (batch/v1 Jobs + v1 Pods & Logs)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-runner-manager
+  namespace: {{ $runnerNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-runner-manager
+  namespace: {{ $runnerNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-runner-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ .Release.Namespace }}
+---
+# Role in the Interactive Sandbox Namespace (v1 Pods, Logs & Exec WebSockets)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-sandbox-manager
+  namespace: {{ $sandboxNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/exec"]
+    verbs: ["get", "list", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-sandbox-manager
+  namespace: {{ $sandboxNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-sandbox-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ .Release.Namespace }}
+{{- if eq .Values.compute.namespaceIsolation "project" }}
+---
+# ClusterRole for per-project namespace isolation (dynamic namespace provisioning + workload management)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-project-isolation-manager
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/exec"]
+    verbs: ["get", "list", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-project-isolation-manager
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-project-isolation-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}
+

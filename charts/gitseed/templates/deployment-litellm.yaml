@@ -1,0 +1,57 @@
+{{- if .Values.litellm.enabled -}}
+{{- $fullname := include "gitseed.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-litellm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+    app.kubernetes.io/component: litellm
+spec:
+  replicas: {{ .Values.litellm.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "gitseed.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: litellm
+  template:
+    metadata:
+      labels:
+        {{- include "gitseed.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: litellm
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: litellm
+          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
+          args: ["--port", {{ .Values.litellm.port | quote }}]
+          ports:
+            - name: http
+              containerPort: {{ .Values.litellm.port }}
+              protocol: TCP
+          env:
+            - name: STORE_MODEL_IN_DB
+              value: "True"
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gitseed.secretName" . }}
+                  key: LITELLM_MASTER_KEY
+            - name: LITELLM_SALT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gitseed.secretName" . }}
+                  key: LITELLM_SALT_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gitseed.secretName" . }}
+                  key: LITELLM_DATABASE_URL
+          resources:
+            {{- toYaml .Values.litellm.resources | nindent 12 }}
+{{- end }}
+

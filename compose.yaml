@@ -1,0 +1,308 @@
+x-gitseed-common: &gitseed-common
+  image: gitseed/gitseed:${GITSEED_VERSION:-dev}
+  pull_policy: build
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    - HOST=${HOST:-0.0.0.0}
+    - API_PORT=${API_PORT:-8420}
+    - WEB_PORT=${WEB_PORT:-8421}
+    - MCP_PORT=${MCP_PORT:-8422}
+    - SANDBOX_PORT=${SANDBOX_PORT:-8423}
+    - SANDBOX_ORIGIN=${SANDBOX_ORIGIN:-http://127.0.0.1:${SANDBOX_PORT:-8423}}
+    - GITSEED_SECRET_KEY=${GITSEED_SECRET_KEY:?run 'make init' or ./scripts/init.sh to generate secrets}
+    - GITSEED_SECRET_PREVIOUS_KEYS=${GITSEED_SECRET_PREVIOUS_KEYS:-}
+    - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-socket-proxy:2375}
+    - LITELLM_URL=http://litellm:4000
+    - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?run 'make init' or ./scripts/init.sh to generate secrets}
+    - RUNNER_IMAGE=gitseed/runner:${GITSEED_VERSION:-dev}
+    - RUNNER_DOCKER_NETWORK=gitseed-runners
+    - SANDBOX_DOCKER_NETWORK=gitseed-sandboxes
+    - RUNNER_EGRESS_PROXY_URL=${RUNNER_EGRESS_PROXY_URL:-http://egress-proxy:3128}
+    - ARTIFACTS_DIR=/app/data/artifacts
+    - LOCAL_WORKSPACE_ROOTS=${LOCAL_WORKSPACE_ROOTS:-/workspaces}
+    - RUNNER_API_URL=http://api:${API_PORT:-8420}
+    - RUNNER_GATEWAY_URL=http://litellm:4000/v1
+    - GITSEED_AUTO_MIGRATE=${GITSEED_AUTO_MIGRATE:-true}
+    - POSTGRES_HOST=postgresql
+    - POSTGRES_USER=${POSTGRES_USER:-gitseed}
+    - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}
+    - POSTGRES_DB=${POSTGRES_DB:-gitseed}
+    - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+    - REDIS_URL=${REDIS_URL:-redis://valkey:6379/0}
+    - ENVIRONMENT=${ENVIRONMENT:-development}
+    - DEBUG=${DEBUG:-false}
+  depends_on:
+    postgresql:
+      condition: service_healthy
+    valkey:
+      condition: service_started
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    - gitseed-network
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    container_name: gitseed-postgresql
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gitseed}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}
+      POSTGRES_DB: ${POSTGRES_DB:-gitseed}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-gitseed} -d ${POSTGRES_DB:-gitseed} && (psql -U ${POSTGRES_USER:-gitseed} -d ${POSTGRES_DB:-gitseed} -tc \"SELECT 1 FROM pg_database WHERE datname = '${LITELLM_POSTGRES_DB:-litellm}'\" | grep -q 1 || psql -U ${POSTGRES_USER:-gitseed} -d ${POSTGRES_DB:-gitseed} -c \"CREATE DATABASE ${LITELLM_POSTGRES_DB:-litellm};\")",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gitseed-network
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: gitseed-valkey
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${VALKEY_PORT:-6379}:6379"
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gitseed-network
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: gitseed-docker-socket-proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      EXEC: 1
+      POST: 1
+      INFO: 1
+      PING: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - gitseed-docker-proxy
+
+  egress-proxy:
+    image: gitseed/gitseed:${GITSEED_VERSION:-dev}
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gitseed-egress-proxy
+    restart: unless-stopped
+    command: ["egress-proxy"]
+    environment:
+      - EGRESS_ALLOWLIST=${EGRESS_ALLOWLIST:-}
+      - EGRESS_ALLOWLIST_EXTRA=${EGRESS_ALLOWLIST_EXTRA:-}
+      - EGRESS_INTERNAL_HOSTS=${EGRESS_INTERNAL_HOSTS:-litellm}
+      - EGRESS_PROXY_PORT=${EGRESS_PROXY_PORT:-3128}
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - gitseed-network
+      - gitseed-runners
+      - gitseed-sandboxes
+
+  api:
+    <<: *gitseed-common
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gitseed-api
+    command: ["api"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      docker-socket-proxy:
+        condition: service_started
+    ports:
+      - "${API_PORT:-8420}:${API_PORT:-8420}"
+    volumes:
+      - artifacts_data:/app/data
+      - ${LOCAL_WORKSPACES_HOST_DIR:-./data/workspaces}:/workspaces
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${API_PORT:-8420}/healthz')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gitseed-network
+      - gitseed-runners
+      - gitseed-docker-proxy
+
+  litellm:
+    image: ghcr.io/berriai/litellm-database:main-v1.67.4-stable
+    container_name: gitseed-litellm
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: ["--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run 'make init' or ./scripts/init.sh to generate secrets}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?run 'make init' or ./scripts/init.sh to generate secrets}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gitseed}:${POSTGRES_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}@postgresql:5432/${LITELLM_POSTGRES_DB:-litellm}
+      STORE_MODEL_IN_DB: "True"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gitseed-network
+      - gitseed-runners
+
+  runner-image:
+    image: gitseed/runner:${GITSEED_VERSION:-dev}
+    pull_policy: build
+    build:
+      context: ./apps/runner
+      dockerfile: Dockerfile
+      args:
+        INCLUDE_PROPRIETARY_CLIS: ${INCLUDE_PROPRIETARY_CLIS:-true}
+        INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-${INCLUDE_PROPRIETARY_CLIS:-true}}
+        INSTALL_ANTIGRAVITY: ${INSTALL_ANTIGRAVITY:-${INCLUDE_PROPRIETARY_CLIS:-true}}
+        INSTALL_GROK_CLI: ${INSTALL_GROK_CLI:-${INCLUDE_PROPRIETARY_CLIS:-true}}
+    entrypoint: ["true"]
+    restart: "no"
+
+  scheduler:
+    <<: *gitseed-common
+    container_name: gitseed-scheduler
+    command: ["scheduler"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+      egress-proxy:
+        condition: service_started
+      runner-image:
+        condition: service_completed_successfully
+    volumes:
+      - artifacts_data:/app/data
+      - ${LOCAL_WORKSPACES_HOST_DIR:-./data/workspaces}:/workspaces
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f gitseed_core.main || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - gitseed-network
+      - gitseed-docker-proxy
+
+  mcp:
+    <<: *gitseed-common
+    container_name: gitseed-mcp
+    command: ["mcp"]
+    ports:
+      - "${MCP_BIND_HOST:-127.0.0.1}:${MCP_PORT:-8422}:${MCP_PORT:-8422}"
+    depends_on:
+      - api
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MCP_PORT:-8422}/healthz')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gitseed-network
+
+  web:
+    <<: *gitseed-common
+    container_name: gitseed-web
+    command: ["web"]
+    ports:
+      - "${WEB_PORT:-8421}:${WEB_PORT:-8421}"
+      - "${SANDBOX_PORT:-8423}:${SANDBOX_PORT:-8423}"
+    depends_on:
+      - api
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:${WEB_PORT:-8421}/ >/dev/null || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  gitseed-network:
+    driver: bridge
+  gitseed-docker-proxy:
+    name: gitseed-docker-proxy
+    driver: bridge
+    internal: true
+  gitseed-runners:
+    name: gitseed-runners
+    driver: bridge
+    internal: true
+  gitseed-sandboxes:
+    name: gitseed-sandboxes
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+    driver: local
+  valkey_data:
+    driver: local
+  artifacts_data:
+    driver: local

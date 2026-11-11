@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python (Ruff, Mypy & Pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install workspace dependencies
+        run: uv sync --all-packages
+      - name: Lint with Ruff
+        run: uv run ruff check .
+      - name: Typecheck with Mypy
+        run: uv run mypy packages/common apps/core apps/cli apps/mcp apps/runner
+      - name: Run Pytest suite
+        run: uv run python -m pytest
+
+  web:
+    name: Web UI (Tests & Build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Enable Corepack & pnpm
+        run: corepack enable && corepack prepare pnpm@10.34.9 --activate
+      - name: Install frontend dependencies
+        run: pnpm --filter web install --frozen-lockfile
+      - name: Lint frontend
+        run: pnpm --filter web lint
+      - name: Run frontend unit tests
+        run: pnpm --filter web test
+      - name: Build production bundle
+        run: pnpm --filter web build
+
+  helm-lint:
+    name: Helm Chart (Lint & Template)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+      - name: Lint Helm chart
+        run: helm lint charts/gitseed
+      - name: Render Helm chart templates
+        run: helm template gitseed charts/gitseed >/dev/null
+      - name: Verify GitOps fail-closed secret guard
+        run: |
+          if helm template gitseed charts/gitseed --set gitops.requireExistingSecret=true >/dev/null 2>&1; then
+            echo "Expected helm template to fail when gitops.requireExistingSecret=true without auth.existingSecret" >&2
+            exit 1
+          fi
+          helm template gitseed charts/gitseed --set gitops.requireExistingSecret=true --set auth.existingSecret=gitseed-secrets >/dev/null
+
+  docker:
+    name: Docker Image Build (Control Plane & Runner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Control Plane image
+        run: docker build -t gitseed/gitseed:ci .
+      - name: Verify Control Plane CLI entrypoint
+        run: docker run --rm gitseed/gitseed:ci help
+      - name: Build Runner Sandbox image
+        run: docker build -t gitseed/runner:ci ./apps/runner
+
+

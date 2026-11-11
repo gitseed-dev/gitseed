@@ -1,0 +1,173 @@
+{{- if .Values.compute.networkPolicy.enabled -}}
+{{- $fullname := include "gitseed.fullname" . -}}
+{{- $runnerNs := include "gitseed.runnerNamespace" . -}}
+{{- $sandboxNs := include "gitseed.sandboxNamespace" . -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-runner-isolation
+  namespace: {{ $runnerNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.gitseed.managed: "true"
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+  egress:
+    # Allow DNS resolution (UDP/TCP 53)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow traffic to Control Plane API and LiteLLM gateway in the release namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.port }}
+        - protocol: TCP
+          port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: litellm
+      ports:
+        - protocol: TCP
+          port: {{ .Values.litellm.port }}
+    {{- if .Values.egressProxy.enabled }}
+    # Route HTTP/HTTPS model & package egress through the L7 hostname-allowlisting egress-proxy
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: egress-proxy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.egressProxy.port }}
+    # Allow SSH (22) for git over SSH while blocking RFC 1918 and cloud metadata (169.254.169.254/32)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 22
+    {{- else }}
+    # Allow external HTTPS (443) and SSH (22) while blocking PostgreSQL (5432), Valkey (6379), RFC 1918 private networks, and cloud metadata (169.254.169.254/32)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 22
+    {{- end }}
+{{- if ne $sandboxNs $runnerNs }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-sandbox-isolation
+  namespace: {{ $sandboxNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.gitseed.managed: "true"
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+  egress:
+    # Allow DNS resolution (UDP/TCP 53)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow traffic to Control Plane API and LiteLLM gateway in the release namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.port }}
+        - protocol: TCP
+          port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: litellm
+      ports:
+        - protocol: TCP
+          port: {{ .Values.litellm.port }}
+    {{- if .Values.egressProxy.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: egress-proxy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.egressProxy.port }}
+    {{- else }}
+    # Allow external HTTPS (443) and SSH (22) while blocking PostgreSQL (5432), Valkey (6379), RFC 1918 private networks, and cloud metadata (169.254.169.254/32)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 22
+    {{- end }}
+{{- end }}
+{{- end }}

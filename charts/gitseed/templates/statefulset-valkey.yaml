@@ -1,0 +1,66 @@
+{{- if .Values.valkey.enabled -}}
+{{- $fullname := include "gitseed.fullname" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-valkey
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  serviceName: {{ $fullname }}-valkey
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "gitseed.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: valkey
+  template:
+    metadata:
+      labels:
+        {{- include "gitseed.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: valkey
+    spec:
+      containers:
+        - name: valkey
+          image: "{{ .Values.valkey.image.repository }}:{{ .Values.valkey.image.tag }}"
+          imagePullPolicy: {{ .Values.valkey.image.pullPolicy }}
+          args:
+            - "valkey-server"
+            - "--requirepass"
+            - "$(VALKEY_PASSWORD)"
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gitseed.secretName" . }}
+                  key: VALKEY_PASSWORD
+          ports:
+            - name: redis
+              containerPort: {{ .Values.valkey.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.valkey.resources | nindent 12 }}
+      {{- if not .Values.valkey.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.valkey.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.valkey.persistence.storageClass }}
+        storageClassName: {{ .Values.valkey.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.valkey.persistence.size | quote }}
+  {{- end }}
+{{- end }}
+

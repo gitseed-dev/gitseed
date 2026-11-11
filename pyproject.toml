@@ -1,0 +1,88 @@
+# Workspace root. Not a package itself.
+[tool.uv.workspace]
+members = ["apps/core", "apps/cli", "apps/mcp", "apps/runner", "packages/*"]
+
+# Dev tools shared across the whole repo
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio",
+  "ruff",
+  "mypy",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option", "fastapi.Depends", "fastapi.Query"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+implicit_reexport = true
+disallow_untyped_decorators = false
+warn_unused_ignores = false
+disable_error_code = [
+  "union-attr",
+  "arg-type",
+  "assignment",
+  "operator",
+  "index",
+  "call-overload",
+  "attr-defined",
+  "misc",
+  "no-any-return",
+  "no-redef",
+  "no-untyped-def",
+  "comparison-overlap",
+  "return-value",
+]
+exclude = ["migrations/versions/"]
+
+[[tool.mypy.overrides]]
+module = ["gitseed_core.migrations.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+  "gitseed_common.*",
+  "gitseed_runner.*",
+  "gitseed_mcp.*",
+  "gitseed_core.config",
+  "gitseed_core.security",
+  "gitseed_core.services.compute_runtime",
+  "gitseed_core.services.git_pr_providers",
+  "gitseed_core.services.push_relay",
+  "gitseed_core.services.session_pty",
+  "gitseed_core.services.session_vscode",
+]
+enable_error_code = [
+  "arg-type",
+  "assignment",
+  "operator",
+  "index",
+  "call-overload",
+  "attr-defined",
+  "no-redef",
+  "no-untyped-def",
+  "comparison-overlap",
+  "return-value",
+]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["apps", "packages"]
+pythonpath = [
+  "packages/common/src",
+  "apps/core/src",
+  "apps/runner/src",
+  "apps/cli/src",
+  "apps/mcp/src",
+]

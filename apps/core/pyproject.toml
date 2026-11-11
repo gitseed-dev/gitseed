@@ -1,0 +1,44 @@
+[project]
+name = "gitseed-core"
+version = "0.1.0"
+description = "GitSeed Control Plane API, scheduler, runtime supervisor, and database models"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+authors = [{ name = "Trent Seed" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pydantic-settings",
+  "sqlmodel",
+  "sqlalchemy[asyncio]",
+  "alembic",
+  "httpx",
+  "gitseed-common",
+  "psycopg[binary]>=3.3.6",
+  "pwdlib[argon2]",
+  "cryptography",
+  "redis",
+]
+
+[project.urls]
+Homepage = "https://github.com/gitseed-dev/gitseed"
+Repository = "https://github.com/gitseed-dev/gitseed"
+Issues = "https://github.com/gitseed-dev/gitseed/issues"
+
+[tool.uv.sources]
+gitseed-common = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitseed_core"]

@@ -1,0 +1,19 @@
+apiVersion: v2
+name: gitseed
+description: GitSeed AI-native SDLC control plane, stage runner scheduler, MCP server, and web UI
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - gitseed
+  - ai
+  - sdlc
+  - agents
+  - kubernetes
+home: https://github.com/gitseed-dev/gitseed
+sources:
+  - https://github.com/gitseed-dev/gitseed
+maintainers:
+  - name: GitSeed
+annotations:
+  licenses: Apache-2.0

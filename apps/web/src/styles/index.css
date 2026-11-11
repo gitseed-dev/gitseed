@@ -1,0 +1,195 @@
+@import "tailwindcss";
+@import "@heroui/react/styles";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
+
+@layer base {
+  :root,
+  .light,
+  [data-theme="light"] {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-heading: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    /* Text Hierarchy Design Tokens */
+    --text-primary: #18181b;     /* titles */
+    --text-secondary: #52525b;   /* metadata lines, everywhere (5.7:1 contrast on white) */
+    --text-tertiary: #a1a1aa;    /* timestamps, separators, hints */
+
+    /* GitSeed Brand Primary Accent (Teal) */
+    --accent: #0d9488;
+    --accent-hover: #0f766e;
+    --accent-foreground: #ffffff;
+    --focus: #0d9488;
+    --color-accent: #0d9488;
+    --color-accent-soft: rgba(13, 148, 136, 0.15);
+  }
+
+  .dark,
+  [data-theme="dark"] {
+    /* Text Hierarchy Design Tokens */
+    --text-primary: #f4f4f5;     /* titles */
+    --text-secondary: #a1a1aa;   /* metadata lines, everywhere (5.8:1 contrast on dark panel #18181b) */
+    --text-tertiary: #71717a;    /* timestamps, separators, hints */
+
+    /* GitSeed Brand Primary Accent (Teal) */
+    --accent: #14b8a6;
+    --accent-hover: #2dd4bf;
+    --accent-foreground: #022c22;
+    --focus: #14b8a6;
+    --color-accent: #14b8a6;
+    --color-accent-soft: rgba(20, 184, 166, 0.2);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+}
+
+/* Ensure Primary Buttons use the unified brand accent everywhere */
+.button--primary {
+  --button-bg: var(--accent);
+  --button-bg-hover: var(--accent-hover);
+  --button-bg-pressed: var(--accent-hover);
+  --button-fg: var(--accent-foreground);
+}
+
+/* Standardized Semantic Text Utilities */
+.text-primary-token {
+  color: var(--text-primary);
+}
+.text-secondary-token {
+  color: var(--text-secondary);
+}
+.text-tertiary-token {
+  color: var(--text-tertiary);
+}
+
+@keyframes sdlc-traverse {
+  0% {
+    transform: translateX(-24vw);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  96% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(118vw);
+    opacity: 0;
+  }
+}
+
+@keyframes seed-inbound {
+  0%, 42% {
+    opacity: 1;
+    visibility: visible;
+  }
+  48%, 100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@keyframes merged-outbound {
+  0%, 52% {
+    opacity: 0;
+    visibility: hidden;
+  }
+  58%, 100% {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@keyframes rail-pulse-teal {
+  0%, 100% {
+    opacity: 0.3;
+    filter: drop-shadow(0 0 1px rgba(45, 212, 191, 0.2));
+  }
+  50% {
+    opacity: 0.85;
+    filter: drop-shadow(0 0 6px rgba(45, 212, 191, 0.6));
+  }
+}
+
+@keyframes rail-pulse-lime {
+  0%, 100% {
+    opacity: 0.25;
+    filter: drop-shadow(0 0 1px rgba(163, 230, 53, 0.15));
+  }
+  50% {
+    opacity: 0.75;
+    filter: drop-shadow(0 0 5px rgba(163, 230, 53, 0.5));
+  }
+}
+
+@keyframes rail-pulse-indigo {
+  0%, 100% {
+    opacity: 0.25;
+    filter: drop-shadow(0 0 1px rgba(129, 140, 248, 0.15));
+  }
+  50% {
+    opacity: 0.75;
+    filter: drop-shadow(0 0 5px rgba(129, 140, 248, 0.5));
+  }
+}
+
+@keyframes pipeline-flow {
+  0% {
+    left: 0%;
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  94% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes pipeline-pulse {
+  0%, 100% {
+    opacity: 0.4;
+    filter: drop-shadow(0 0 2px rgba(99, 102, 241, 0.25));
+  }
+  50% {
+    opacity: 0.85;
+    filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.55));
+  }
+}
+
+/* Ensure neutral (default) soft chips use muted foreground rather than high-contrast bold black/white */
+.chip--default.chip--soft {
+  --chip-fg: var(--muted, #71717a);
+}
+
+/* Accessibility: Respect system prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Utility to hide scrollbars while retaining scroll capability */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

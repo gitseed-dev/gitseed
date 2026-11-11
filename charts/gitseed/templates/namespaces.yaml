@@ -1,0 +1,24 @@
+{{- if and .Values.compute.createNamespaces (ne .Values.compute.namespaceIsolation "shared") -}}
+{{- $runnerNs := include "gitseed.runnerNamespace" . -}}
+{{- $sandboxNs := include "gitseed.sandboxNamespace" . -}}
+{{- if ne $runnerNs .Release.Namespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $runnerNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+    gitseed.io/workload-plane: runners
+---
+{{- end }}
+{{- if and (ne $sandboxNs .Release.Namespace) (ne $sandboxNs $runnerNs) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $sandboxNs }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+    gitseed.io/workload-plane: sandboxes
+{{- end }}
+{{- end }}
+

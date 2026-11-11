@@ -1,0 +1,35 @@
+[project]
+name = "gitseed-runner"
+version = "0.1.0"
+description = "Containerized stage supervisor and CLI runtime adapter for GitSeed"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+authors = [{ name = "Trent Seed" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/gitseed-dev/gitseed"
+Repository = "https://github.com/gitseed-dev/gitseed"
+Issues = "https://github.com/gitseed-dev/gitseed/issues"
+
+[project.scripts]
+gitseed-runner = "gitseed_runner.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitseed_runner"]
+

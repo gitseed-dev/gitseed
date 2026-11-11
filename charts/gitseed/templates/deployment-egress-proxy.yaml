@@ -1,0 +1,62 @@
+{{- if .Values.egressProxy.enabled -}}
+{{- $fullname := include "gitseed.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-egress-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gitseed.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
+spec:
+  replicas: {{ .Values.egressProxy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "gitseed.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: egress-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "gitseed.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: egress-proxy
+    spec:
+      serviceAccountName: {{ include "gitseed.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: egress-proxy
+          image: {{ include "gitseed.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["egress-proxy"]
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.egressProxy.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ $fullname }}-config
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.egressProxy.resources | nindent 12 }}
+{{- end }}
+
