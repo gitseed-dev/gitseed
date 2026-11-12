@@ -10,10 +10,11 @@ import {
   Plus,
   RotateCcw,
   Sprout,
+  X,
 } from 'lucide-react'
 import { Button } from '@heroui/react'
 import { useQueryClient } from '@tanstack/react-query'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
 import { queryKeys } from '../api/queryClient'
 import { ActionMenu } from '../components/common/ActionMenu'
 import { SdlcPipelineStrip } from '../components/common/SdlcPipelineStrip'
@@ -121,6 +122,7 @@ export const SeedsView: React.FC<SeedsViewProps> = ({
     }
     return 'all'
   })
+  const [actionError, setActionError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<SeedStatusFilter>(() => {
     const initialStage =
       initialStageFilter || (viewFilterParams?.stage as SeedStage | undefined)
@@ -339,6 +341,7 @@ export const SeedsView: React.FC<SeedsViewProps> = ({
   }
 
   const handleCloseOrReopen = async (seed: Seed) => {
+    setActionError(null)
     try {
       if (seed.status === 'closed') {
         await api.seeds.reopen(seed.id)
@@ -351,7 +354,13 @@ export const SeedsView: React.FC<SeedsViewProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.activity }),
       ])
     } catch (err) {
-      console.error('Failed to close or reopen seed:', err)
+      setActionError(
+        err instanceof ApiError
+          ? err.detail
+          : err instanceof Error
+            ? err.message
+            : `Failed to ${seed.status === 'closed' ? 'reopen' : 'close'} seed #${seed.number}.`
+      )
     }
   }
 
@@ -363,6 +372,25 @@ export const SeedsView: React.FC<SeedsViewProps> = ({
 
   return (
     <>
+      {actionError && (
+        <div
+          role="alert"
+          className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-start justify-between gap-2 text-xs text-rose-700 dark:text-rose-300"
+        >
+          <div className="flex items-start gap-2 min-w-0">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5 text-rose-500" />
+            <span className="break-words">{actionError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            aria-label="Dismiss error"
+            className="text-rose-500 hover:text-rose-700 dark:hover:text-rose-200 cursor-pointer shrink-0"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
       <EntityPageLayout
         embedded={Boolean(embeddedProjectId)}
         title={t('seeds.title')}

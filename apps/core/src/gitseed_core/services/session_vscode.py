@@ -143,6 +143,13 @@ def build_vscode_launch_url(
     return f"{prefix}/?{query}" if query else f"{prefix}/"
 
 
+def _split_netloc_host_port(netloc: str, default_scheme: str = "http") -> tuple[str, str]:
+    parsed = urlsplit(f"{default_scheme}://{netloc}")
+    host = (parsed.hostname or "").strip().lower()
+    port = str(parsed.port) if parsed.port else ("443" if default_scheme == "https" else "80")
+    return host, port
+
+
 def _enforce_sandbox_origin(headers: Any) -> None:
     """When `settings.SANDBOX_ORIGIN` is configured, require requests to match that origin/host."""
     enforce_vscode_production_origin()
@@ -153,10 +160,9 @@ def _enforce_sandbox_origin(headers: Any) -> None:
     expected_scheme = (parsed.scheme or "http").lower()
     expected_netloc = (parsed.netloc or parsed.path).strip().rstrip("/").lower()
     expected_origin = f"{expected_scheme}://{expected_netloc}"
-
-    origin_hdr = (headers.get("origin") or "").strip().rstrip("/").lower()
-    if origin_hdr and origin_hdr != expected_origin:
-        raise Forbidden("VS Code proxy request origin does not match configured SANDBOX_ORIGIN")
+    expected_host, expected_port = _split_netloc_host_port(expected_netloc, expected_scheme)
+    is_loopback_sandbox_default = expected_host in ("127.0.0.1", "localhost")
+    web_port = str(getattr(settings, "WEB_PORT", 8421) or 8421)
 
     host_hdr = (
         (headers.get("x-forwarded-host") or headers.get("host") or "")
@@ -164,6 +170,33 @@ def _enforce_sandbox_origin(headers: Any) -> None:
         .strip()
         .lower()
     )
+    req_host, req_port = _split_netloc_host_port(host_hdr, expected_scheme) if host_hdr else ("", "")
+
+    if is_loopback_sandbox_default and expected_port != web_port:
+        # Allow LAN/Tailscale access on the dedicated sandbox port (e.g. 192.168.x.x:8423)
+        # while strictly rejecting the main authenticated Web UI port (e.g. :8421).
+        if not req_host or req_port != expected_port:
+            raise Forbidden("VS Code proxy request host does not match configured SANDBOX_ORIGIN")
+        origin_hdr = (headers.get("origin") or "").strip().rstrip("/").lower()
+        if origin_hdr:
+            orig_parsed = urlsplit(origin_hdr)
+            orig_host = (orig_parsed.hostname or "").strip().lower()
+            orig_port = str(orig_parsed.port) if orig_parsed.port else (
+                "443" if orig_parsed.scheme == "https" else "80"
+            )
+            if orig_port != expected_port or (
+                orig_host != req_host
+                and not ({orig_host, req_host} <= {"127.0.0.1", "localhost"})
+            ):
+                raise Forbidden(
+                    "VS Code proxy request origin does not match configured SANDBOX_ORIGIN"
+                )
+        return
+
+    origin_hdr = (headers.get("origin") or "").strip().rstrip("/").lower()
+    if origin_hdr and origin_hdr != expected_origin:
+        raise Forbidden("VS Code proxy request origin does not match configured SANDBOX_ORIGIN")
+
     if host_hdr != expected_netloc:
         raise Forbidden("VS Code proxy request host does not match configured SANDBOX_ORIGIN")
 
@@ -256,7 +289,10 @@ def _append_upstream_vscode_token(target_path: str, upstream_token: str) -> str:
     return f"{target_path}{sep}tkn={quote(upstream_token, safe='')}"
 
 
-def _build_vscode_frame_headers(existing_headers: dict[str, str]) -> dict[str, str]:
+def _build_vscode_frame_headers(
+    existing_headers: dict[str, str],
+    request_headers: Any | None = None,
+) -> dict[str, str]:
     """Build clickjacking & MIME-isolation headers compatible with `SANDBOX_ORIGIN` framing."""
     headers_out: dict[str, str] = {"X-Content-Type-Options": "nosniff"}
     has_csp = any(k.lower() == "content-security-policy" for k in existing_headers)
@@ -291,6 +327,25 @@ def _build_vscode_frame_headers(existing_headers: dict[str, str]) -> dict[str, s
             alt_origin = f"{parsed.scheme.lower()}://{alt_host}{sep}{port}"
             if alt_origin not in ancestors:
                 ancestors.append(alt_origin)
+
+    if request_headers is not None:
+        sbx_parsed = urlsplit(sandbox_origin_raw)
+        sbx_scheme = (sbx_parsed.scheme or "http").lower()
+        sbx_host = (sbx_parsed.hostname or "").strip().lower()
+        if sbx_host in ("127.0.0.1", "localhost"):
+            host_hdr = (
+                (request_headers.get("x-forwarded-host") or request_headers.get("host") or "")
+                .split(",", 1)[0]
+                .strip()
+                .lower()
+            )
+            req_host, _ = _split_netloc_host_port(host_hdr, sbx_scheme) if host_hdr else ("", "")
+            if req_host and req_host not in ("127.0.0.1", "localhost"):
+                web_port = int(getattr(settings, "WEB_PORT", 8421) or 8421)
+                formatted_host = f"[{req_host}]" if ":" in req_host else req_host
+                lan_web_origin = f"{sbx_scheme}://{formatted_host}:{web_port}"
+                if lan_web_origin not in ancestors:
+                    ancestors.append(lan_web_origin)
 
     if not has_csp:
         headers_out["Content-Security-Policy"] = f"frame-ancestors {' '.join(ancestors)}"
@@ -1431,7 +1486,7 @@ async def proxy_vscode_http(
                 pass
 
     # Isolate origin capabilities, block MIME sniffing & prevent embedding in foreign frames
-    resp_headers.update(_build_vscode_frame_headers(resp_headers))
+    resp_headers.update(_build_vscode_frame_headers(resp_headers, request.headers))
 
     content_type = (resp_headers.get("Content-Type") or resp_headers.get("content-type") or "").lower()
     if not clean_sub and "text/html" in content_type and content_bytes:
@@ -1648,6 +1703,8 @@ async def proxy_vscode_websocket(
                 writer.write(_encode_ws_frame(msg["text"].encode("utf-8"), 0x01))
                 await writer.drain()
 
+    max_ws_frame_bytes = 32 * 1024 * 1024
+
     async def _pump_upstream_to_client() -> None:
         while True:
             first2 = await reader.readexactly(2)
@@ -1658,6 +1715,13 @@ async def proxy_vscode_websocket(
                 length = int.from_bytes(await reader.readexactly(2), "big")
             elif length == 127:
                 length = int.from_bytes(await reader.readexactly(8), "big")
+            if length > max_ws_frame_bytes:
+                logger.warning(
+                    "Closing VS Code WebSocket for %s: upstream frame (%s bytes) exceeds 32 MiB cap",
+                    session_key,
+                    length,
+                )
+                break
             mask_key = await reader.readexactly(4) if masked else b""
             payload = await reader.readexactly(length) if length > 0 else b""
             if masked:

@@ -14,6 +14,36 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
 @router.post(
+    "/github",
+    response_model=WebhookDeliveryResponse,
+)
+async def receive_github_webhook_root(
+    request: Request,
+    session: DBSession,
+    project_id: str | None = None,
+    x_github_event: str = Header(default=""),
+    x_hub_signature_256: str | None = Header(default=None),
+    x_github_delivery: str | None = Header(default=None),
+) -> WebhookDeliveryResponse:
+    """Receive and verify an inbound GitHub webhook event (resolved by project_id or repository.full_name)."""
+    raw_body = await request.body()
+    try:
+        payload: dict[str, Any] = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        raise Invalid("Webhook body must be valid JSON") from exc
+
+    return await webhooks_service.handle_github_webhook(
+        session,
+        project_id,
+        event_name=x_github_event,
+        raw_body=raw_body,
+        signature_header=x_hub_signature_256,
+        payload=payload if isinstance(payload, dict) else {},
+        delivery_id=x_github_delivery,
+    )
+
+
+@router.post(
     "/github/{project_id}",
     response_model=WebhookDeliveryResponse,
 )
@@ -40,6 +70,35 @@ async def receive_github_webhook(
         signature_header=x_hub_signature_256,
         payload=payload if isinstance(payload, dict) else {},
         delivery_id=x_github_delivery,
+    )
+
+
+@router.post(
+    "/gitlab",
+    response_model=WebhookDeliveryResponse,
+)
+async def receive_gitlab_webhook_root(
+    request: Request,
+    session: DBSession,
+    project_id: str | None = None,
+    x_gitlab_event: str = Header(default=""),
+    x_gitlab_token: str | None = Header(default=None),
+    x_gitlab_event_uuid: str | None = Header(default=None),
+) -> WebhookDeliveryResponse:
+    """Receive and verify an inbound GitLab webhook event (resolved by project_id or project.path_with_namespace)."""
+    raw_body = await request.body()
+    try:
+        payload: dict[str, Any] = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        raise Invalid("Webhook body must be valid JSON") from exc
+
+    return await webhooks_service.handle_gitlab_webhook(
+        session,
+        project_id,
+        event_name=x_gitlab_event,
+        token_header=x_gitlab_token,
+        payload=payload if isinstance(payload, dict) else {},
+        delivery_id=x_gitlab_event_uuid,
     )
 
 

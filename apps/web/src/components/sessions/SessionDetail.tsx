@@ -34,6 +34,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useData } from '../../context/DataContext'
 import { dockKey, useOptionalSessionDock } from '../../context/SessionDockContext'
 import { useTheme } from '../../context/ThemeContext'
+import { resolveVsCodeIframeProps, safeExternalUrl } from '../../utils/gitUrls'
 import { resolveProjectCloneUrl } from '../../utils/seeds'
 import {
   SandboxArtifactsList,
@@ -281,18 +282,21 @@ const SessionMoreMenu: React.FC<SessionMoreMenuProps> = ({
                   <span>Run tests</span>
                 </button>
               )}
-              {vscodeUrl && (
-                <a
-                  href={vscodeUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => setOpen(false)}
-                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
-                >
-                  <ExternalLink size={13} className="text-teal-600 dark:text-teal-400" />
-                  <span>Open VS Code in new tab</span>
-                </a>
-              )}
+              {(() => {
+                const safeVsCodeHref = safeExternalUrl(vscodeUrl)
+                return safeVsCodeHref ? (
+                  <a
+                    href={safeVsCodeHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setOpen(false)}
+                    className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+                  >
+                    <ExternalLink size={13} className="text-teal-600 dark:text-teal-400" />
+                    <span>Open VS Code in new tab</span>
+                  </a>
+                ) : null
+              })()}
               {onOpenVsCode && (
                 <button
                   type="button"
@@ -667,7 +671,12 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
     if (!canContribute) return
     setActivePane('vscode')
     if (vscodeInfo?.url && sessionRunningNow) {
-      if (opts?.popout) window.open(vscodeInfo.url, '_blank', 'noopener,noreferrer')
+      if (opts?.popout) {
+        const popoutUrl = safeExternalUrl(resolveVsCodeIframeProps(vscodeInfo.url).url)
+        if (popoutUrl) {
+          window.open(popoutUrl, '_blank', 'noopener,noreferrer')
+        }
+      }
       void api.projects.openSessionVsCode(project.id, kind, sessionId, theme).catch(() => {})
       return
     }
@@ -682,7 +691,12 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
           : queryClient.getQueryData<SandboxSession>(['sessionDetail', kind, project.id, sessionId, 'terminal'])
       vscodeContainerIdRef.current = freshSession?.container_id ?? currentContainerId
       setVscodeInfo(res)
-      if (opts?.popout) window.open(res.url, '_blank', 'noopener,noreferrer')
+      if (opts?.popout) {
+        const popoutUrl = safeExternalUrl(resolveVsCodeIframeProps(res.url).url)
+        if (popoutUrl) {
+          window.open(popoutUrl, '_blank', 'noopener,noreferrer')
+        }
+      }
     } catch (err) {
       setActivePane('terminal')
       setActionError(err instanceof Error ? err.message : 'Could not open VS Code for this session')
@@ -820,6 +834,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
     : 'h-[calc(100vh-14.5rem)] min-h-[420px] flex flex-col overflow-hidden'
   const workspaceStyle =
     !isFullscreen && measuredHeight ? { height: `${measuredHeight}px` } : undefined
+  const safePushPrUrl = safeExternalUrl(pushNotice?.prUrl)
 
   return (
     <div className="flex flex-col gap-3">
@@ -852,8 +867,8 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
             <button type="button" onClick={() => navigateToDetail(VIEWS.SEEDS, pushNotice.id)} className="font-semibold underline cursor-pointer">
               Open seed
             </button>
-            {pushNotice.prUrl && (
-              <a href={pushNotice.prUrl} target="_blank" rel="noopener noreferrer" className="font-semibold underline">
+            {safePushPrUrl && (
+              <a href={safePushPrUrl} target="_blank" rel="noopener noreferrer" className="font-semibold underline">
                 View pull request
               </a>
             )}
@@ -1093,7 +1108,11 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                 onToggleFullscreen={() => setIsFullscreen((v) => !v)}
                 onMinimize={canDock ? minimize : undefined}
                 onRunTests={showRunTests ? () => void runTests() : undefined}
-                vscodeUrl={canContribute && showVsCode ? vscodeInfo?.url : null}
+                vscodeUrl={
+                  canContribute && showVsCode && vscodeInfo?.url
+                    ? resolveVsCodeIframeProps(vscodeInfo.url).url
+                    : null
+                }
                 onOpenVsCode={canContribute && !isRunning && kind === 'chat' ? () => void openVsCode() : undefined}
                 vscodeLoading={vscodeLoading}
                 onDelete={canContribute ? deleteSession : undefined}
@@ -1125,14 +1144,39 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                     <span>Starting VS Code in session workspace…</span>
                   </div>
                 ) : (
-                  <iframe
-                    key={`vscode-chat-${agentSession.id}`}
-                    src={vscodeInfo.url}
-                    title={`VS Code · ${name}`}
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
-                    allow="clipboard-read; clipboard-write;"
-                    className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
-                  />
+                  (() => {
+                    const resolvedVsCode = resolveVsCodeIframeProps(vscodeInfo.url)
+                    const safeHref = safeExternalUrl(resolvedVsCode.url)
+                    return (
+                      <>
+                        {!resolvedVsCode.sandbox.includes('allow-same-origin') && (
+                          <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
+                            <span>
+                              Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
+                            </span>
+                            {safeHref && (
+                              <a
+                                href={safeHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-semibold underline shrink-0"
+                              >
+                                Open in new tab
+                              </a>
+                            )}
+                          </div>
+                        )}
+                        <iframe
+                          key={`vscode-chat-${agentSession.id}`}
+                          src={resolvedVsCode.url}
+                          title={`VS Code · ${name}`}
+                          sandbox={resolvedVsCode.sandbox}
+                          allow="clipboard-read; clipboard-write;"
+                          className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
+                        />
+                      </>
+                    )
+                  })()
                 )}
               </div>
             )}
@@ -1245,14 +1289,39 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                         <span>Starting VS Code in session workspace…</span>
                       </div>
                     ) : (
-                      <iframe
-                        key={`vscode-terminal-${terminal.id}`}
-                        src={vscodeInfo.url}
-                        title={`VS Code · ${name}`}
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
-                        allow="clipboard-read; clipboard-write;"
-                        className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
-                      />
+                      (() => {
+                        const resolvedVsCode = resolveVsCodeIframeProps(vscodeInfo.url)
+                        const safeHref = safeExternalUrl(resolvedVsCode.url)
+                        return (
+                          <>
+                            {!resolvedVsCode.sandbox.includes('allow-same-origin') && (
+                              <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
+                                <span>
+                                  Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
+                                </span>
+                                {safeHref && (
+                                  <a
+                                    href={safeHref}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="font-semibold underline shrink-0"
+                                  >
+                                    Open in new tab
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                            <iframe
+                              key={`vscode-terminal-${terminal.id}`}
+                              src={resolvedVsCode.url}
+                              title={`VS Code · ${name}`}
+                              sandbox={resolvedVsCode.sandbox}
+                              allow="clipboard-read; clipboard-write;"
+                              className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
+                            />
+                          </>
+                        )
+                      })()
                     )}
                   </div>
                 )}

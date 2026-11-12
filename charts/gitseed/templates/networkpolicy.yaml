@@ -13,6 +13,7 @@ spec:
   podSelector:
     matchLabels:
       app.gitseed.managed: "true"
+      app.gitseed.workload: "runner"
   policyTypes:
     - Ingress
     - Egress
@@ -63,7 +64,8 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.egressProxy.port }}
-    # Allow SSH (22) for git over SSH while blocking RFC 1918 and cloud metadata (169.254.169.254/32)
+    {{- if .Values.compute.networkPolicy.allowSsh }}
+    # Optional SSH (22) when compute.networkPolicy.allowSsh=true while blocking RFC 1918 and cloud metadata (169.254.169.254/32)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -75,8 +77,9 @@ spec:
       ports:
         - protocol: TCP
           port: 22
+    {{- end }}
     {{- else }}
-    # Allow external HTTPS (443) and SSH (22) while blocking PostgreSQL (5432), Valkey (6379), RFC 1918 private networks, and cloud metadata (169.254.169.254/32)
+    # Allow external HTTPS (443){{- if .Values.compute.networkPolicy.allowSsh }} and SSH (22){{- end }} while blocking PostgreSQL (5432), Valkey (6379), RFC 1918 private networks, and cloud metadata (169.254.169.254/32)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -88,10 +91,11 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+        {{- if .Values.compute.networkPolicy.allowSsh }}
         - protocol: TCP
           port: 22
+        {{- end }}
     {{- end }}
-{{- if ne $sandboxNs $runnerNs }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -104,6 +108,7 @@ spec:
   podSelector:
     matchLabels:
       app.gitseed.managed: "true"
+      app.gitseed.workload: "sandbox"
   policyTypes:
     - Ingress
     - Egress
@@ -153,8 +158,21 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.egressProxy.port }}
+    {{- if .Values.compute.networkPolicy.allowSsh }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 22
+    {{- end }}
     {{- else }}
-    # Allow external HTTPS (443) and SSH (22) while blocking PostgreSQL (5432), Valkey (6379), RFC 1918 private networks, and cloud metadata (169.254.169.254/32)
+    # Allow external HTTPS (443){{- if .Values.compute.networkPolicy.allowSsh }} and SSH (22){{- end }} while blocking PostgreSQL (5432), Valkey (6379), RFC 1918 private networks, and cloud metadata (169.254.169.254/32)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -166,8 +184,9 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+        {{- if .Values.compute.networkPolicy.allowSsh }}
         - protocol: TCP
           port: 22
+        {{- end }}
     {{- end }}
-{{- end }}
 {{- end }}

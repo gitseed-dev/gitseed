@@ -1,8 +1,11 @@
+import asyncio
 import logging
 import os
 import secrets
 from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from alembic.script import ScriptDirectory
 from gitseed_common.enums import (
     BackendHealth,
@@ -100,19 +103,33 @@ def _resolve_alembic_head_revisions() -> tuple[str, ...]:
 _BOOTSTRAP_ADVISORY_LOCK_ID = 748291045
 
 
+def _build_alembic_config() -> Config:
+    migrations_dir = Path(__file__).resolve().parent / "migrations"
+    alembic_cfg = Config()
+    alembic_cfg.set_main_option("script_location", str(migrations_dir))
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
+    return alembic_cfg
+
+
 async def bootstrap_database() -> None:
     """Idempotently seed OrgSettings, policies, initial Admin, Docker compute, and Agents."""
     if settings.GITSEED_AUTO_MIGRATE:
         head_revisions = _resolve_alembic_head_revisions()
         async with engine.begin() as conn:
-            if conn.dialect.name == "postgresql":
+            is_postgres = (
+                getattr(getattr(conn, "dialect", None), "name", None) == "postgresql"
+            )
+            if is_postgres:
                 await conn.execute(
                     text("SELECT pg_advisory_xact_lock(:lock_id)").bindparams(
                         lock_id=_BOOTSTRAP_ADVISORY_LOCK_ID
                     )
                 )
 
+            needs_alembic_upgrade = False
+
             def _create_if_unmigrated(sync_conn: object) -> None:
+                nonlocal needs_alembic_upgrade
                 if not inspect(sync_conn).has_table("alembic_version"):  # type: ignore[arg-type]
                     SQLModel.metadata.create_all(sync_conn)  # type: ignore[arg-type]
                     try:
@@ -133,8 +150,17 @@ async def bootstrap_database() -> None:
                                 )
                     except Exception:
                         pass
+                elif (
+                    is_postgres
+                    or getattr(getattr(sync_conn, "dialect", None), "name", None)
+                    == "postgresql"
+                ):
+                    needs_alembic_upgrade = True
 
             await conn.run_sync(_create_if_unmigrated)
+            if needs_alembic_upgrade:
+                alembic_cfg = _build_alembic_config()
+                await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
 
     async with AsyncSessionLocal() as session:
         bind = getattr(session, "bind", None)
@@ -166,7 +192,7 @@ async def bootstrap_database() -> None:
             raw_password = settings.GITSEED_ADMIN_PASSWORD
             if not raw_password:
                 raw_password = secrets.token_urlsafe(16)
-            generated_password = raw_password
+                generated_password = raw_password
 
             admin = User(
                 email=settings.GITSEED_ADMIN_EMAIL.strip().lower(),

@@ -989,4 +989,283 @@ def test_tui_async_debounced_navigation_and_rlock_safety(
         ctrl.close()
 
 
+def test_tui_escape_sequences_extended_keys_and_modal_safety(
+    tui_env: tuple[GitSeedClient, dict[str, Any]],
+) -> None:
+    import gitseed_cli.tui.app as tui_app
+
+    def _feed_tail(seq_after_esc: str) -> tuple[str, str]:
+        chars = list(seq_after_esc)
+        tok = tui_app._parse_escape_tail(lambda: chars.pop(0) if chars else None)
+        return tok, "".join(chars)
+
+    # CSI / SS3 extended keys
+    assert _feed_tail("[3~") == ("DELETE", "")
+    assert _feed_tail("[H") == ("HOME", "")
+    assert _feed_tail("[1~") == ("HOME", "")
+    assert _feed_tail("[7~") == ("HOME", "")
+    assert _feed_tail("OH") == ("HOME", "")
+    assert _feed_tail("[F") == ("END", "")
+    assert _feed_tail("[4~") == ("END", "")
+    assert _feed_tail("[8~") == ("END", "")
+    assert _feed_tail("OF") == ("END", "")
+    assert _feed_tail("[Z") == ("SHIFT_TAB", "")
+    assert _feed_tail("[1;5A") == ("UP", "")
+    assert _feed_tail("[1;5B") == ("DOWN", "")
+    assert _feed_tail("[1;5C") == ("RIGHT", "")
+    assert _feed_tail("[1;5D") == ("LEFT", "")
+
+    # Unrecognized function keys consume entire sequence including '~' and return "" (no-op)
+    assert _feed_tail("[15~") == ("", "")
+    assert _feed_tail("[24~") == ("", "")
+    assert _feed_tail("OP") == ("", "")
+    assert _feed_tail("[15~abc") == ("", "abc")
+
+    # Standalone ESC returns "Escape"
+    assert _feed_tail("") == ("Escape", "")
+    assert _feed_tail("\x1b") == ("Escape", "")
+
+    # Windows msvcrt extended scan codes
+    assert tui_app._decode_msvcrt_char("\xe0", lambda: "S") == "DELETE"
+    assert tui_app._decode_msvcrt_char("\xe0", lambda: "G") == "HOME"
+    assert tui_app._decode_msvcrt_char("\xe0", lambda: "O") == "END"
+    assert tui_app._decode_msvcrt_char("\x00", lambda: "S") == "DELETE"
+
+    # Verify TUI modals do not close or leak '~' when DELETE / HOME / END / SHIFT_TAB / F5 arrive
+    client, _ = tui_env
+    ctrl = TUIController(client)
+    ctrl.refresh_data()
+
+    # Normal view navigation with END / HOME / SHIFT_TAB
+    ctrl.handle_key("END")
+    assert ctrl.state.selected_index == 2
+    ctrl.handle_key("HOME")
+    assert ctrl.state.selected_index == 0
+    assert ctrl.state.inspector_tab == "overview"
+    ctrl.handle_key("SHIFT_TAB")
+    assert ctrl.state.inspector_tab == INSPECTOR_TABS[-1]
+    ctrl.handle_key("TAB")
+    assert ctrl.state.inspector_tab == "overview"
+
+    # Modal safety
+    ctrl.handle_key("a")
+    assert ctrl.state.input_mode == "approve"
+    for ch in "ok":
+        ctrl.handle_key(ch)
+    for special in ("DELETE", "HOME", "END", "SHIFT_TAB", _feed_tail("[15~")[0]):
+        ctrl.handle_key(special)
+    assert ctrl.state.input_mode == "approve"
+    assert ctrl.state.input_buffer == "ok"
+
+
+def test_tui_blocking_actions_never_hold_controller_lock_during_http(
+    tui_env: tuple[GitSeedClient, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    client, _ = tui_env
+    ctrl = TUIController(client, async_mode=True, debounce_seconds=0.005)
+    ctrl.refresh_data()
+    try:
+        lock_free_observations: list[bool] = []
+
+        def _probe_lock_from_other_thread() -> bool:
+            acquired: list[bool] = []
+
+            def _try_lock() -> None:
+                got = ctrl.lock.acquire(blocking=False)
+                if got:
+                    ctrl.lock.release()
+                acquired.append(got)
+
+            t = threading.Thread(target=_try_lock)
+            t.start()
+            t.join(timeout=1.0)
+            return bool(acquired and acquired[0])
+
+        orig_approval = client.create_seed_approval
+        orig_create_seed = client.create_seed
+        orig_coord = client.chat_coordinator
+        orig_projects = client.list_projects
+
+        def wrapped_approval(*args: Any, **kwargs: Any) -> Any:
+            lock_free_observations.append(_probe_lock_from_other_thread())
+            return orig_approval(*args, **kwargs)
+
+        def wrapped_create_seed(*args: Any, **kwargs: Any) -> Any:
+            lock_free_observations.append(_probe_lock_from_other_thread())
+            return orig_create_seed(*args, **kwargs)
+
+        def wrapped_coord(*args: Any, **kwargs: Any) -> Any:
+            lock_free_observations.append(_probe_lock_from_other_thread())
+            return orig_coord(*args, **kwargs)
+
+        def wrapped_projects(*args: Any, **kwargs: Any) -> Any:
+            lock_free_observations.append(_probe_lock_from_other_thread())
+            return orig_projects(*args, **kwargs)
+
+        monkeypatch.setattr(client, "create_seed_approval", wrapped_approval)
+        monkeypatch.setattr(client, "create_seed", wrapped_create_seed)
+        monkeypatch.setattr(client, "chat_coordinator", wrapped_coord)
+        monkeypatch.setattr(client, "list_projects", wrapped_projects)
+
+        # 1. Manual refresh on 'R'
+        ctrl.handle_key("R")
+        ctrl.wait_for_actions()
+        assert "Refreshed workspace data" in ctrl.state.status_message
+
+        # 2. Approval on 'a'
+        ctrl.handle_key("a")
+        ctrl.handle_key("LGTM")
+        ctrl.handle_key("Enter")
+        ctrl.wait_for_actions()
+        assert "Approved stage" in ctrl.state.status_message
+
+        # 3. Coordinator chat on 'K'
+        ctrl.handle_key("K")
+        ctrl.handle_key("Status?")
+        ctrl.handle_key("Enter")
+        ctrl.wait_for_actions()
+        assert ctrl.state.coordinator_reply is not None
+
+        # 4. Create seed on 'n'
+        ctrl.handle_key("n")
+        ctrl.handle_key("Enter")
+        ctrl.handle_key("1")
+        ctrl.handle_key("Ship non-blocking TUI")
+        ctrl.handle_key("Enter")
+        ctrl.wait_for_actions()
+        assert "Created seed" in ctrl.state.status_message
+
+        assert len(lock_free_observations) >= 4
+        assert all(lock_free_observations)
+    finally:
+        ctrl.close()
+
+
+def test_tui_help_overlay_consumes_all_action_keys(
+    tui_env: tuple[GitSeedClient, dict[str, Any]],
+) -> None:
+    client, state = tui_env
+    ctrl = TUIController(client)
+    ctrl.refresh_data()
+
+    initial_runs_len = len(state["runs"])
+    initial_run_status = state["runs"][0]["status"]
+
+    # Open Help overlay
+    assert ctrl.handle_key("?") is True
+    assert ctrl.state.show_help is True
+
+    # Action and navigation keys must be consumed without mutating underlying TUI/API state
+    for blocked_key in (
+        "z",
+        "r",
+        "a",
+        "x",
+        "X",
+        "c",
+        "C",
+        "n",
+        "K",
+        "1",
+        "2",
+        "3",
+        "4",
+        "j",
+        "k",
+        "p",
+        "/",
+        "R",
+        "MOUSE_WHEEL_DOWN:20:10",
+    ):
+        assert ctrl.handle_key(blocked_key) is True
+        assert ctrl.state.show_help is True
+        assert ctrl.state.input_mode is None
+        assert ctrl.state.active_view == "seeds"
+        assert ctrl.state.selected_index == 0
+        assert ctrl.state.project_filter is None
+
+    assert len(state["runs"]) == initial_runs_len
+    assert state["runs"][0]["status"] == initial_run_status
+
+    # 'q', '?', 'Escape', and 'Enter' close Help without quitting the TUI
+    for close_key in ("q", "?", "Escape", "Enter"):
+        ctrl.state.show_help = True
+        assert ctrl.handle_key(close_key) is True
+        assert ctrl.state.show_help is False
+
+
+def test_tui_renders_bracket_markup_paths_without_markup_error(
+    tui_env: tuple[GitSeedClient, dict[str, Any]],
+) -> None:
+    client, state = tui_env
+    state["seeds"][0]["title"] = "Fix Next.js route app/[...slug]/page.tsx [/0]"
+    state["tasks"][0]["title"] = "Patch app/[...slug]/page.tsx and handle [/0] token"
+    state["changes"]["files"][0]["path"] = "app/[...slug]/page.tsx"
+    state["changes"]["files"][1]["path"] = "src/parser[/0]/lexer.ts"
+    state["sandboxes"][0]["ref"] = "feat/[...slug]"
+    state["sandboxes"][0]["image"] = "ghcr.io/org/runner:[v1][/0]"
+    state["sandboxes"][0]["command"] = "pytest -k 'test_route[/0]'"
+    state["agents"][0]["name"] = "Router Agent [/0]"
+    state["agents"][0]["model"] = "custom/[...slug]/v1[/0]"
+
+    ctrl = TUIController(client)
+    ctrl.refresh_data()
+
+    buf = StringIO()
+    test_console = Console(file=buf, width=160, height=42, force_terminal=True)
+
+    # Render Seeds -> Tasks tab
+    ctrl.state.active_view = "seeds"
+    ctrl.state.inspector_tab = "tasks"
+    test_console.print(render_tui_frame(ctrl.state))
+
+    # Render Seeds -> Diff tab (All Files and single file with app/[...slug]/page.tsx & [/0])
+    ctrl.state.inspector_tab = "diff"
+    ctrl.state.diff_file_index = 0
+    test_console.print(render_tui_frame(ctrl.state))
+    ctrl.state.diff_file_index = 1
+    test_console.print(render_tui_frame(ctrl.state))
+    ctrl.state.diff_file_index = 2
+    test_console.print(render_tui_frame(ctrl.state))
+
+    # Render Projects, Runs & Sandboxes, and Backends & Agents views
+    for view_name in VIEWS:
+        ctrl.state.active_view = view_name
+        test_console.print(render_tui_frame(ctrl.state))
+
+    rendered = buf.getvalue()
+    assert "app/[...slug]/page.tsx" in rendered
+
+
+def test_tui_alt_arrow_double_escape_drains_csi_without_buffering_bracket() -> None:
+    import gitseed_cli.tui.app as tui_app
+
+    def _feed_tail(seq_after_esc: str) -> tuple[str, str]:
+        chars = list(seq_after_esc)
+        tok = tui_app._parse_escape_tail(lambda: chars.pop(0) if chars else None)
+        return tok, "".join(chars)
+
+    # Double-ESC CSI/SS3 sequences (e.g. Alt+Up \x1b\x1b[A) drain cleanly without leaving '['
+    assert _feed_tail("\x1b[A") == ("", "")
+    assert _feed_tail("\x1b[1;3A") == ("", "")
+    assert _feed_tail("\x1b[Z") == ("", "")
+    assert _feed_tail("\x1bOA") == ("", "")
+    assert _feed_tail("\x1b[Aj") == ("", "j")
+
+    # Verify _read_key_posix_once drains \x1b\x1b[A from _POSIX_CHAR_BUFFER cleanly
+    tui_app._reset_posix_input_state()
+    try:
+        tui_app._POSIX_CHAR_BUFFER.extend("\x1b\x1b[A")
+        tok = tui_app._read_key_posix_once(0.0, fd=0)
+        assert tok is None
+        assert list(tui_app._POSIX_CHAR_BUFFER) == []
+    finally:
+        tui_app._reset_posix_input_state()
+
+
+
+
 

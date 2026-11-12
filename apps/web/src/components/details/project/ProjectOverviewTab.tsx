@@ -18,7 +18,7 @@ import { SpendTrendCard } from '../../common/SpendTrendCard'
 import { useData } from '../../../context/DataContext'
 import { useTranslation } from '../../../context/I18nContext'
 import { VIEWS } from '../../../constants'
-import { buildRepoWebUrl } from '../../../utils/gitUrls'
+import { buildRepoWebUrl, safeExternalUrl } from '../../../utils/gitUrls'
 import type {
   ActivityEvent,
   Project,
@@ -153,10 +153,12 @@ export const ProjectOverviewTab: React.FC<ProjectOverviewTabProps> = ({
                     backend?.provider === 'local' ||
                     repo.full_name.startsWith('local/')
                   const remoteUrl = isLocalRepo
-                    ? ''
-                    : buildRepoWebUrl(repo, backend, {
-                        ref: repo.default_branch,
-                      })
+                    ? null
+                    : safeExternalUrl(
+                        buildRepoWebUrl(repo, backend, {
+                          ref: repo.default_branch,
+                        })
+                      )
                   return (
                     <div
                       key={repo.id ?? repo.full_name}

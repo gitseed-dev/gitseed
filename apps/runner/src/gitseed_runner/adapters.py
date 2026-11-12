@@ -9,6 +9,8 @@ import logging
 import os
 import re
 import shutil
+import signal
+import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -131,6 +133,46 @@ def is_valid_cli_auth_file_content(clean_rel: str, content: str) -> bool:
     return clean_rel in ALL_ALLOWED_CLI_AUTH_PATHS
 
 
+async def terminate_process_tree(proc: Any, *, grace_seconds: float = 5.0) -> None:
+    """Gracefully terminate a subprocess and its entire POSIX process group, falling back to SIGKILL."""
+    if getattr(proc, "returncode", None) is not None:
+        return
+    pid = getattr(proc, "pid", None)
+    killpg_fn = getattr(os, "killpg", None)
+    sigkill = int(getattr(signal, "SIGKILL", signal.SIGTERM))
+    use_pg = (
+        os.name != "nt"
+        and callable(killpg_fn)
+        and isinstance(pid, int)
+        and pid > 0
+    )
+    if use_pg and callable(killpg_fn):
+        try:
+            killpg_fn(pid, int(signal.SIGTERM))
+        except (ProcessLookupError, PermissionError, OSError):
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.terminate()
+    else:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace_seconds)
+    except TimeoutError:
+        if use_pg and callable(killpg_fn):
+            try:
+                killpg_fn(pid, sigkill)
+            except (ProcessLookupError, PermissionError, OSError):
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    proc.kill()
+        else:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+    except Exception:
+        pass
+
+
 class RuntimeAdapter(ABC):
     """Base adapter for driving a headless agent CLI inside the runner container."""
 
@@ -174,12 +216,76 @@ class RuntimeAdapter(ABC):
         )
         self.input_tokens: int = 0
         self.output_tokens: int = 0
+        self.cached_input_tokens: int = 0
         self.context_tokens: int = 0
         self.peak_context_tokens: int = 0
         self.turn_count: int = 0
         self.cost: float = 0.0
+        self._completed_input_tokens: int = 0
+        self._completed_output_tokens: int = 0
+        self._completed_cached_input_tokens: int = 0
+        self._invocation_input_tokens: int = 0
+        self._invocation_output_tokens: int = 0
+        self._invocation_cached_input_tokens: int = 0
         self.max_turns: int | None = self._resolve_max_turns()
         self.synthesized_via: str | None = None
+
+    def begin_invocation(self) -> None:
+        """Snapshot prior invocation totals before launching a new CLI subprocess."""
+        self._completed_input_tokens = self.input_tokens
+        self._completed_output_tokens = self.output_tokens
+        self._completed_cached_input_tokens = self.cached_input_tokens
+        self._invocation_input_tokens = 0
+        self._invocation_output_tokens = 0
+        self._invocation_cached_input_tokens = 0
+
+    def finish_invocation(self) -> None:
+        """Commit the current subprocess's peak/accumulated token totals into cumulative counters."""
+        self._completed_input_tokens = self.input_tokens
+        self._completed_output_tokens = self.output_tokens
+        self._completed_cached_input_tokens = self.cached_input_tokens
+        self._invocation_input_tokens = 0
+        self._invocation_output_tokens = 0
+        self._invocation_cached_input_tokens = 0
+
+    def record_stream_usage(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        cached_input_tokens: int = 0,
+        context_tokens: int | None = None,
+        cumulative: bool = True,
+    ) -> None:
+        """Record stream token telemetry within the active CLI invocation without losing prior runs."""
+        in_val = max(0, int(input_tokens))
+        out_val = max(0, int(output_tokens))
+        cached_val = max(0, int(cached_input_tokens))
+        if cumulative:
+            self._invocation_input_tokens = max(self._invocation_input_tokens, in_val)
+            self._invocation_output_tokens = max(self._invocation_output_tokens, out_val)
+            self._invocation_cached_input_tokens = max(
+                self._invocation_cached_input_tokens, cached_val
+            )
+        else:
+            self._invocation_input_tokens += in_val
+            self._invocation_output_tokens += out_val
+            self._invocation_cached_input_tokens += cached_val
+
+        self.input_tokens = self._completed_input_tokens + self._invocation_input_tokens
+        self.output_tokens = self._completed_output_tokens + self._invocation_output_tokens
+        self.cached_input_tokens = (
+            self._completed_cached_input_tokens + self._invocation_cached_input_tokens
+        )
+        ctx_val = (
+            max(0, int(context_tokens))
+            if context_tokens is not None
+            else (in_val + out_val)
+        )
+        if ctx_val > 0:
+            self.context_tokens = ctx_val
+            self.peak_context_tokens = max(self.peak_context_tokens, ctx_val)
+            self.turn_count += 1
 
     def _resolve_max_turns(self) -> int | None:
         """Resolve optional positive turn cap from context, sandbox_config, or env."""
@@ -232,6 +338,10 @@ class RuntimeAdapter(ABC):
             env = self.prepare_workspace()
             env.pop("GITSEED_RUN_TOKEN", None)
             cmd = self.build_command(prompt, continue_session=continue_session)
+            self.begin_invocation()
+            spawn_kwargs: dict[str, Any] = (
+                {"start_new_session": True} if os.name != "nt" else {}
+            )
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(self.working_dir),
@@ -239,6 +349,7 @@ class RuntimeAdapter(ABC):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 limit=16 * 1024 * 1024,
+                **spawn_kwargs,
             )
             try:
                 if timeout is not None:
@@ -248,11 +359,7 @@ class RuntimeAdapter(ABC):
                 else:
                     stdout_bytes, _ = await proc.communicate()
             except BaseException:
-                if proc.returncode is None:
-                    with contextlib.suppress(ProcessLookupError):
-                        proc.kill()
-                    with contextlib.suppress(Exception):
-                        await proc.wait()
+                await terminate_process_tree(proc)
                 raise
 
             raw_out = (stdout_bytes or b"").decode("utf-8", errors="replace")
@@ -262,6 +369,7 @@ class RuntimeAdapter(ABC):
                 rendered_lines.append(line if parsed_line is None else parsed_line)
             return int(proc.returncode or 0), "".join(rendered_lines)
         finally:
+            self.finish_invocation()
             self.cleanup_workspace()
 
     def restore_cli_auth_bundle(self) -> None:
@@ -281,7 +389,7 @@ class RuntimeAdapter(ABC):
             if raw_target.is_symlink():
                 continue
             target = raw_target.resolve()
-            if not str(target).startswith(str(home_root) + os.sep):
+            if not target.is_relative_to(home_root) or target == home_root:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content.strip(), encoding="utf-8")
@@ -313,7 +421,7 @@ class RuntimeAdapter(ABC):
             if raw_target.is_symlink():
                 continue
             target = raw_target.resolve()
-            if not str(target).startswith(str(home_root) + os.sep) or not target.is_file():
+            if not target.is_relative_to(home_root) or target == home_root or not target.is_file():
                 continue
             try:
                 text = target.read_text(encoding="utf-8", errors="ignore").strip()
@@ -426,16 +534,79 @@ class OpenCodeAdapter(RuntimeAdapter):
         self._had_preexisting_opencode: bool = False
         self._preexisting_opencode_bytes: bytes | None = None
         self._workspace_prepared: bool = False
+        self._external_config_path: Path | None = None
 
     @property
     def binary_name(self) -> str:
         return "opencode"
 
+    def _resolve_opencode_oauth_model(self) -> str:
+        """Return provider-prefixed model string (`<provider>/<model>`) for OpenCode OAuth mode."""
+        raw = (self.model or "").strip()
+        if not raw or raw == "default":
+            return ""
+        if "/" in raw:
+            return raw
+
+        provider_alias_map = {
+            "gemini": "google",
+            "grok": "xai",
+            "claude": "anthropic",
+        }
+        explicit_provider = (
+            str(self.ctx.get("provider") or self.gateway.get("provider") or "").strip().lower()
+        )
+        explicit_provider = provider_alias_map.get(explicit_provider, explicit_provider)
+
+        bundle_providers: list[str] = []
+        for rel in ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["opencode"]:
+            raw_content = self.cli_auth_bundle.get(rel)
+            if not raw_content:
+                continue
+            try:
+                parsed = json.loads(raw_content)
+                if isinstance(parsed, dict):
+                    for key in parsed:
+                        norm_k = provider_alias_map.get(str(key).strip().lower(), str(key).strip().lower())
+                        if norm_k and norm_k not in bundle_providers:
+                            bundle_providers.append(norm_k)
+            except Exception:
+                continue
+
+        if len(bundle_providers) == 1:
+            return f"{bundle_providers[0]}/{raw}"
+        if explicit_provider and (not bundle_providers or explicit_provider in bundle_providers):
+            return f"{explicit_provider}/{raw}"
+
+        lower_model = raw.lower()
+        if lower_model.startswith("claude-"):
+            inferred = "anthropic"
+        elif lower_model.startswith(("gpt-", "o1-", "o3-", "o4-", "codex-")) or lower_model in (
+            "o1",
+            "o3",
+            "o4-mini",
+        ):
+            inferred = "openai"
+        elif lower_model.startswith("gemini-"):
+            inferred = "google"
+        elif lower_model.startswith("grok-"):
+            inferred = "xai"
+        else:
+            inferred = ""
+
+        if inferred and (not bundle_providers or inferred in bundle_providers):
+            return f"{inferred}/{raw}"
+        if explicit_provider:
+            return f"{explicit_provider}/{raw}"
+        return raw
+
     def prepare_workspace(self) -> dict[str, str]:
         self.restore_cli_auth_bundle()
-        mcp_cfg: dict[str, Any] = {}
+        env = os.environ.copy()
+        mcp_cfg_full: dict[str, Any] = {}
+        mcp_cfg_workspace: dict[str, Any] = {}
         if self.mcp_servers:
-            for item in self.mcp_servers:
+            for idx, item in enumerate(self.mcp_servers):
                 slug = str(item.get("slug") or item.get("id") or "mcp").strip()
                 raw_transport = (
                     str(item.get("transport") or item.get("provider") or "mcp-sse")
@@ -448,22 +619,49 @@ class OpenCodeAdapter(RuntimeAdapter):
                 if raw_transport in ("stdio", "mcp-stdio"):
                     parts = endpoint.split()
                     if parts:
-                        mcp_cfg[slug] = {
+                        raw_env = item.get("env") if isinstance(item.get("env"), dict) else {}
+                        redacted_env: dict[str, str] = {}
+                        for e_idx, (ek, ev) in enumerate(raw_env.items()):
+                            env_var_name = f"GITSEED_OC_MCP_{idx}_ENV_{e_idx}"
+                            env[env_var_name] = str(ev)
+                            redacted_env[str(ek)] = f"{{env:{env_var_name}}}"
+                        mcp_cfg_full[slug] = {
                             "type": "local",
                             "command": parts,
                             "enabled": True,
-                            "environment": item.get("env") or {},
+                            "environment": raw_env,
+                        }
+                        mcp_cfg_workspace[slug] = {
+                            "type": "local",
+                            "command": parts,
+                            "enabled": True,
+                            "environment": redacted_env,
                         }
                 else:
-                    mcp_cfg[slug] = {
+                    raw_headers = (
+                        item.get("headers") if isinstance(item.get("headers"), dict) else {}
+                    )
+                    redacted_headers: dict[str, str] = {}
+                    for h_idx, (hk, hv) in enumerate(raw_headers.items()):
+                        hdr_var_name = f"GITSEED_OC_MCP_{idx}_HDR_{h_idx}"
+                        env[hdr_var_name] = str(hv)
+                        redacted_headers[str(hk)] = f"{{env:{hdr_var_name}}}"
+                    mcp_cfg_full[slug] = {
                         "type": "remote",
                         "url": endpoint,
                         "enabled": True,
-                        "headers": item.get("headers") or {},
+                        "headers": raw_headers,
+                    }
+                    mcp_cfg_workspace[slug] = {
+                        "type": "remote",
+                        "url": endpoint,
+                        "enabled": True,
+                        "headers": redacted_headers,
                     }
 
         if self.auth_mode == "cli_oauth":
-            opencode_config: dict[str, Any] = {
+            oauth_model = self._resolve_opencode_oauth_model()
+            opencode_config_full: dict[str, Any] = {
                 "$schema": "https://opencode.ai/config.json",
                 "permission": {
                     "edit": "allow",
@@ -471,10 +669,11 @@ class OpenCodeAdapter(RuntimeAdapter):
                     "webfetch": "allow",
                 },
             }
-            if self.model and self.model != "default":
-                opencode_config["model"] = self.model
+            if oauth_model:
+                opencode_config_full["model"] = oauth_model
+            opencode_config_workspace = dict(opencode_config_full)
         else:
-            opencode_config = {
+            opencode_config_full = {
                 "$schema": "https://opencode.ai/config.json",
                 "model": f"gitseed/{self.model}",
                 "small_model": f"gitseed/{self.model}",
@@ -500,10 +699,50 @@ class OpenCodeAdapter(RuntimeAdapter):
                     }
                 },
             }
+            opencode_config_workspace = {
+                "$schema": "https://opencode.ai/config.json",
+                "model": f"gitseed/{self.model}",
+                "small_model": f"gitseed/{self.model}",
+                "permission": {
+                    "edit": "allow",
+                    "bash": "allow",
+                    "webfetch": "allow",
+                },
+                "provider": {
+                    "gitseed": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "GitSeed LiteLLM Proxy",
+                        "options": {
+                            "baseURL": self.gateway_base_url,
+                            "apiKey": "{env:OPENAI_API_KEY}",
+                        },
+                        "models": {
+                            self.model: {
+                                "name": self.model,
+                                "tool_call": True,
+                            }
+                        },
+                    }
+                },
+            }
 
-        if mcp_cfg:
-            opencode_config["mcp"] = mcp_cfg
+        if mcp_cfg_full:
+            opencode_config_full["mcp"] = mcp_cfg_full
+            opencode_config_workspace["mcp"] = mcp_cfg_workspace
 
+        # Write full credentialed config outside /workspace so SIGKILL never leaves secrets in repo
+        ext_dir = Path(tempfile.gettempdir())
+        ext_dir.mkdir(parents=True, exist_ok=True)
+        ext_cfg_path = ext_dir / f"gitseed-opencode-{os.getpid()}-{id(self)}.json"
+        if ext_cfg_path.is_symlink():
+            ext_cfg_path.unlink(missing_ok=True)
+        ext_cfg_path.write_text(json.dumps(opencode_config_full, indent=2), encoding="utf-8")
+        with contextlib.suppress(OSError):
+            os.chmod(ext_cfg_path, 0o600)
+        self._external_config_path = ext_cfg_path
+        env["OPENCODE_CONFIG"] = str(ext_cfg_path)
+
+        # Write secret-free workspace config using `{env:...}` placeholders
         config_path = self.working_dir / "opencode.json"
         if not self._workspace_prepared:
             if config_path.is_file() and not config_path.is_symlink():
@@ -516,11 +755,10 @@ class OpenCodeAdapter(RuntimeAdapter):
 
         if config_path.is_symlink():
             config_path.unlink(missing_ok=True)
-        config_path.write_text(json.dumps(opencode_config, indent=2), encoding="utf-8")
+        config_path.write_text(json.dumps(opencode_config_workspace, indent=2), encoding="utf-8")
         with contextlib.suppress(OSError):
             os.chmod(config_path, 0o600)
 
-        env = os.environ.copy()
         if self.auth_mode == "cli_oauth":
             env.pop("OPENAI_API_KEY", None)
             env.pop("OPENAI_BASE_URL", None)
@@ -556,6 +794,10 @@ class OpenCodeAdapter(RuntimeAdapter):
         return env
 
     def cleanup_workspace(self) -> None:
+        if self._external_config_path is not None:
+            with contextlib.suppress(OSError):
+                self._external_config_path.unlink(missing_ok=True)
+            self._external_config_path = None
         config_path = self.working_dir / "opencode.json"
         if not self._workspace_prepared:
             return
@@ -574,8 +816,9 @@ class OpenCodeAdapter(RuntimeAdapter):
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
         cmd = ["opencode", "run", "--format", "json"]
         if self.auth_mode == "cli_oauth":
-            if self.model and self.model != "default":
-                cmd.extend(["--model", self.model])
+            oauth_model = self._resolve_opencode_oauth_model()
+            if oauth_model:
+                cmd.extend(["--model", oauth_model])
         else:
             cmd.extend(["--model", f"gitseed/{self.model}"])
         if continue_session:
@@ -627,23 +870,29 @@ class OpenCodeAdapter(RuntimeAdapter):
             cache_obj = (
                 tokens_obj.get("cache") if isinstance(tokens_obj.get("cache"), dict) else {}
             )
-            cache_tok = (
+            cache_read_tok = max(
+                0,
                 int(cache_obj.get("read") or 0)
-                + int(cache_obj.get("write") or 0)
-                + int(tokens_obj.get("cache_read_input_tokens") or 0)
-                + int(tokens_obj.get("cache_creation_input_tokens") or 0)
+                + int(tokens_obj.get("cache_read_input_tokens") or 0),
             )
-            step_in = max(0, in_tok + cache_tok)
+            cache_write_tok = max(
+                0,
+                int(cache_obj.get("write") or 0)
+                + int(tokens_obj.get("cache_creation_input_tokens") or 0),
+            )
+            # Discount repeated prompt cache reads (0.1x) so tool steps do not 10x inflate input_tokens,
+            # while tracking full cached_input_tokens and context window size separately.
+            billed_in = max(0, in_tok + cache_write_tok + (cache_read_tok // 10))
             step_out = max(0, out_tok)
-            if step_in > 0:
-                self.input_tokens += step_in
-            if step_out > 0:
-                self.output_tokens += step_out
-            step_ctx = step_in + step_out
-            if step_ctx > 0:
-                self.context_tokens = step_ctx
-                self.peak_context_tokens = max(self.peak_context_tokens, step_ctx)
-                self.turn_count += 1
+            step_ctx = max(0, in_tok + cache_write_tok + cache_read_tok) + step_out
+            if billed_in > 0 or step_out > 0 or step_ctx > 0:
+                self.record_stream_usage(
+                    billed_in,
+                    step_out,
+                    cached_input_tokens=cache_read_tok,
+                    context_tokens=step_ctx,
+                    cumulative=False,
+                )
 
         raw_cost = part.get("cost") if part.get("cost") is not None else ev.get("cost")
         if (
@@ -826,10 +1075,19 @@ class CodexAdapter(RuntimeAdapter):
             env.pop("OPENAI_BASE_URL", None)
             env.pop("OPENAI_API_KEY", None)
             if self.oauth_token and not (codex_dir / "auth.json").exists():
-                (codex_dir / "auth.json").write_text(
-                    json.dumps({"access_token": self.oauth_token}, indent=2),
+                auth_path = codex_dir / "auth.json"
+                auth_path.write_text(
+                    json.dumps(
+                        {
+                            "access_token": self.oauth_token,
+                            "tokens": {"access_token": self.oauth_token},
+                        },
+                        indent=2,
+                    ),
                     encoding="utf-8",
                 )
+                with contextlib.suppress(OSError):
+                    os.chmod(auth_path, 0o600)
             oauth_toml_lines: list[str] = []
             if self.model and self.model != "default":
                 clean_model = (
@@ -858,7 +1116,7 @@ class CodexAdapter(RuntimeAdapter):
                 'name = "GitSeed LiteLLM Proxy"',
                 f'base_url = {json.dumps(self.gateway_base_url)}',
                 'env_key = "OPENAI_API_KEY"',
-                'wire_api = "responses"',
+                'wire_api = "chat"',
                 "",
                 *mcp_lines,
             ]
@@ -910,9 +1168,7 @@ def _normalize_google_cli_model(raw_model: str | None) -> str:
         return ""
     if normalized in ("flash", "flash_lite", "gemini-3.8-flash", "gemini-3.5-flash"):
         return "gemini-2.5-flash"
-    if normalized in ("gemini-3.1-flash-lite",):
-        return "gemini-2.5-flash-lite"
-    if normalized in ("pro", "inherit", "gemini-4-argon", "gemini-4-carbon", "gemini-3.1-pro"):
+    if normalized in ("pro", "inherit", "gemini-4-argon", "gemini-4-carbon"):
         return "gemini-2.5-pro"
     return normalized
 
@@ -1496,24 +1752,31 @@ def _summarize_workspace_tree(
 
 def extract_json_object(raw_text: str) -> dict[str, Any] | None:
     cleaned = raw_text.strip()
-    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-    if fence_match:
+    if not cleaned:
+        return None
+    fence_blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+    for block in reversed(fence_blocks):
         try:
-            obj = json.loads(fence_match.group(1))
+            obj = json.loads(block)
             if isinstance(obj, dict):
                 return obj
         except Exception:
-            pass
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start != -1 and end != -1 and end > start:
+            continue
+
+    decoder = json.JSONDecoder()
+    last_dict: dict[str, Any] | None = None
+    idx = cleaned.find("{")
+    while idx != -1:
         try:
-            obj = json.loads(cleaned[start : end + 1])
+            obj, end_idx = decoder.raw_decode(cleaned, idx)
             if isinstance(obj, dict):
-                return obj
+                last_dict = obj
+                idx = cleaned.find("{", max(idx + 1, end_idx))
+                continue
         except Exception:
             pass
-    return None
+        idx = cleaned.find("{", idx + 1)
+    return last_dict
 
 
 def _apply_synthesized_files(
@@ -1535,8 +1798,14 @@ def _apply_synthesized_files(
         content = item.get("content")
         if not rel_path or not isinstance(content, str):
             continue
-        target = (working_dir / rel_path).resolve()
-        if not str(target).startswith(str(root_resolved)) or ".git" in target.parts:
+        raw_target = working_dir / rel_path
+        if raw_target.is_symlink():
+            continue
+        target = raw_target.resolve()
+        if not target.is_relative_to(root_resolved) or target == root_resolved:
+            continue
+        rel_parts = target.relative_to(root_resolved).parts
+        if any(part.lower() == ".git" for part in rel_parts):
             continue
         if (
             target.exists()
@@ -1758,89 +2027,37 @@ async def synthesize_output_via_gateway(
     if cli_stdout.strip():
         user_msg += f"\n\n## Prior Agent CLI Output\n```\n{cli_stdout[-3000:]}\n```"
 
-    headers = {
-        "Authorization": f"Bearer {adapter.gateway_api_key}",
-        "x-api-key": adapter.gateway_api_key,
-        "Content-Type": "application/json",
-    }
+    gateway_key = (adapter.gateway_api_key or "").strip()
+    gateway_url = (adapter.gateway_base_url or "").strip()
+    can_use_gateway = (
+        adapter.auth_mode != "cli_oauth" and bool(gateway_key) and bool(gateway_url)
+    )
 
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        # 1. Primary path: LiteLLM unified OpenAI-compatible /v1/chat/completions
-        chat_url = f"{adapter.gateway_base_url}/chat/completions"
-        logger.info(
-            "Synthesizing stage output via Model Gateway (model=%s, stage=%s)...",
-            adapter.gateway_model,
-            stage or "unknown",
-        )
-        chat_payload: dict[str, Any] = {
-            "model": adapter.gateway_model,
-            "messages": [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            "temperature": 0.2,
+    if can_use_gateway:
+        headers = {
+            "Authorization": f"Bearer {gateway_key}",
+            "x-api-key": gateway_key,
+            "Content-Type": "application/json",
         }
-        try:
-            resp = await client.post(chat_url, headers=headers, json=chat_payload)
-            if 200 <= resp.status_code < 300:
-                data = resp.json()
-                usage = data.get("usage") if isinstance(data, dict) else None
-                if isinstance(usage, dict):
-                    in_t = max(
-                        0,
-                        int(
-                            usage.get("prompt_tokens")
-                            or usage.get("input_tokens")
-                            or 0
-                        ),
-                    )
-                    out_t = max(
-                        0,
-                        int(
-                            usage.get("completion_tokens")
-                            or usage.get("output_tokens")
-                            or 0
-                        ),
-                    )
-                    adapter.input_tokens += in_t
-                    adapter.output_tokens += out_t
-                    if in_t + out_t > 0:
-                        adapter.context_tokens = in_t + out_t
-                        adapter.peak_context_tokens = max(adapter.peak_context_tokens, in_t + out_t)
-                        adapter.turn_count += 1
-                choices = data.get("choices") or []
-                if choices and isinstance(choices[0], dict):
-                    msg = choices[0].get("message") or {}
-                    text = str(msg.get("content") or "")
-                    parsed = extract_json_object(text)
-                    if parsed is not None:
-                        _apply_synthesized_files(adapter.working_dir, parsed)
-                        adapter.output_file.parent.mkdir(parents=True, exist_ok=True)
-                        adapter.output_file.write_text(
-                            json.dumps(parsed, indent=2), encoding="utf-8"
-                        )
-                        adapter.synthesized_via = "gateway"
-                        return True
-            else:
-                logger.warning(
-                    "LiteLLM /chat/completions synthesis returned %s: %s",
-                    resp.status_code,
-                    resp.text[:300],
-                )
-        except Exception as exc:
-            logger.warning("LiteLLM /chat/completions synthesis error: %s", exc)
 
-        # 2. Secondary fallback for direct Anthropic /v1/messages pass-through
-        if adapter.provider == "anthropic":
-            msg_url = f"{adapter.gateway_anthropic_url}/v1/messages"
-            msg_payload: dict[str, Any] = {
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            # 1. Primary path: LiteLLM unified OpenAI-compatible /v1/chat/completions
+            chat_url = f"{gateway_url}/chat/completions"
+            logger.info(
+                "Synthesizing stage output via Model Gateway (model=%s, stage=%s)...",
+                adapter.gateway_model,
+                stage or "unknown",
+            )
+            chat_payload: dict[str, Any] = {
                 "model": adapter.gateway_model,
-                "max_tokens": 4096,
-                "system": system_msg,
-                "messages": [{"role": "user", "content": user_msg}],
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                "temperature": 0.2,
             }
             try:
-                resp = await client.post(msg_url, headers=headers, json=msg_payload)
+                resp = await client.post(chat_url, headers=headers, json=chat_payload)
                 if 200 <= resp.status_code < 300:
                     data = resp.json()
                     usage = data.get("usage") if isinstance(data, dict) else None
@@ -1848,49 +2065,102 @@ async def synthesize_output_via_gateway(
                         in_t = max(
                             0,
                             int(
-                                usage.get("input_tokens")
-                                or usage.get("prompt_tokens")
+                                usage.get("prompt_tokens")
+                                or usage.get("input_tokens")
                                 or 0
                             ),
                         )
                         out_t = max(
                             0,
                             int(
-                                usage.get("output_tokens")
-                                or usage.get("completion_tokens")
+                                usage.get("completion_tokens")
+                                or usage.get("output_tokens")
                                 or 0
                             ),
                         )
-                        adapter.input_tokens += in_t
-                        adapter.output_tokens += out_t
-                        if in_t + out_t > 0:
-                            adapter.context_tokens = in_t + out_t
-                            adapter.peak_context_tokens = max(adapter.peak_context_tokens, in_t + out_t)
-                            adapter.turn_count += 1
-                    content_blocks = data.get("content") or []
-                    text_parts = [
-                        b.get("text", "")
-                        for b in content_blocks
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    ]
-                    parsed = extract_json_object("\n".join(text_parts))
-                    if parsed is not None:
-                        _apply_synthesized_files(adapter.working_dir, parsed)
-                        adapter.output_file.parent.mkdir(parents=True, exist_ok=True)
-                        adapter.output_file.write_text(
-                            json.dumps(parsed, indent=2), encoding="utf-8"
-                        )
-                        adapter.synthesized_via = "gateway"
-                        return True
+                        adapter.finish_invocation()
+                        adapter.record_stream_usage(in_t, out_t, cumulative=False)
+                        adapter.finish_invocation()
+                    choices = data.get("choices") or []
+                    if choices and isinstance(choices[0], dict):
+                        msg = choices[0].get("message") or {}
+                        text = str(msg.get("content") or "")
+                        parsed = extract_json_object(text)
+                        if parsed is not None:
+                            _apply_synthesized_files(adapter.working_dir, parsed)
+                            adapter.output_file.parent.mkdir(parents=True, exist_ok=True)
+                            adapter.output_file.write_text(
+                                json.dumps(parsed, indent=2), encoding="utf-8"
+                            )
+                            adapter.synthesized_via = "gateway"
+                            return True
+                else:
+                    logger.warning(
+                        "LiteLLM /chat/completions synthesis returned %s: %s",
+                        resp.status_code,
+                        resp.text[:300],
+                    )
             except Exception as exc:
-                logger.warning("LiteLLM /v1/messages synthesis error: %s", exc)
+                logger.warning("LiteLLM /chat/completions synthesis error: %s", exc)
 
-    # 3. Fallback for CLI OAuth runs where the CLI produced stdout prose instead of writing output.json
+            # 2. Secondary fallback for direct Anthropic /v1/messages pass-through
+            if adapter.provider == "anthropic":
+                msg_url = f"{adapter.gateway_anthropic_url}/v1/messages"
+                msg_payload: dict[str, Any] = {
+                    "model": adapter.gateway_model,
+                    "max_tokens": 4096,
+                    "system": system_msg,
+                    "messages": [{"role": "user", "content": user_msg}],
+                }
+                try:
+                    resp = await client.post(msg_url, headers=headers, json=msg_payload)
+                    if 200 <= resp.status_code < 300:
+                        data = resp.json()
+                        usage = data.get("usage") if isinstance(data, dict) else None
+                        if isinstance(usage, dict):
+                            in_t = max(
+                                0,
+                                int(
+                                    usage.get("input_tokens")
+                                    or usage.get("prompt_tokens")
+                                    or 0
+                                ),
+                            )
+                            out_t = max(
+                                0,
+                                int(
+                                    usage.get("output_tokens")
+                                    or usage.get("completion_tokens")
+                                    or 0
+                                ),
+                            )
+                            adapter.finish_invocation()
+                            adapter.record_stream_usage(in_t, out_t, cumulative=False)
+                            adapter.finish_invocation()
+                        content_blocks = data.get("content") or []
+                        text_parts = [
+                            b.get("text", "")
+                            for b in content_blocks
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        parsed = extract_json_object("\n".join(text_parts))
+                        if parsed is not None:
+                            _apply_synthesized_files(adapter.working_dir, parsed)
+                            adapter.output_file.parent.mkdir(parents=True, exist_ok=True)
+                            adapter.output_file.write_text(
+                                json.dumps(parsed, indent=2), encoding="utf-8"
+                            )
+                            adapter.synthesized_via = "gateway"
+                            return True
+                except Exception as exc:
+                    logger.warning("LiteLLM /v1/messages synthesis error: %s", exc)
+
+    # 3. Local fallback when CLI OAuth is active or no gateway API key is configured
     cleaned_stdout = cli_stdout.strip()
     # Never turn an agent *error* (quota, auth, rate limit…) into stage output
     if detect_fatal_agent_error(cleaned_stdout):
         return False
-    if adapter.auth_mode == "cli_oauth" and cleaned_stdout and not require_files:
+    if (adapter.auth_mode == "cli_oauth" or not gateway_key) and cleaned_stdout and not require_files:
         embedded_json = extract_json_object(cleaned_stdout)
         if embedded_json is not None:
             adapter.output_file.parent.mkdir(parents=True, exist_ok=True)

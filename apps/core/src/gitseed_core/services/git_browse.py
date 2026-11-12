@@ -857,10 +857,12 @@ def _build_authenticated_git_url(
     return urlunsplit((parts.scheme, auth_netloc, parts.path, "", ""))
 
 
-from gitseed_core.services.git_changes import (  # noqa: E402, F401
-    get_seed_changes,
-    merge_seed_branch_into_default,
-)
+def __getattr__(name: str) -> Any:
+    if name in ("get_seed_changes", "merge_seed_branch_into_default"):
+        from gitseed_core.services import git_changes
+
+        return getattr(git_changes, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 

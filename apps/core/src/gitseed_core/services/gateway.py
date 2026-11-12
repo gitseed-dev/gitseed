@@ -36,6 +36,7 @@ from sqlmodel import col, select
 
 from gitseed_core.config import settings
 from gitseed_core.models.agent import AgentBackend
+from gitseed_core.models.agent_session import AgentSession
 from gitseed_core.models.backend import Backend
 from gitseed_core.models.project import Project, ProjectBackend
 from gitseed_core.models.run import Run
@@ -1031,12 +1032,27 @@ async def _compute_remaining_budget(
     if project.monthly_budget is not None:
         now = datetime.now(UTC)
         month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
-        monthly_spent_raw = await session.scalar(
+        run_month_subq = (
             select(func.coalesce(func.sum(col(Run.cost)), Decimal("0")))
             .join(Seed, col(Run.seed_id) == col(Seed.id))
             .where(
                 Seed.project_id == project.id,
                 col(Run.created_at) >= month_start,
+            )
+            .scalar_subquery()
+        )
+        sess_month_subq = (
+            select(func.coalesce(func.sum(col(AgentSession.total_cost)), Decimal("0")))
+            .where(
+                AgentSession.project_id == project.id,
+                col(AgentSession.created_at) >= month_start,
+            )
+            .scalar_subquery()
+        )
+        monthly_spent_raw = await session.scalar(
+            select(
+                func.coalesce(run_month_subq, Decimal("0"))
+                + func.coalesce(sess_month_subq, Decimal("0"))
             )
         )
         monthly_spent = Decimal(str(monthly_spent_raw or 0))
@@ -1215,6 +1231,19 @@ async def create_run_virtual_key(
                 returned_key = resp.json().get("key")
                 if isinstance(returned_key, str) and returned_key.strip():
                     return returned_key.strip()
+            upd = await client.post(
+                f"{base_url}/key/update",
+                headers=_litellm_headers(),
+                json={k: v for k, v in payload.items() if k != "key_alias"},
+            )
+            if not 200 <= upd.status_code < 300:
+                logger.warning(
+                    "LiteLLM run key mint failed for %s (generate HTTP %s, update HTTP %s): %s",
+                    run.id,
+                    resp.status_code,
+                    upd.status_code,
+                    upd.text[:200],
+                )
     except Exception as exc:
         logger.debug("LiteLLM /key/generate fallback for run %s: %s", run.id, exc)
 
@@ -1231,26 +1260,94 @@ def derive_session_virtual_key(session_id: str) -> str:
     return f"sk-gss-{session_id}-{digest}"
 
 
+async def compute_project_remaining_monthly_budget(
+    session: AsyncSession | None,
+    project: Project | Any | None,
+) -> Decimal | None:
+    """Compute clamped remaining current-month project budget (`max(0, monthly_budget - spent)`), or None."""
+    if project is None or getattr(project, "monthly_budget", None) is None:
+        return None
+    month_cap = Decimal(str(project.monthly_budget))
+    if session is None:
+        return max(Decimal("0"), month_cap)
+    scalar_fn = getattr(session, "scalar", None)
+    if not callable(scalar_fn):
+        return max(Decimal("0"), month_cap)
+    now = datetime.now(UTC)
+    month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    run_month_subq = (
+        select(func.coalesce(func.sum(col(Run.cost)), Decimal("0")))
+        .join(Seed, col(Run.seed_id) == col(Seed.id))
+        .where(
+            Seed.project_id == project.id,
+            col(Run.created_at) >= month_start,
+        )
+        .scalar_subquery()
+    )
+    sess_month_subq = (
+        select(func.coalesce(func.sum(col(AgentSession.total_cost)), Decimal("0")))
+        .where(
+            AgentSession.project_id == project.id,
+            col(AgentSession.created_at) >= month_start,
+        )
+        .scalar_subquery()
+    )
+    raw_res = scalar_fn(
+        select(
+            func.coalesce(run_month_subq, Decimal("0"))
+            + func.coalesce(sess_month_subq, Decimal("0"))
+        )
+    )
+    monthly_spent_raw = await raw_res if inspect.iscoroutine(raw_res) else raw_res
+    if isinstance(monthly_spent_raw, (int, float, Decimal)):
+        monthly_spent = Decimal(str(monthly_spent_raw))
+    elif isinstance(monthly_spent_raw, str):
+        try:
+            monthly_spent = Decimal(monthly_spent_raw)
+        except Exception:
+            monthly_spent = Decimal("0")
+    else:
+        monthly_spent = Decimal("0")
+    return max(Decimal("0"), month_cap - monthly_spent)
+
+
 def _resolve_session_seed_max_budget(
     seed: Any | None = None,
     max_budget: Decimal | float | None = None,
+    *,
+    project: Project | Any | None = None,
+    org: OrgSettings | Any | None = None,
+    remaining_project_budget: Decimal | float | None = None,
 ) -> float | None:
-    """Compute remaining seed budget (`seed.budget_cap`/`seed.budget` - `seed.spent`) when > 0."""
+    """Compute remaining session budget from explicit `max_budget`, seed cap, project cap, or org default."""
     if max_budget is not None:
         return float(max(Decimal("0"), Decimal(str(max_budget))))
-    if seed is None:
-        return None
-    raw_budget = getattr(seed, "budget_cap", None)
-    if raw_budget is None:
-        raw_budget = getattr(seed, "budget", None)
-    if raw_budget is None:
-        return None
-    budget_dec = Decimal(str(raw_budget))
-    if budget_dec <= Decimal("0"):
-        return None
-    spent_dec = Decimal(str(getattr(seed, "spent", None) or 0))
-    remaining = max(Decimal("0"), budget_dec - spent_dec)
-    return float(remaining)
+    candidates: list[Decimal] = []
+    if seed is not None:
+        raw_budget = getattr(seed, "budget_cap", None)
+        if raw_budget is None:
+            raw_budget = getattr(seed, "budget", None)
+        if raw_budget is not None:
+            budget_dec = Decimal(str(raw_budget))
+            if budget_dec > Decimal("0"):
+                spent_dec = Decimal(str(getattr(seed, "spent", None) or 0))
+                candidates.append(max(Decimal("0"), budget_dec - spent_dec))
+    if not candidates and project is not None and getattr(project, "seed_budget_cap", None) is not None:
+        proj_cap = Decimal(str(project.seed_budget_cap))
+        if proj_cap > Decimal("0"):
+            spent_dec = Decimal(str(getattr(seed, "spent", None) or 0)) if seed is not None else Decimal("0")
+            candidates.append(max(Decimal("0"), proj_cap - spent_dec))
+    if not candidates and org is not None and getattr(org, "default_seed_budget_cap", None) is not None:
+        org_cap = Decimal(str(org.default_seed_budget_cap))
+        if org_cap > Decimal("0"):
+            spent_dec = Decimal(str(getattr(seed, "spent", None) or 0)) if seed is not None else Decimal("0")
+            candidates.append(max(Decimal("0"), org_cap - spent_dec))
+    if remaining_project_budget is not None:
+        candidates.append(max(Decimal("0"), Decimal(str(remaining_project_budget))))
+    elif project is not None and getattr(project, "monthly_budget", None) is not None:
+        month_cap = Decimal(str(project.monthly_budget))
+        candidates.append(max(Decimal("0"), month_cap))
+    return float(min(candidates)) if candidates else None
 
 
 async def create_session_virtual_key(
@@ -1263,16 +1360,35 @@ async def create_session_virtual_key(
     ttl_seconds: int,
     seed: Seed | Any | None = None,
     max_budget: Decimal | float | None = None,
+    project: Project | Any | None = None,
+    org: OrgSettings | Any | None = None,
+    remaining_project_budget: Decimal | float | None = None,
+    session: AsyncSession | None = None,
 ) -> str:
     """Mint (or refresh) a LiteLLM virtual key scoped to one interactive agent session.
 
     The provider's real API key never enters the container; the CLI talks to the LiteLLM
     gateway with this key instead, exactly like seed runs do with their per-run keys.
     """
+    if (
+        remaining_project_budget is None
+        and session is not None
+        and project is not None
+        and getattr(project, "monthly_budget", None) is not None
+    ):
+        remaining_project_budget = await compute_project_remaining_monthly_budget(
+            session, project
+        )
     models = [m for m in dict.fromkeys([model, *extract_enabled_model_ids(backend)]) if m]
     await sync_backend_to_litellm(backend, extra_models=[model] if model else None)
     key = derive_session_virtual_key(session_id)
-    resolved_max_budget = _resolve_session_seed_max_budget(seed=seed, max_budget=max_budget)
+    resolved_max_budget = _resolve_session_seed_max_budget(
+        seed=seed,
+        max_budget=max_budget,
+        project=project,
+        org=org,
+        remaining_project_budget=remaining_project_budget,
+    )
     metadata: dict[str, Any] = {
         "agent_session_id": session_id,
         "project_id": project_id,
@@ -1328,6 +1444,10 @@ async def provision_session_gateway_access(
     ttl_seconds: int = 15000,
     seed: Seed | Any | None = None,
     max_budget: Decimal | float | None = None,
+    project: Project | Any | None = None,
+    org: OrgSettings | Any | None = None,
+    remaining_project_budget: Decimal | float | None = None,
+    session: AsyncSession | None = None,
 ) -> str:
     """Mint a LiteLLM session virtual key enforcing any attached Seed budget cap."""
     return await create_session_virtual_key(
@@ -1339,6 +1459,10 @@ async def provision_session_gateway_access(
         ttl_seconds=ttl_seconds,
         seed=seed,
         max_budget=max_budget,
+        project=project,
+        org=org,
+        remaining_project_budget=remaining_project_budget,
+        session=session,
     )
 
 

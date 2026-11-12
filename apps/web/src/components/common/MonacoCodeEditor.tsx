@@ -60,14 +60,25 @@ function useIsPhoneScreen(): boolean {
   return isPhone
 }
 
-interface SimpleDiffLine {
+export interface SimpleDiffLine {
   type: 'equal' | 'add' | 'del'
   oldLine: number | null
   newLine: number | null
   text: string
 }
 
-function computeSimpleDiff(oldText: string, newText: string): SimpleDiffLine[] {
+const MAX_SIMPLE_DIFF_LINES = 2000
+const MAX_MYERS_EDIT_DISTANCE = 1200
+
+/**
+ * Computes a line-level diff using common prefix/suffix trimming plus bounded
+ * Myers LCS/SES alignment, falling back to linear delete+insert blocks for
+ * huge (>2,000 changed-line) diffs so UI rendering always stays responsive.
+ */
+export function computeSimpleDiff(
+  oldText: string,
+  newText: string
+): SimpleDiffLine[] {
   const oldLines = oldText ? oldText.split('\n') : []
   const newLines = newText ? newText.split('\n') : []
   if (oldText === newText) {
@@ -78,40 +89,190 @@ function computeSimpleDiff(oldText: string, newText: string): SimpleDiffLine[] {
       text,
     }))
   }
+
+  let prefixLen = 0
+  while (
+    prefixLen < oldLines.length &&
+    prefixLen < newLines.length &&
+    oldLines[prefixLen] === newLines[prefixLen]
+  ) {
+    prefixLen++
+  }
+
+  let suffixLen = 0
+  while (
+    suffixLen < oldLines.length - prefixLen &&
+    suffixLen < newLines.length - prefixLen &&
+    oldLines[oldLines.length - 1 - suffixLen] ===
+      newLines[newLines.length - 1 - suffixLen]
+  ) {
+    suffixLen++
+  }
+
   const result: SimpleDiffLine[] = []
-  let i = 0
-  let j = 0
-  while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+  for (let i = 0; i < prefixLen; i++) {
+    result.push({
+      type: 'equal',
+      oldLine: i + 1,
+      newLine: i + 1,
+      text: oldLines[i],
+    })
+  }
+
+  const midOld = oldLines.slice(prefixLen, oldLines.length - suffixLen)
+  const midNew = newLines.slice(prefixLen, newLines.length - suffixLen)
+  const m = midOld.length
+  const n = midNew.length
+
+  const appendBlockFallback = () => {
+    for (let i = 0; i < m; i++) {
       result.push({
-        type: 'equal',
-        oldLine: i + 1,
-        newLine: j + 1,
-        text: oldLines[i],
+        type: 'del',
+        oldLine: prefixLen + i + 1,
+        newLine: null,
+        text: midOld[i],
       })
-      i++
-      j++
-    } else {
-      if (i < oldLines.length) {
-        result.push({
-          type: 'del',
-          oldLine: i + 1,
-          newLine: null,
-          text: oldLines[i],
-        })
-        i++
+    }
+    for (let j = 0; j < n; j++) {
+      result.push({
+        type: 'add',
+        oldLine: null,
+        newLine: prefixLen + j + 1,
+        text: midNew[j],
+      })
+    }
+  }
+
+  if (m === 0) {
+    for (let j = 0; j < n; j++) {
+      result.push({
+        type: 'add',
+        oldLine: null,
+        newLine: prefixLen + j + 1,
+        text: midNew[j],
+      })
+    }
+  } else if (n === 0) {
+    for (let i = 0; i < m; i++) {
+      result.push({
+        type: 'del',
+        oldLine: prefixLen + i + 1,
+        newLine: null,
+        text: midOld[i],
+      })
+    }
+  } else if (m > MAX_SIMPLE_DIFF_LINES || n > MAX_SIMPLE_DIFF_LINES) {
+    appendBlockFallback()
+  } else {
+    const max = m + n
+    const maxD = Math.min(max, MAX_MYERS_EDIT_DISTANCE)
+    const offset = max + 1
+    const v = new Int32Array(2 * max + 3)
+    const trace: Int32Array[] = []
+    let foundD = -1
+
+    for (let d = 0; d <= maxD; d++) {
+      trace.push(v.slice())
+      for (let k = -d; k <= d; k += 2) {
+        let x: number
+        if (k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1])) {
+          x = v[offset + k + 1]
+        } else {
+          x = v[offset + k - 1] + 1
+        }
+        let y = x - k
+        while (x < m && y < n && midOld[x] === midNew[y]) {
+          x++
+          y++
+        }
+        v[offset + k] = x
+        if (x >= m && y >= n) {
+          foundD = d
+          break
+        }
       }
-      if (j < newLines.length) {
-        result.push({
-          type: 'add',
-          oldLine: null,
-          newLine: j + 1,
-          text: newLines[j],
+      if (foundD !== -1) break
+    }
+
+    if (foundD === -1) {
+      appendBlockFallback()
+    } else {
+      const midOps: SimpleDiffLine[] = []
+      let x = m
+      let y = n
+      for (let d = foundD; d > 0; d--) {
+        const prevV = trace[d]
+        const k = x - y
+        let prevK: number
+        if (
+          k === -d ||
+          (k !== d && prevV[offset + k - 1] < prevV[offset + k + 1])
+        ) {
+          prevK = k + 1
+        } else {
+          prevK = k - 1
+        }
+        const prevX = prevV[offset + prevK]
+        const prevY = prevX - prevK
+
+        while (x > prevX && y > prevY) {
+          x--
+          y--
+          midOps.push({
+            type: 'equal',
+            oldLine: prefixLen + x + 1,
+            newLine: prefixLen + y + 1,
+            text: midOld[x],
+          })
+        }
+
+        if (x === prevX) {
+          y--
+          midOps.push({
+            type: 'add',
+            oldLine: null,
+            newLine: prefixLen + y + 1,
+            text: midNew[y],
+          })
+        } else {
+          x--
+          midOps.push({
+            type: 'del',
+            oldLine: prefixLen + x + 1,
+            newLine: null,
+            text: midOld[x],
+          })
+        }
+      }
+
+      while (x > 0 && y > 0) {
+        x--
+        y--
+        midOps.push({
+          type: 'equal',
+          oldLine: prefixLen + x + 1,
+          newLine: prefixLen + y + 1,
+          text: midOld[x],
         })
-        j++
+      }
+
+      for (let idx = midOps.length - 1; idx >= 0; idx--) {
+        result.push(midOps[idx])
       }
     }
   }
+
+  const oldSuffixStart = oldLines.length - suffixLen
+  const newSuffixStart = newLines.length - suffixLen
+  for (let i = 0; i < suffixLen; i++) {
+    result.push({
+      type: 'equal',
+      oldLine: oldSuffixStart + i + 1,
+      newLine: newSuffixStart + i + 1,
+      text: oldLines[oldSuffixStart + i],
+    })
+  }
+
   return result
 }
 
@@ -445,25 +606,46 @@ const FallbackCodeSurface: React.FC<FallbackCodeSurfaceProps> = ({
                     : line.type === 'del'
                       ? '-'
                       : ' '
-                const selectableLine = Number(mappedNew || mappedOld)
+                const oldSelectable = Number(mappedOld)
+                const newSelectable = Number(mappedNew)
+                const canClickOld =
+                  Boolean(onLineSelect) &&
+                  !isHunkSep &&
+                  Number.isInteger(oldSelectable) &&
+                  oldSelectable > 0
+                const canClickNew =
+                  Boolean(onLineSelect) &&
+                  !isHunkSep &&
+                  Number.isInteger(newSelectable) &&
+                  newSelectable > 0
                 return (
-                  <tr
-                    key={idx}
-                    onClick={() => {
-                      if (
-                        onLineSelect &&
-                        Number.isInteger(selectableLine) &&
-                        selectableLine > 0
-                      ) {
-                        onLineSelect(selectableLine)
+                  <tr key={idx} className={rowBg}>
+                    <td
+                      onClick={
+                        canClickOld
+                          ? () => onLineSelect?.(oldSelectable, 'original')
+                          : undefined
                       }
-                    }}
-                    className={`${rowBg} ${onLineSelect && !isHunkSep ? 'cursor-pointer hover:brightness-95' : ''}`}
-                  >
-                    <td className="w-9 px-1.5 text-right select-none text-[10px] text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70">
+                      className={`w-9 px-1.5 text-right select-none text-[10px] text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70 ${
+                        canClickOld
+                          ? 'cursor-pointer hover:text-teal-600 dark:hover:text-teal-400'
+                          : ''
+                      }`}
+                    >
                       {mappedOld}
                     </td>
-                    <td className="w-9 px-1.5 text-right select-none text-[10px] text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70">
+                    <td
+                      onClick={
+                        canClickNew
+                          ? () => onLineSelect?.(newSelectable, 'modified')
+                          : undefined
+                      }
+                      className={`w-9 px-1.5 text-right select-none text-[10px] text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70 ${
+                        canClickNew
+                          ? 'cursor-pointer hover:text-teal-600 dark:hover:text-teal-400'
+                          : ''
+                      }`}
+                    >
                       {mappedNew}
                     </td>
                     <td className="w-5 text-center select-none font-bold opacity-75">

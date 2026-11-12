@@ -20,6 +20,10 @@ spec:
         {{- include "gitseed.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: litellm
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -29,6 +33,10 @@ spec:
           image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           args: ["--port", {{ .Values.litellm.port | quote }}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - name: http
               containerPort: {{ .Values.litellm.port }}

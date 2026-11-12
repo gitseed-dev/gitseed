@@ -31,9 +31,10 @@ from gitseed_core.services.backends import (
     get_backend,
     maybe_auto_provision_sdlc_agents,
 )
-from gitseed_core.services.errors import Invalid
+from gitseed_core.services.errors import Forbidden, Invalid
 from gitseed_core.services.scheduler import (
     _docker_client_for_backend,
+    _ensure_docker_network,
     fetch_docker_container_logs,
     inspect_docker_container_state,
     stop_and_remove_docker_container,
@@ -675,6 +676,11 @@ async def _persist_authenticated_bundle(
     now = datetime.now(UTC)
 
     cfg = dict(backend.config or {})
+    if not getattr(settings, "GITSEED_ALLOW_PERSONAL_CLI_OAUTH", True):
+        raise Forbidden(
+            "Personal Mode (subscription CLI OAuth) is disabled on this instance "
+            "(GITSEED_ALLOW_PERSONAL_CLI_OAUTH=false)."
+        )
     if cfg.get("personal_mode_acknowledged") is False:
         raise Invalid(
             "Personal Mode (subscription CLI OAuth) requires explicit acknowledgement "
@@ -736,6 +742,11 @@ async def start_cli_auth_session(
         raise Invalid("CLI OAuth login is only supported for Inference backends")
 
     cfg = dict(backend.config or {})
+    if not getattr(settings, "GITSEED_ALLOW_PERSONAL_CLI_OAUTH", True):
+        raise Forbidden(
+            "Personal Mode (subscription CLI OAuth) is disabled on this instance "
+            "(GITSEED_ALLOW_PERSONAL_CLI_OAUTH=false)."
+        )
     if cfg.get("personal_mode_acknowledged") is False:
         raise Invalid(
             "Personal Mode (subscription CLI OAuth) requires explicit acknowledgement "
@@ -748,6 +759,11 @@ async def start_cli_auth_session(
     backend.config = cfg
 
     compute_backend = await _select_docker_compute_backend(session)
+    if compute_backend.provider.lower() != "docker":
+        raise Invalid(
+            "Interactive CLI OAuth helper containers require a Docker compute backend. "
+            "On Kubernetes clusters, run CLI login locally and paste the resulting JSON credential bundle or OAuth token."
+        )
     container_name = _container_name_for_backend(backend.id)
 
     # Clean up any prior auth container for this backend
@@ -756,30 +772,56 @@ async def start_cli_auth_session(
     provider = backend.provider.lower()
     pty_script = _build_pty_auth_script(provider)
 
+    env_list = [
+        "HOME=/home/runner",
+        "TERM=xterm-256color",
+        "BROWSER=echo",
+        "NO_BROWSER=true",
+    ]
+    host_config: dict[str, Any] = {
+        "AutoRemove": False,
+        "Privileged": False,
+        "CapDrop": ["ALL"],
+        "SecurityOpt": ["no-new-privileges:true"],
+        "PidsLimit": 256,
+        "Memory": 1024 * 1024 * 1024,
+    }
+    proxy_url = str(getattr(settings, "RUNNER_EGRESS_PROXY_URL", "") or "").strip()
+    network_name = str(getattr(settings, "RUNNER_DOCKER_NETWORK", "") or "").strip()
+    if proxy_url:
+        env_list.extend(
+            [
+                f"HTTPS_PROXY={proxy_url}",
+                f"HTTP_PROXY={proxy_url}",
+                f"https_proxy={proxy_url}",
+                f"http_proxy={proxy_url}",
+                "NO_PROXY=localhost,127.0.0.1",
+                "no_proxy=localhost,127.0.0.1",
+            ]
+        )
+        if network_name:
+            host_config["NetworkMode"] = network_name
+
     client, base_url = _docker_client_for_backend(compute_backend)
     create_payload: dict[str, Any] = {
         "Image": settings.RUNNER_IMAGE,
         "Entrypoint": ["/app/.venv/bin/python", "-u", "-c", pty_script],
         "Cmd": [],
         "WorkingDir": "/home/runner",
-        "Env": [
-            "HOME=/home/runner",
-            "TERM=xterm-256color",
-            "BROWSER=echo",
-            "NO_BROWSER=true",
-        ],
+        "Env": env_list,
         "Labels": {
+            "app.gitseed.managed": "true",
             "gitseed.managed": "true",
             "gitseed.kind": "cli-auth",
             "gitseed.backend_id": backend.id,
             "gitseed.provider": provider,
         },
-        "HostConfig": {
-            "AutoRemove": False,
-        },
+        "HostConfig": host_config,
     }
 
     async with client:
+        if proxy_url and network_name:
+            await _ensure_docker_network(client, base_url, network_name)
         create_resp = await client.post(
             f"{base_url}/containers/create",
             params={"name": container_name},
@@ -847,7 +889,11 @@ async def get_cli_auth_status(
     container_name = _container_name_for_backend(backend.id)
     provider = backend.provider.lower()
 
-    state = await inspect_docker_container_state(compute_backend, container_name)
+    state = (
+        await inspect_docker_container_state(compute_backend, container_name)
+        if compute_backend.provider.lower() == "docker"
+        else None
+    )
     if not state or not state.get("exists"):
         secrets_map = decrypt_secrets(backend.secrets_encrypted)
         is_authed = bool(
@@ -939,9 +985,10 @@ async def submit_cli_auth_code(
                     session, admin, backend, bundle=bundle
                 )
                 compute_backend = await _select_docker_compute_backend(session)
-                await stop_and_remove_docker_container(
-                    compute_backend, _container_name_for_backend(backend.id)
-                )
+                if compute_backend.provider.lower() == "docker":
+                    await stop_and_remove_docker_container(
+                        compute_backend, _container_name_for_backend(backend.id)
+                    )
                 return {
                     "status": "authenticated",
                     "auth_url": None,
@@ -960,9 +1007,10 @@ async def submit_cli_auth_code(
             session, admin, backend, oauth_token=trimmed
         )
         compute_backend = await _select_docker_compute_backend(session)
-        await stop_and_remove_docker_container(
-            compute_backend, _container_name_for_backend(backend.id)
-        )
+        if compute_backend.provider.lower() == "docker":
+            await stop_and_remove_docker_container(
+                compute_backend, _container_name_for_backend(backend.id)
+            )
         return {
             "status": "authenticated",
             "auth_url": None,
@@ -975,7 +1023,11 @@ async def submit_cli_auth_code(
 
     compute_backend = await _select_docker_compute_backend(session)
     container_name = _container_name_for_backend(backend.id)
-    state = await inspect_docker_container_state(compute_backend, container_name)
+    state = (
+        await inspect_docker_container_state(compute_backend, container_name)
+        if compute_backend.provider.lower() == "docker"
+        else None
+    )
     if not state or not state.get("running", False):
         raise Invalid("CLI login session is not running. Click 'Launch CLI Sign-In' to start a new session.")
 
@@ -1040,7 +1092,8 @@ async def cancel_cli_auth_session(
     backend = await get_backend(session, backend_id)
     compute_backend = await _select_docker_compute_backend(session)
     container_name = _container_name_for_backend(backend.id)
-    await stop_and_remove_docker_container(compute_backend, container_name)
+    if compute_backend.provider.lower() == "docker":
+        await stop_and_remove_docker_container(compute_backend, container_name)
     secrets_map = decrypt_secrets(backend.secrets_encrypted)
     is_authed = bool(
         secrets_map.get("cli_auth_bundle") or secrets_map.get("oauth_token")

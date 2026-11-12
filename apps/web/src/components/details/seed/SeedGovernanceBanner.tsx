@@ -34,6 +34,7 @@ import {
   getSeedAttentionReason,
   resolveRunContextWindow,
 } from '../../../utils/format'
+import { safeExternalUrl } from '../../../utils/gitUrls'
 import { STAGE_LABELS } from '../../../utils/seeds'
 import type {
   Approval,
@@ -496,17 +497,19 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
   }
 
   const resolvedPrUrl = (() => {
-    if (
-      pullRequestStatus?.pull_request_url &&
-      pullRequestStatus.pull_request_url.trim()
-    ) {
-      return pullRequestStatus.pull_request_url.trim()
+    const statusUrl = safeExternalUrl(pullRequestStatus?.pull_request_url)
+    if (statusUrl) {
+      return statusUrl
     }
-    if (pullRequestUrl && pullRequestUrl.trim()) return pullRequestUrl.trim()
+    const directUrl = safeExternalUrl(pullRequestUrl)
+    if (directUrl) return directUrl
     for (const r of runs) {
       const out = (r.output || {}) as Record<string, unknown>
-      if (typeof out.pull_request_url === 'string' && out.pull_request_url.trim()) {
-        return out.pull_request_url.trim()
+      const runPrUrl = safeExternalUrl(
+        typeof out.pull_request_url === 'string' ? out.pull_request_url : null
+      )
+      if (runPrUrl) {
+        return runPrUrl
       }
     }
     return null

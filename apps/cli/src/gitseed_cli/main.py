@@ -61,13 +61,41 @@ _BOOLEAN_FLAGS = {
 }
 
 
+def _is_logs_command(args: list[str]) -> bool:
+    """Return True only when the command tokens resolve to `logs` or `sandbox logs`."""
+    cmd_tokens: list[str] = []
+    value_flags = _GLOBAL_VALUE_FLAGS | {"-f", "--file", "--format"}
+    j = 0
+    while j < len(args) and len(cmd_tokens) < 2:
+        tok = args[j]
+        if tok == "--":
+            break
+        if tok.startswith("-") and "=" in tok:
+            j += 1
+            continue
+        if tok in value_flags:
+            j += 2
+            continue
+        if tok.startswith("-"):
+            j += 1 if tok in _BOOLEAN_FLAGS else 2
+            continue
+        cmd_tokens.append(tok)
+        if len(cmd_tokens) == 1:
+            if cmd_tokens[0] == "logs":
+                return True
+            if cmd_tokens[0] != "sandbox":
+                return False
+        j += 1
+    return tuple(cmd_tokens[:2]) == ("sandbox", "logs")
+
+
 class GlobalOptionsGroup(TyperGroup):
     """Allow kubectl-style global flags (-p, -o, --context, --api-url, --token) anywhere in argv."""
 
     def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
         hoisted: list[str] = []
         rest: list[str] = []
-        is_logs_cmd = any(a == "logs" for a in args if not a.startswith("-"))
+        is_logs_cmd = _is_logs_command(args)
         i = 0
         while i < len(args):
             arg = args[i]

@@ -39,7 +39,7 @@ import {
   resolveRunContextWindow,
   stripAnsi,
 } from '../../../utils/format'
-import { buildRepoWebUrl } from '../../../utils/gitUrls'
+import { buildRepoWebUrl, safeExternalUrl } from '../../../utils/gitUrls'
 import {
   parseRunLogStream,
   type ParsedRunLogEntry,
@@ -420,10 +420,27 @@ export const SeedRunsTab: React.FC<SeedRunsTabProps> = ({
                 : typeof out.merge_commit_sha === 'string'
                   ? out.merge_commit_sha.trim()
                   : ''
-            const prUrl =
+            const prUrl = safeExternalUrl(
               typeof out.pull_request_url === 'string'
-                ? out.pull_request_url.trim()
-                : ''
+                ? out.pull_request_url
+                : null
+            )
+            const safeBranchRepoUrl =
+              branchName && primaryRepo
+                ? safeExternalUrl(
+                    buildRepoWebUrl(primaryRepo, primaryGitBackend, {
+                      ref: branchName,
+                    })
+                  )
+                : null
+            const safeCommitRepoUrl =
+              commitSha && primaryRepo
+                ? safeExternalUrl(
+                    buildRepoWebUrl(primaryRepo, primaryGitBackend, {
+                      commitSha,
+                    })
+                  )
+                : null
             const reviewApproved =
               typeof out.approved === 'boolean' ? out.approved : null
             const isLogsOpen = isRunLogsOpen(run, Boolean(logTail))
@@ -480,21 +497,17 @@ export const SeedRunsTab: React.FC<SeedRunsTabProps> = ({
                             <GitBranch className="w-3 h-3" />
                             <span>{branchName}</span>
                           </button>
-                          <a
-                            href={buildRepoWebUrl(
-                              primaryRepo,
-                              primaryGitBackend,
-                              {
-                                ref: branchName,
-                              }
-                            )}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={`Open branch ${branchName} on remote repository`}
-                            className="p-0.5 text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition"
-                          >
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
+                          {safeBranchRepoUrl && (
+                            <a
+                              href={safeBranchRepoUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`Open branch ${branchName} on remote repository`}
+                              className="p-0.5 text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/20 text-xs font-mono">
@@ -504,11 +517,9 @@ export const SeedRunsTab: React.FC<SeedRunsTabProps> = ({
                       ))}
 
                     {commitSha &&
-                      (primaryRepo ? (
+                      (safeCommitRepoUrl ? (
                         <a
-                          href={buildRepoWebUrl(primaryRepo, primaryGitBackend, {
-                            commitSha,
-                          })}
+                          href={safeCommitRepoUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           title={`Open commit ${commitSha} on remote repository`}
@@ -529,7 +540,7 @@ export const SeedRunsTab: React.FC<SeedRunsTabProps> = ({
                       <a
                         href={prUrl}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/20 text-xs font-medium hover:underline"
                       >
                         <ExternalLink className="w-3 h-3" />

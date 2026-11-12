@@ -11,11 +11,11 @@ import asyncio
 import base64
 import subprocess
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from gitseed_common.enums import OrgRole, ProjectRole, ProjectVisibility
 from sqlmodel import select
 
-from gitseed_core.api.deps import DBSession
+from gitseed_core.api.deps import DBSession, verify_csrf
 from gitseed_core.config import settings
 from gitseed_core.models.project import Project, ProjectMember
 from gitseed_core.models.user import User
@@ -23,6 +23,7 @@ from gitseed_core.security import verify_run_token
 from gitseed_core.services import auth as auth_service
 from gitseed_core.services.errors import Forbidden, Invalid, NotFound, Unauthorized
 from gitseed_core.services.local_git import (
+    _sanitized_git_env,
     ensure_local_bare_repo,
     extract_repo_slug,
     resolve_local_bare_repo_path,
@@ -32,6 +33,41 @@ from gitseed_core.services.local_git import (
 router = APIRouter(prefix="/local-git", tags=["Local Git"])
 
 _ALLOWED_SERVICES = {"git-upload-pack", "git-receive-pack"}
+MAX_PACK_REQUEST_BYTES = 100 * 1024 * 1024  # 100 MiB
+
+
+async def _read_bounded_pack_body(
+    request: Request,
+    *,
+    max_bytes: int = MAX_PACK_REQUEST_BYTES,
+) -> bytes:
+    raw_cl = (request.headers.get("content-length") or "").strip()
+    if raw_cl:
+        try:
+            content_length = int(raw_cl)
+        except ValueError as exc:
+            raise Invalid("Invalid Content-Length header") from exc
+        if content_length < 0:
+            raise Invalid("Invalid Content-Length header")
+        if content_length > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Git pack payload exceeds maximum size of {max_bytes} bytes",
+            )
+
+    chunks: list[bytes] = []
+    total_bytes = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        total_bytes += len(chunk)
+        if total_bytes > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Git pack payload exceeds maximum size of {max_bytes} bytes",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _pkt_line(text: str) -> bytes:
@@ -123,6 +159,8 @@ async def _verify_local_git_auth(
     if cookie:
         cookie_user = await auth_service.authenticate_session_cookie(session, cookie)
         if cookie_user is not None:
+            if require_write and request.method.upper() not in ("GET", "HEAD", "OPTIONS"):
+                verify_csrf(request)
             await _check_user_repo_access(session, cookie_user, repo_slug, require_write=require_write)
             return
 
@@ -159,7 +197,20 @@ async def local_git_info_refs(
     subcmd = "upload-pack" if service == "git-upload-pack" else "receive-pack"
     proc = await asyncio.to_thread(
         subprocess.run,
-        ["git", subcmd, "--stateless-rpc", "--advertise-refs", str(bare_path)],
+        [
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "protocol.ext.allow=never",
+            subcmd,
+            "--stateless-rpc",
+            "--advertise-refs",
+            str(bare_path),
+        ],
+        env=_sanitized_git_env(),
         capture_output=True,
         check=False,
         timeout=30,
@@ -195,12 +246,24 @@ async def local_git_rpc(
     if not (bare_path / "HEAD").exists():
         raise NotFound(f"Local Git repository '{slug}' not found")
 
-    body = await request.body()
+    body = await _read_bounded_pack_body(request)
     subcmd = "upload-pack" if service == "git-upload-pack" else "receive-pack"
     proc = await asyncio.to_thread(
         subprocess.run,
-        ["git", subcmd, "--stateless-rpc", str(bare_path)],
+        [
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "protocol.ext.allow=never",
+            subcmd,
+            "--stateless-rpc",
+            str(bare_path),
+        ],
         input=body,
+        env=_sanitized_git_env(),
         capture_output=True,
         check=False,
         timeout=120,

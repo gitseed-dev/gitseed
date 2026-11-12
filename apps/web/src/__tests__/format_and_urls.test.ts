@@ -434,3 +434,6 @@ describe('utils/codeLanguage & constants/index', () => {
     assert.equal(buildPath(VIEWS.PROJECTS, 'proj-1', 'overview'), '/projects/proj-1')
   })
 })
+
+import '../utils/__tests__/gitUrls.test'
+

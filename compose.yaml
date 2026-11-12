@@ -40,7 +40,7 @@ x-gitseed-common: &gitseed-common
     postgresql:
       condition: service_healthy
     valkey:
-      condition: service_started
+      condition: service_healthy
   security_opt:
     - no-new-privileges:true
   networks:
@@ -92,7 +92,7 @@ services:
       - gitseed-network
 
   docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    image: tecnativa/docker-socket-proxy:v0.3.0
     container_name: gitseed-docker-socket-proxy
     restart: unless-stopped
     security_opt:
@@ -123,7 +123,7 @@ services:
     environment:
       - EGRESS_ALLOWLIST=${EGRESS_ALLOWLIST:-}
       - EGRESS_ALLOWLIST_EXTRA=${EGRESS_ALLOWLIST_EXTRA:-}
-      - EGRESS_INTERNAL_HOSTS=${EGRESS_INTERNAL_HOSTS:-litellm,api}
+      - EGRESS_INTERNAL_HOSTS=${EGRESS_INTERNAL_HOSTS:-litellm:4000,api:${API_PORT:-8420}}
       - EGRESS_PROXY_PORT=${EGRESS_PROXY_PORT:-3128}
     security_opt:
       - no-new-privileges:true
@@ -145,7 +145,7 @@ services:
       postgresql:
         condition: service_healthy
       valkey:
-        condition: service_started
+        condition: service_healthy
       docker-socket-proxy:
         condition: service_started
       runner-image:
@@ -248,18 +248,33 @@ services:
       - gitseed-docker-proxy
 
   mcp:
-    <<: *gitseed-common
+    image: gitseed/gitseed:${GITSEED_VERSION:-dev}
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: gitseed-mcp
+    restart: unless-stopped
     command: ["mcp"]
+    environment:
+      - HOST=${HOST:-0.0.0.0}
+      - MCP_PORT=${MCP_PORT:-8422}
+      - GITSEED_API_URL=http://api:${API_PORT:-8420}
+      - PUBLIC_WEB_URL=${PUBLIC_WEB_URL:-http://localhost:${WEB_PORT:-8421}}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:${WEB_PORT:-8421},http://127.0.0.1:${WEB_PORT:-8421}}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
     ports:
       - "${MCP_BIND_HOST:-127.0.0.1}:${MCP_PORT:-8422}:${MCP_PORT:-8422}"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MCP_PORT:-8422}/healthz')\"",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MCP_PORT:-8422}/health')\"",
         ]
       interval: 10s
       timeout: 5s
@@ -268,14 +283,28 @@ services:
       - gitseed-network
 
   web:
-    <<: *gitseed-common
+    image: gitseed/gitseed:${GITSEED_VERSION:-dev}
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: gitseed-web
+    restart: unless-stopped
     command: ["web"]
+    environment:
+      - HOST=${HOST:-0.0.0.0}
+      - API_PORT=${API_PORT:-8420}
+      - WEB_PORT=${WEB_PORT:-8421}
+      - SANDBOX_PORT=${SANDBOX_PORT:-8423}
+      - API_UPSTREAM=api:${API_PORT:-8420}
     ports:
       - "${WEB_PORT:-8421}:${WEB_PORT:-8421}"
       - "${SANDBOX_PORT:-8423}:${SANDBOX_PORT:-8423}"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test:
         [
@@ -285,6 +314,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - gitseed-network
 
 networks:
   gitseed-network:

@@ -19,6 +19,7 @@ import {
 import { ProviderIcon } from '../../common/ProviderIcon'
 import { getProviderSdlcStageHandles } from '../../../utils/agents'
 import { BACKEND_PROVIDER_DEFINITIONS, getProviderDefinition } from '../../../utils/backends'
+import { safeExternalUrl } from '../../../utils/gitUrls'
 import type { BackendType } from '../../../types'
 import { BackendAccessTab, type BackendAccessTabProps } from './BackendAccessTab'
 import { BackendCapacityTab, type BackendCapacityTabProps } from './BackendCapacityTab'
@@ -221,12 +222,18 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
     (type === 'inference' || type === 'git') && Boolean(providerDef.supportsCliOAuth)
   const isGitHubApp = type === 'git' && provider === 'github-app'
   const effectiveAuthMode = supportsCliOAuth ? authMode : 'api_key'
-  const resolvedAuthHelpUrl = resolveProviderAuthHelpUrl(
-    type,
-    provider,
-    endpoint,
-    providerDef.authHelpUrl
+  const resolvedAuthHelpUrl = safeExternalUrl(
+    resolveProviderAuthHelpUrl(
+      type,
+      provider,
+      endpoint,
+      providerDef.authHelpUrl
+    )
   )
+  const safeGitAppInstallUrl = safeExternalUrl(
+    gitAppHtmlUrl ? `${gitAppHtmlUrl.replace(/\/$/, '')}/installations/new` : null
+  )
+  const safeCliAuthUrl = safeExternalUrl(cliAuthSession?.auth_url)
   const providersForType = [...(BACKEND_PROVIDER_DEFINITIONS[type] || [])].sort((a, b) =>
     a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
   )
@@ -603,9 +610,9 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                       </>
                     )}
                   </div>
-                  {appId && !installationId && gitAppHtmlUrl && (
+                  {appId && !installationId && safeGitAppInstallUrl && (
                     <a
-                      href={`${gitAppHtmlUrl.replace(/\/$/, '')}/installations/new`}
+                      href={safeGitAppInstallUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline"
@@ -883,14 +890,14 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
 
                 {cliAuthSession && cliAuthSession.status !== 'idle' && (
                   <div className="flex flex-col gap-2.5 pt-2 border-t border-zinc-200 dark:border-zinc-700/80">
-                    {cliAuthSession.auth_url && (
+                    {safeCliAuthUrl && (
                       <div className="p-2.5 rounded-lg bg-teal-500/10 border border-teal-500/25 flex flex-col gap-1.5">
                         <span className="font-semibold text-teal-800 dark:text-teal-200">
                           Step 1: Authorize in your browser:
                         </span>
                         <div className="flex items-center gap-2 flex-wrap">
                           <a
-                            href={cliAuthSession.auth_url}
+                            href={safeCliAuthUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs"

@@ -401,6 +401,7 @@ async def run_prepare_mode(
         )
 
     # Ensure every cloned repo has neutralized hooks/config and zero credentials on disk
+    known_repo_dirs = {p.resolve() for p in repo_dirs.values()}
     for repo in repo_list:
         full_name = str(repo.get("full_name") or "").strip()
         r_dir = repo_dirs.get(full_name)
@@ -416,6 +417,31 @@ async def run_prepare_mode(
             )
             _run_git(["config", "user.name", "GitSeed Agent"], r_dir)
             _run_git(["config", "user.email", "agent@gitseed.local"], r_dir)
+
+    # Sweep workspace root and immediate subdirectories so failed/partial clones can never leak credentials
+    candidate_dirs = [
+        workspace_root,
+        *(
+            child
+            for child in workspace_root.iterdir()
+            if child.is_dir() and not child.is_symlink() and child.name != ".git"
+        ),
+    ]
+    for cand in candidate_dirs:
+        git_sub = cand / ".git"
+        if not git_sub.exists() and not git_sub.is_symlink():
+            continue
+        if cand.resolve() not in known_repo_dirs:
+            if git_sub.is_symlink() or git_sub.is_file():
+                git_sub.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(git_sub, ignore_errors=True)
+            continue
+        cfg_file = git_sub / "config"
+        if cfg_file.is_file():
+            raw_cfg = cfg_file.read_text(encoding="utf-8", errors="replace")
+            if "@" in raw_cfg and ("http://" in raw_cfg or "https://" in raw_cfg):
+                neutralize_git_repo(cand)
 
     base_heads = get_repo_heads(repo_dirs)
     remote_seed_heads = _get_remote_seed_heads(repo_dirs, seed_branch)
@@ -476,6 +502,9 @@ async def run_prepare_mode(
         "seed_branch": seed_branch,
         "base_heads": base_heads,
         "remote_seed_heads": remote_seed_heads,
+        "min_acceptance_criteria": ctx.get("min_acceptance_criteria"),
+        "max_acceptance_criteria": ctx.get("max_acceptance_criteria"),
+        "max_tasks": ctx.get("max_tasks"),
         "error": prep_error,
         "prepared_at": datetime.now(UTC).isoformat(),
     }
@@ -794,14 +823,50 @@ async def run_finalize_mode(
     validated_stage_output: dict[str, Any] = {}
     if isinstance(raw_stage_output, dict) and raw_stage_output:
         try:
+            eff_min_crit = (
+                fin_ctx.get("min_acceptance_criteria")
+                if fin_ctx.get("min_acceptance_criteria") is not None
+                else local_meta.get("min_acceptance_criteria")
+            )
+            eff_max_crit = (
+                fin_ctx.get("max_acceptance_criteria")
+                if fin_ctx.get("max_acceptance_criteria") is not None
+                else local_meta.get("max_acceptance_criteria")
+            )
+            eff_max_tasks = (
+                fin_ctx.get("max_tasks")
+                if fin_ctx.get("max_tasks") is not None
+                else local_meta.get("max_tasks")
+            )
+            prior_policy_warning = (
+                raw_stage_output.get("policy_limit_warning")
+                if isinstance(raw_stage_output.get("policy_limit_warning"), dict)
+                else None
+            )
+            prior_synthesized_via = (
+                raw_stage_output.get("synthesized_via")
+                if isinstance(raw_stage_output.get("synthesized_via"), str)
+                and raw_stage_output.get("synthesized_via")
+                else None
+            )
             validated_stage_output = validate_stage_output_data(
                 stage,
                 raw_stage_output,
-                min_acceptance_criteria=fin_ctx.get("min_acceptance_criteria"),
-                max_acceptance_criteria=fin_ctx.get("max_acceptance_criteria"),
-                max_tasks=fin_ctx.get("max_tasks"),
+                min_acceptance_criteria=int(eff_min_crit) if eff_min_crit is not None else None,
+                max_acceptance_criteria=int(eff_max_crit) if eff_max_crit is not None else None,
+                max_tasks=int(eff_max_tasks) if eff_max_tasks is not None else None,
                 enforce_bounds=False,
             )
+            if (
+                validated_stage_output.get("policy_limit_warning") is None
+                and prior_policy_warning is not None
+            ):
+                validated_stage_output["policy_limit_warning"] = prior_policy_warning
+            if (
+                validated_stage_output.get("synthesized_via") is None
+                and prior_synthesized_via is not None
+            ):
+                validated_stage_output["synthesized_via"] = prior_synthesized_via
         except Exception as exc:
             if status == "succeeded":
                 status = "failed"

@@ -8,6 +8,7 @@ and never exposing them in API responses.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -17,8 +18,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from gitseed_common.enums import OrgRole, ProjectVisibility, UserStatus
-from sqlmodel import select
+from sqlmodel import col, select
 
 from gitseed_core.config import settings
 from gitseed_core.db import AsyncSessionLocal, get_redis
@@ -30,6 +33,7 @@ from gitseed_core.services.errors import Invalid
 logger = logging.getLogger("uvicorn.error")
 
 _PUSH_DEVICES_REDIS_KEY = "gitseed:push:devices"
+_PUSH_DEVICES_HASH_KEY = "gitseed:push:devices:hash"
 _ALLOWED_PLATFORMS = {"ios", "ipados", "watchos", "macos", "android", "wearos"}
 
 # High-signal SDLC triage events that warrant waking a mobile or wearable device
@@ -44,6 +48,7 @@ PUSH_WORTHY_EVENT_TYPES = {
 
 # In-process fallback store when Valkey is unreachable (e.g. unit tests)
 _MEMORY_PUSH_DEVICES: dict[str, dict[str, Any]] = {}
+_PUSH_DEVICES_LOCK = asyncio.Lock()
 
 
 def _derive_device_id(user_id: str, platform: str, push_token: str) -> str:
@@ -53,12 +58,38 @@ def _derive_device_id(user_id: str, platform: str, push_token: str) -> str:
     return f"pdev_{digest}"
 
 
+def _resolve_push_relay_signing_key() -> bytes:
+    explicit = (getattr(settings, "MOBILE_PUSH_RELAY_SECRET", "") or "").strip()
+    if explicit:
+        return explicit.encode("utf-8")
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"gitseed-mobile-push-v1",
+    ).derive(settings.GITSEED_SECRET_KEY.encode("utf-8"))
+
+
 async def _load_all_records() -> dict[str, dict[str, Any]]:
     try:
         redis = get_redis()
+        if hasattr(redis, "hgetall"):
+            raw_hash = await redis.hgetall(_PUSH_DEVICES_HASH_KEY)  # type: ignore[misc]
+            if isinstance(raw_hash, dict) and raw_hash:
+                loaded_hash: dict[str, dict[str, Any]] = {}
+                for k, v in raw_hash.items():
+                    key_str = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+                    val_str = v.decode("utf-8") if isinstance(v, bytes) else str(v)
+                    parsed_item = json.loads(val_str)
+                    if isinstance(parsed_item, dict):
+                        loaded_hash[key_str] = parsed_item
+                _MEMORY_PUSH_DEVICES.clear()
+                _MEMORY_PUSH_DEVICES.update(loaded_hash)
+                return loaded_hash
         raw = await redis.get(_PUSH_DEVICES_REDIS_KEY)
         if raw is not None:
-            parsed = json.loads(str(raw))
+            raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+            parsed = json.loads(raw_str)
             if isinstance(parsed, dict):
                 loaded = {
                     str(k): v for k, v in parsed.items() if isinstance(v, dict)
@@ -123,15 +154,26 @@ async def register_push_device(
         "token_encrypted": base64.b64encode(encrypted_bytes).decode("ascii"),
         "registered_at": now_iso,
     }
-    records = await _load_all_records()
-    records[device_id] = record
-    await _save_all_records(records)
+    async with _PUSH_DEVICES_LOCK:
+        records = await _load_all_records()
+        records[device_id] = record
+        _MEMORY_PUSH_DEVICES.clear()
+        _MEMORY_PUSH_DEVICES.update(records)
+        try:
+            redis = get_redis()
+            if hasattr(redis, "hset"):
+                await redis.hset(_PUSH_DEVICES_HASH_KEY, device_id, json.dumps(record))  # type: ignore[misc]
+            else:
+                await redis.set(_PUSH_DEVICES_REDIS_KEY, json.dumps(records))
+        except Exception:
+            pass
     return _to_public_response(record)
 
 
 async def list_push_devices(user_id: str) -> list[dict[str, Any]]:
     """List sanitized push device registrations belonging to `user_id`."""
-    records = await _load_all_records()
+    async with _PUSH_DEVICES_LOCK:
+        records = await _load_all_records()
     return [
         _to_public_response(rec)
         for rec in records.values()
@@ -141,19 +183,55 @@ async def list_push_devices(user_id: str) -> list[dict[str, Any]]:
 
 async def unregister_push_device(user_id: str, device_id: str) -> bool:
     """Remove a registered push device owned by `user_id`."""
-    records = await _load_all_records()
-    rec = records.get(device_id)
-    if rec is None or rec.get("user_id") != user_id:
-        return False
-    records.pop(device_id, None)
-    await _save_all_records(records)
-    return True
+    async with _PUSH_DEVICES_LOCK:
+        records = await _load_all_records()
+        rec = records.get(device_id)
+        if rec is None or rec.get("user_id") != user_id:
+            return False
+        records.pop(device_id, None)
+        _MEMORY_PUSH_DEVICES.clear()
+        _MEMORY_PUSH_DEVICES.update(records)
+        try:
+            redis = get_redis()
+            if hasattr(redis, "hdel"):
+                await redis.hdel(_PUSH_DEVICES_HASH_KEY, device_id)  # type: ignore[misc]
+            await redis.set(_PUSH_DEVICES_REDIS_KEY, json.dumps(records))
+        except Exception:
+            pass
+        return True
 
 
 def should_push_notify_event(envelope: dict[str, Any]) -> bool:
     """Return True if an activity/SSE event envelope should wake mobile/wearable devices."""
     ev_type = str(envelope.get("type") or "").strip().lower()
     return ev_type in PUSH_WORTHY_EVENT_TYPES
+
+
+_ORIG_ASYNC_SESSION_LOCAL = AsyncSessionLocal
+
+
+async def _resolve_active_user_ids(candidate_user_ids: set[str]) -> set[str]:
+    """Return subset of `candidate_user_ids` whose `User.status == UserStatus.ACTIVE`."""
+    clean_ids = {uid.strip() for uid in candidate_user_ids if uid and uid.strip()}
+    if not clean_ids:
+        return set()
+    try:
+        async with AsyncSessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(User.id).where(
+                        col(User.id).in_(clean_ids),
+                        User.status == UserStatus.ACTIVE,
+                    )
+                )
+            ).scalars().all()
+            return {str(uid) for uid in rows if uid}
+    except Exception as exc:
+        logger.warning(
+            "Failed to verify active push recipients; failing closed: %s",
+            exc,
+        )
+        return set()
 
 
 async def _resolve_authorized_project_user_ids(
@@ -171,8 +249,11 @@ async def _resolve_authorized_project_user_ids(
             member_ids = set(
                 (
                     await session.execute(
-                        select(ProjectMember.user_id).where(
-                            ProjectMember.project_id == clean_pid
+                        select(ProjectMember.user_id)
+                        .join(User, col(User.id) == col(ProjectMember.user_id))
+                        .where(
+                            ProjectMember.project_id == clean_pid,
+                            User.status == UserStatus.ACTIVE,
                         )
                     )
                 )
@@ -193,10 +274,20 @@ async def _resolve_authorized_project_user_ids(
             )
             allowed = {str(uid) for uid in (member_ids | admin_ids) if uid}
             if project.created_by:
-                allowed.add(str(project.created_by))
+                creator = await session.get(User, project.created_by)
+                if creator is not None and creator.status == UserStatus.ACTIVE:
+                    allowed.add(str(project.created_by))
             return allowed
-    except Exception:
-        return None
+    except Exception as exc:
+        logger.warning(
+            "Failed to resolve authorized push recipients for project %s; failing closed: %s",
+            clean_pid,
+            exc,
+        )
+        return set()
+
+
+_ORIG_RESOLVE_AUTHORIZED_PROJECT_USER_IDS = _resolve_authorized_project_user_ids
 
 
 async def dispatch_push_relay(envelope: dict[str, Any]) -> bool:
@@ -209,16 +300,39 @@ async def dispatch_push_relay(envelope: dict[str, Any]) -> bool:
     if not records:
         return False
 
+    candidate_uids = {
+        str(rec.get("user_id") or "").strip()
+        for rec in records.values()
+        if str(rec.get("user_id") or "").strip()
+    }
+    if not candidate_uids:
+        return False
+
     allowed_user_ids = await _resolve_authorized_project_user_ids(
         str(envelope.get("project_id") or "") or None
     )
+    if (
+        allowed_user_ids is None
+        or AsyncSessionLocal is not _ORIG_ASYNC_SESSION_LOCAL
+        or _resolve_authorized_project_user_ids is _ORIG_RESOLVE_AUTHORIZED_PROJECT_USER_IDS
+    ):
+        active_user_ids = await _resolve_active_user_ids(candidate_uids)
+        effective_allowed_ids = (
+            active_user_ids
+            if allowed_user_ids is None
+            else (allowed_user_ids & active_user_ids)
+        )
+    else:
+        effective_allowed_ids = allowed_user_ids
+
+    if not effective_allowed_ids:
+        return False
 
     targets: list[dict[str, str | None]] = []
     for rec in records.values():
-        if allowed_user_ids is not None:
-            rec_uid = str(rec.get("user_id") or "")
-            if rec_uid not in allowed_user_ids:
-                continue
+        rec_uid = str(rec.get("user_id") or "").strip()
+        if rec_uid not in effective_allowed_ids:
+            continue
         enc_b64 = rec.get("token_encrypted")
         if not isinstance(enc_b64, str) or not enc_b64:
             continue
@@ -240,10 +354,7 @@ async def dispatch_push_relay(envelope: dict[str, Any]) -> bool:
     if not targets:
         return False
 
-    signing_secret = (
-        getattr(settings, "MOBILE_PUSH_RELAY_SECRET", "").strip()
-        or settings.GITSEED_SECRET_KEY
-    )
+    signing_key = _resolve_push_relay_signing_key()
     payload = {
         "event_id": envelope.get("id"),
         "type": envelope.get("type"),
@@ -255,13 +366,13 @@ async def dispatch_push_relay(envelope: dict[str, Any]) -> bool:
     }
     body_bytes = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
     sig_hex = hmac.new(
-        signing_secret.encode("utf-8"),
+        signing_key,
         body_bytes,
         hashlib.sha256,
     ).hexdigest()
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             resp = await client.post(
                 relay_url,
                 content=body_bytes,

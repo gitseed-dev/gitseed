@@ -57,6 +57,7 @@ from gitseed_core.services.git_auth import resolve_git_backend_token
 from gitseed_core.services.git_merge import format_seed_branch
 from gitseed_core.services.sandbox_detect import (  # noqa: F401
     get_sandbox_run_config,
+    is_allowed_sandbox_image,
 )
 from gitseed_core.services.scheduler import (
     _docker_client_for_backend,
@@ -175,43 +176,68 @@ def _clone_and_pack_workspace_tar(
 ) -> tuple[bytes, str, str]:
     """Trusted staging step: shallow-clone repo at `ref`, resolve `head_sha`, strip `.git`, return tar bytes."""
     auth_url = git_browse._build_authenticated_git_url(backend, full_name, token)
-    chosen_ref = (ref or default_branch or "main").strip()
+    clean_default = (default_branch or "main").strip()
+    if clean_default.startswith("-"):
+        clean_default = "main"
+    chosen_ref = (ref or clean_default or "main").strip()
+    if chosen_ref.startswith("-"):
+        raise Invalid("Invalid Git branch or reference")
+    is_local = session_workspace._is_local_git_dir(auth_url)
+    safe_git = [
+        "git",
+        *session_workspace._safe_git_config_flags(allow_local_file_protocol=is_local),
+    ]
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
+        safe_env = session_workspace._safe_git_env(tmp)
         try:
-            clone_res = subprocess.run(
-                [
-                    "git",
+            clone_cmd = (
+                [*safe_git, "clone", "--branch", chosen_ref, "--", auth_url, str(tmp_path)]
+                if is_local
+                else [
+                    *safe_git,
                     "clone",
                     "--depth",
                     "1",
                     "--branch",
                     chosen_ref,
+                    "--",
                     auth_url,
                     str(tmp_path),
-                ],
+                ]
+            )
+            clone_res = subprocess.run(
+                clone_cmd,
+                env=safe_env,
                 capture_output=True,
                 text=True,
                 check=False,
                 timeout=120,
             )
-            if clone_res.returncode != 0 and chosen_ref != default_branch:
+            if clone_res.returncode != 0 and chosen_ref != clean_default:
                 # Fallback to default branch if seed branch was already merged/deleted
                 shutil.rmtree(tmp_path, ignore_errors=True)
                 tmp_path.mkdir(parents=True, exist_ok=True)
-                chosen_ref = default_branch
-                clone_res = subprocess.run(
-                    [
-                        "git",
+                chosen_ref = clean_default
+                fallback_cmd = (
+                    [*safe_git, "clone", "--branch", chosen_ref, "--", auth_url, str(tmp_path)]
+                    if is_local
+                    else [
+                        *safe_git,
                         "clone",
                         "--depth",
                         "1",
                         "--branch",
                         chosen_ref,
+                        "--",
                         auth_url,
                         str(tmp_path),
-                    ],
+                    ]
+                )
+                clone_res = subprocess.run(
+                    fallback_cmd,
+                    env=safe_env,
                     capture_output=True,
                     text=True,
                     check=False,
@@ -229,8 +255,9 @@ def _clone_and_pack_workspace_tar(
             raise Invalid(f"Failed to clone repository '{full_name}' at '{chosen_ref}': {stderr_clean[:240]}")
 
         rev_res = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            [*safe_git, "rev-parse", "HEAD"],
             cwd=str(tmp_path),
+            env=safe_env,
             capture_output=True,
             text=True,
             check=False,
@@ -251,12 +278,21 @@ def _clone_and_pack_workspace_tar(
         return buf.getvalue(), chosen_ref, head_sha
 
 
+def _strip_dot_slash(p: str) -> str:
+    cleaned = p.replace("\\", "/")
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    return cleaned.lstrip("/")
+
+
 async def _spawn_sandbox_container(
     *,
     compute_backend: Backend,
     sandbox: SandboxSession,
     workspace_tar: bytes,
     initial_stdin: str | None = None,
+    project_slug: str | None = None,
+    session: AsyncSession | None = None,
 ) -> str:
     """Create an isolated container on `gitseed-sandboxes`, upload clean workspace tar, and start it."""
     cfg = compute_backend.config or {}
@@ -308,8 +344,11 @@ async def _spawn_sandbox_container(
         outer_tar.addfile(ws_info)
         with tarfile.open(fileobj=io.BytesIO(workspace_tar), mode="r") as inner_tar:
             for member in inner_tar.getmembers():
+                rel_member = _strip_dot_slash(member.name)
+                if not rel_member or rel_member == ".":
+                    continue
                 member_copy = member
-                member_copy.name = f"workspace/{member.name.lstrip('./')}"
+                member_copy.name = f"workspace/{rel_member}"
                 extracted = inner_tar.extractfile(member) if member.isfile() else None
                 outer_tar.addfile(member_copy, extracted)
         if initial_stdin is not None and initial_stdin != "":
@@ -352,6 +391,20 @@ async def _spawn_sandbox_container(
         )
 
     if is_k8s_backend(compute_backend):
+        resolved_project_slug = project_slug
+        if not resolved_project_slug:
+            if session is not None:
+                proj_obj = await session.get(Project, sandbox.project_id)
+                if proj_obj is not None and proj_obj.slug:
+                    resolved_project_slug = proj_obj.slug
+            else:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        proj_obj = await db.get(Project, sandbox.project_id)
+                        if proj_obj is not None and proj_obj.slug:
+                            resolved_project_slug = proj_obj.slug
+                except Exception:
+                    pass
         k8s_script = (
             "while [ ! -f /tmp/.gitseed_staged ]; do sleep 0.2; done\n"
             + full_script
@@ -373,7 +426,7 @@ async def _spawn_sandbox_container(
             tty=True,
             stdin=True,
             working_dir="/workspace",
-            project_slug=sandbox.project_id,
+            project_slug=resolved_project_slug or sandbox.project_id,
             workload="sandbox",
         )
         try:
@@ -504,13 +557,14 @@ async def _spawn_sandbox_container(
 
 
 def _first_matching_glob(rel_posix_path: str, globs: list[str]) -> str | None:
-    p = PurePosixPath(rel_posix_path)
+    norm_rel = _strip_dot_slash(rel_posix_path.strip())
+    p = PurePosixPath(norm_rel)
     basename = p.name
     for pattern in globs:
-        clean_pat = pattern.strip().lstrip("./")
+        clean_pat = _strip_dot_slash(pattern.strip())
         if not clean_pat:
             continue
-        if fnmatch.fnmatch(rel_posix_path, clean_pat) or fnmatch.fnmatch(basename, clean_pat):
+        if fnmatch.fnmatch(norm_rel, clean_pat) or fnmatch.fnmatch(basename, clean_pat):
             return pattern.strip()
         try:
             if p.match(clean_pat):
@@ -951,6 +1005,13 @@ async def create_sandbox_session(
             detected_cfg = None
     if not (image or "").strip():
         image = str((detected_cfg or {}).get("image") or "python:3.12-slim")
+    resolved_image = (image or "").strip() or "python:3.12-slim"
+    proj_cfg = project.sandbox_config if isinstance(project.sandbox_config, dict) else {}
+    if not is_allowed_sandbox_image(resolved_image, project_sandbox_config=proj_cfg):
+        raise Invalid(
+            f"Sandbox image '{resolved_image}' is not in the allowed runtime image list. "
+            "Configure an approved image in Project Settings → Sandbox or SANDBOX_ALLOWED_IMAGE_PREFIXES."
+        )
     if kind == "job" and not cleaned_globs and detected_cfg:
         cleaned_globs = [
             str(g).strip() for g in (detected_cfg.get("artifact_globs") or []) if str(g).strip()
@@ -961,7 +1022,7 @@ async def create_sandbox_session(
         repository_id=repo.id,
         ref=resolved_ref,
         head_sha=head_sha,
-        image=image.strip() or "python:3.12-slim",
+        image=resolved_image,
         setup_command=setup_command.strip() if setup_command and setup_command.strip() else None,
         command=(command or "").strip() or ("interactive shell" if kind == "terminal" else ""),
         artifact_globs=cleaned_globs if kind == "job" else [],
@@ -983,6 +1044,8 @@ async def create_sandbox_session(
         sandbox=sbx,
         workspace_tar=workspace_tar,
         initial_stdin=initial_stdin,
+        project_slug=project.slug,
+        session=session,
     )
     sbx.container_id = container_id
 

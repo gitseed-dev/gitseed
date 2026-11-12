@@ -15,7 +15,7 @@ import { Card } from '@heroui/react'
 import { Highlight, themes } from 'prism-react-renderer'
 import { detectLanguageFromPath } from '../../../utils/codeLanguage'
 import { formatBytes } from '../../../utils/format'
-import { buildRepoCloneUrls } from '../../../utils/gitUrls'
+import { buildRepoCloneUrls, safeExternalUrl } from '../../../utils/gitUrls'
 import type { Backend, ProjectRepository, RepoBlobResponse } from '../../../types'
 
 export const formatCodeBytes = formatBytes
@@ -128,7 +128,7 @@ export interface CodeBlobViewerProps {
   isLoading: boolean
   isError: boolean
   error: unknown
-  currentExternalUrl: string
+  currentExternalUrl: string | null
   providerLabel: string
   theme: string
   onNavigateUp: () => void
@@ -146,6 +146,7 @@ export const CodeBlobViewer: React.FC<CodeBlobViewerProps> = ({
   onNavigateUp,
 }) => {
   const [copiedBlob, setCopiedBlob] = useState(false)
+  const safeCurrentExternalUrl = safeExternalUrl(currentExternalUrl)
 
   const blobLines = useMemo(
     () => (blobData?.content ? blobData.content.split('\n') : []),
@@ -256,15 +257,17 @@ export const CodeBlobViewer: React.FC<CodeBlobViewerProps> = ({
               </>
             )}
 
-          <a
-            href={currentExternalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 border border-teal-500/30 hover:bg-teal-500/20 transition whitespace-nowrap"
-          >
-            <span>Open on {providerLabel}</span>
-            <ExternalLink size={12} />
-          </a>
+          {safeCurrentExternalUrl && (
+            <a
+              href={safeCurrentExternalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 border border-teal-500/30 hover:bg-teal-500/20 transition whitespace-nowrap"
+            >
+              <span>Open on {providerLabel}</span>
+              <ExternalLink size={12} />
+            </a>
+          )}
         </div>
       </div>
 
@@ -288,15 +291,17 @@ export const CodeBlobViewer: React.FC<CodeBlobViewerProps> = ({
             Binary file ({formatCodeBytes(blobData.size)}) cannot be rendered
             inline.
           </p>
-          <a
-            href={currentExternalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 border border-teal-500/30"
-          >
-            <span>View / Download on {providerLabel}</span>
-            <ExternalLink size={12} />
-          </a>
+          {safeCurrentExternalUrl && (
+            <a
+              href={safeCurrentExternalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 border border-teal-500/30"
+            >
+              <span>View / Download on {providerLabel}</span>
+              <ExternalLink size={12} />
+            </a>
+          )}
         </div>
       ) : (
         <div className="overflow-x-auto max-h-[72vh] overflow-y-auto bg-zinc-50/70 dark:bg-zinc-950 text-zinc-800 dark:text-zinc-100 font-mono text-xs leading-relaxed">
@@ -340,14 +345,16 @@ export const CodeBlobViewer: React.FC<CodeBlobViewerProps> = ({
                 File preview truncated at 512 KB (total size:{' '}
                 {formatCodeBytes(blobData.size)}).
               </span>
-              <a
-                href={currentExternalUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline font-semibold"
-              >
-                View full file on {providerLabel} ↗
-              </a>
+              {safeCurrentExternalUrl && (
+                <a
+                  href={safeCurrentExternalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline font-semibold"
+                >
+                  View full file on {providerLabel} ↗
+                </a>
+              )}
             </div>
           )}
         </div>

@@ -998,3 +998,157 @@ def test_receipt_get_and_verify_cli(
     assert "INVALID" in forged_online.output
 
 
+def test_login_and_mint_token_sends_csrf_header_on_cookie_post_requests() -> None:
+    seen_csrf_headers: dict[str, str | None] = {}
+
+    def strict_csrf_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/api/v1/auth/login":
+            return httpx.Response(
+                200,
+                json=_mock_State()["user"],
+                headers={"set-cookie": "gitseed_session=sess_csrf_check"},
+            )
+        if request.method == "POST" and path in {
+            "/api/v1/auth/tokens",
+            "/api/v1/auth/logout",
+        }:
+            csrf_val = request.headers.get("x-gitseed-csrf")
+            seen_csrf_headers[path] = csrf_val
+            if csrf_val != "1":
+                return httpx.Response(
+                    403,
+                    json={"detail": "Missing X-GitSeed-CSRF header"},
+                )
+            if path == "/api/v1/auth/tokens":
+                return httpx.Response(
+                    201,
+                    json={
+                        **_mock_State()["tokens"][0],
+                        "name": "CLI CSRF Test",
+                        "token": "gsp_csrf_minted_pat",
+                    },
+                )
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+    auth_client = GitSeedClient(
+        "http://localhost:8420",
+        transport=httpx.MockTransport(strict_csrf_handler),
+    )
+    user, minted = auth_client.login_and_mint_token(
+        email="admin@gitseed.local",
+        password="secret",
+        token_name="CLI CSRF Test",
+    )
+    assert user.email == "admin@gitseed.local"
+    assert minted.token == "gsp_csrf_minted_pat"
+    assert seen_csrf_headers == {
+        "/api/v1/auth/tokens": "1",
+        "/api/v1/auth/logout": "1",
+    }
+
+
+def test_windows_editor_splitting_and_credentials_acl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    from gitseed_cli.commands.resources import _split_editor_command
+
+    win_parts = _split_editor_command(
+        r'"C:\Program Files\Microsoft VS Code\Code.exe" --wait --new-window',
+        is_windows=True,
+    )
+    assert win_parts == [
+        r"C:\Program Files\Microsoft VS Code\Code.exe",
+        "--wait",
+        "--new-window",
+    ]
+
+    unquoted_win_parts = _split_editor_command(
+        r"C:\Tools\neovim\bin\nvim.exe -u NONE",
+        is_windows=True,
+    )
+    assert unquoted_win_parts == [r"C:\Tools\neovim\bin\nvim.exe", "-u", "NONE"]
+
+    posix_parts = _split_editor_command('"/usr/local/bin/my code" --wait', is_windows=False)
+    assert posix_parts == ["/usr/local/bin/my code", "--wait"]
+
+    icacls_calls: list[list[str]] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> Any:
+        icacls_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(cli_config.os, "name", "nt")
+    monkeypatch.setenv("USERNAME", "gitseed_user")
+    monkeypatch.setattr(cli_config.subprocess, "run", fake_subprocess_run)
+
+    cred_path = tmp_path / "credentials.json"
+    cli_config._write_restricted_file(cred_path, '{"tokens":{}}\n')
+    assert cred_path.read_text(encoding="utf-8") == '{"tokens":{}}\n'
+    assert icacls_calls == [
+        [
+            "icacls",
+            str(cred_path),
+            "/inheritance:r",
+            "/grant:r",
+            "gitseed_user:(R,W)",
+        ]
+    ]
+
+
+def test_extract_log_tail_delta_and_global_options_is_logs_command(
+    isolated_cli_env: dict[str, Any],
+) -> None:
+    from gitseed_cli.formatting import extract_log_tail_delta
+    from gitseed_cli.main import GlobalOptionsGroup, _is_logs_command
+
+    # 1. Initial empty -> full
+    assert extract_log_tail_delta("", "line1\nline2\n") == "line1\nline2\n"
+    # 2. Identical poll -> empty
+    assert extract_log_tail_delta("line1\nline2\n", "line1\nline2\n") == ""
+    # 3. Simple append before tail cap
+    assert (
+        extract_log_tail_delta("line1\nline2\n", "line1\nline2\nline3\n")
+        == "line3\n"
+    )
+    # 4. Capped sliding tail window (older lines dropped, total length unchanged or shorter)
+    prev_window = "line0001\nline0002\nline0003\nline0004\n"
+    curr_window = "line0002\nline0003\nline0004\nline5\n"
+    assert len(curr_window) < len(prev_window)
+    assert extract_log_tail_delta(prev_window, curr_window) == "line5\n"
+
+    # 5. Multi-line shift at cap
+    assert (
+        extract_log_tail_delta(
+            "a\nb\nc\nd\n",
+            "c\nd\ne\nf\n",
+        )
+        == "e\nf\n"
+    )
+    # 6. Completely disjoint window rollover
+    assert extract_log_tail_delta("a\nb\n", "x\ny\n") == "x\ny\n"
+
+    # 7. Command token inspection in GlobalOptionsGroup
+    assert _is_logs_command(["logs", "-f", "run_1"]) is True
+    assert _is_logs_command(["-p", "api", "logs", "-f"]) is True
+    assert _is_logs_command(["sandbox", "logs", "-f", "sbx_1"]) is True
+    assert _is_logs_command(["-p", "logs", "get", "seeds", "-f", "json"]) is False
+    assert _is_logs_command(["apply", "-f", "logs"]) is False
+
+    # Verify non-logs command with `-p logs` and `-f -p` (file named `-p`) keeps `-f` value intact
+    runner.invoke(
+        app,
+        ["login", "http://localhost:8420", "--token", "gsp_testtoken", "-p", "api"],
+    )
+    isolated_cli_env["projects"][0]["slug"] = "logs"
+    res = runner.invoke(app, ["-p", "logs", "get", "seeds", "-o", "json"])
+    assert res.exit_code == 0, res.output
+    parsed_seeds = json.loads(res.output)
+    assert parsed_seeds[0]["id"] == "sed_01hratelimit"
+    assert GlobalOptionsGroup is not None
+
+
+

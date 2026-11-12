@@ -46,8 +46,9 @@ FROM python:${PYTHON_VERSION}-slim AS runner
 ARG GITSEED_VERSION=dev
 LABEL org.opencontainers.image.source="https://github.com/gitseed-dev/gitseed" \
       org.opencontainers.image.licenses="Apache-2.0"
-ARG OPENCODE_VERSION=latest
-ARG CLAUDE_CODE_VERSION=latest
+# Bounded semver ranges for pre-installed agent CLIs (override via `--build-arg <NAME>_VERSION=<ver>`).
+ARG OPENCODE_VERSION=">=1.0.0 <2.0.0"
+ARG CLAUDE_CODE_VERSION=">=1.0.0 <3.0.0"
 ARG INCLUDE_PROPRIETARY_CLIS=true
 ARG INSTALL_CLAUDE_CODE=${INCLUDE_PROPRIETARY_CLIS}
 ARG INSTALL_ANTIGRAVITY=${INCLUDE_PROPRIETARY_CLIS}
@@ -56,8 +57,8 @@ ARG INSTALL_GROK_CLI=${INCLUDE_PROPRIETARY_CLIS}
 # Leave empty for standard builds or pass --build-arg ANTIGRAVITY_INSTALL_URL=... / GROK_CLI_INSTALL_URL=...
 ARG ANTIGRAVITY_INSTALL_URL=""
 ARG GROK_CLI_INSTALL_URL=""
-ARG CODEX_VERSION=latest
-ARG GEMINI_CLI_VERSION=latest
+ARG CODEX_VERSION=">=0.40.0 <2.0.0"
+ARG GEMINI_CLI_VERSION=">=0.10.0 <2.0.0"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:/home/runner/.local/bin:/usr/local/bin:$PATH" \
@@ -91,12 +92,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # them automatically when ANTIGRAVITY_INSTALL_URL / GROK_CLI_INSTALL_URL are provided,
     # otherwise operators can layer vendor binaries onto a derived image.
     && if [ "${INSTALL_ANTIGRAVITY}" = "true" ] && [ -n "${ANTIGRAVITY_INSTALL_URL}" ]; then \
-         (curl -fsSL "${ANTIGRAVITY_INSTALL_URL}" | HOME=/home/runner bash || true) \
-         && if [ -f /home/runner/.local/bin/agy ]; then ln -sf /home/runner/.local/bin/agy /usr/local/bin/agy; fi; \
+         curl -fsSL "${ANTIGRAVITY_INSTALL_URL}" -o /tmp/install-agy.sh \
+         && HOME=/home/runner bash /tmp/install-agy.sh \
+         && rm -f /tmp/install-agy.sh \
+         && if [ -f /home/runner/.local/bin/agy ]; then ln -sf /home/runner/.local/bin/agy /usr/local/bin/agy; fi \
+         && command -v agy >/dev/null 2>&1; \
        fi \
     && if [ "${INSTALL_GROK_CLI}" = "true" ] && [ -n "${GROK_CLI_INSTALL_URL}" ]; then \
-         (curl -fsSL "${GROK_CLI_INSTALL_URL}" | HOME=/home/runner bash || true) \
-         && if [ -f /home/runner/.local/bin/grok ]; then ln -sf /home/runner/.local/bin/grok /usr/local/bin/grok; fi; \
+         curl -fsSL "${GROK_CLI_INSTALL_URL}" -o /tmp/install-grok.sh \
+         && HOME=/home/runner bash /tmp/install-grok.sh \
+         && rm -f /tmp/install-grok.sh \
+         && if [ -f /home/runner/.local/bin/grok ]; then ln -sf /home/runner/.local/bin/grok /usr/local/bin/grok; fi \
+         && command -v grok >/dev/null 2>&1; \
        fi \
     && chown -R 1000:1000 /workspace /gitseed-ctl /gitseed-secrets /home/runner
 

@@ -11,6 +11,7 @@ import typer
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -101,13 +102,13 @@ def _append_artifacts_rows(table: Table, artifacts: Any) -> None:
         task_count = getattr(artifacts, "task_count", None)
 
     if spec_sha is not None:
-        table.add_row("Spec SHA-256", str(spec_sha))
+        table.add_row("Spec SHA-256", escape(str(spec_sha)))
     if criteria_sha is not None:
-        table.add_row("Criteria SHA-256", str(criteria_sha))
+        table.add_row("Criteria SHA-256", escape(str(criteria_sha)))
     if plan_sha is not None:
-        table.add_row("Plan SHA-256", str(plan_sha))
+        table.add_row("Plan SHA-256", escape(str(plan_sha)))
     if task_count is not None:
-        table.add_row("Task Count", str(task_count))
+        table.add_row("Task Count", escape(str(task_count)))
 
 
 @receipt_app.command("get")
@@ -133,7 +134,7 @@ def receipt_get(
     if file is not None:
         out_dict = {k: v for k, v in payload_dict.items() if k != "markdown"}
         file.write_text(json.dumps(out_dict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        console.print(f"[green]Wrote signed governance receipt to[/green] {file}")
+        console.print(f"[green]Wrote signed governance receipt to[/green] {escape(str(file))}")
         return
 
     if opts.output == "md" and envelope.markdown:
@@ -159,23 +160,24 @@ def receipt_get(
 
     table = Table(
         title=(
-            f"Governance Receipt: {seed_info.get('project_slug', '?')}#"
-            f"{seed_info.get('number', '?')} ({seed_info.get('id', '?')})"
+            f"Governance Receipt: {escape(str(seed_info.get('project_slug', '?')))}#"
+            f"{escape(str(seed_info.get('number', '?')))} "
+            f"({escape(str(seed_info.get('id', '?')))})"
         )
     )
     table.add_column("Field", style="bold cyan")
     table.add_column("Value")
-    table.add_row("Schema", str(receipt_dict.get("schema_version", "gitseed.receipt.v1")))
-    table.add_row("Title", str(seed_info.get("title", "")))
+    table.add_row("Schema", escape(str(receipt_dict.get("schema_version", "gitseed.receipt.v1"))))
+    table.add_row("Title", escape(str(seed_info.get("title", ""))))
     table.add_row(
         "Stage / Status",
-        f"{seed_info.get('stage', '')} / {seed_info.get('status', '')}",
+        f"{escape(str(seed_info.get('stage', '')))} / {escape(str(seed_info.get('status', '')))}",
     )
-    table.add_row("Autonomy", str(policy_info.get("autonomy", "")))
-    table.add_row("Min Approver Role", str(policy_info.get("min_approver_role", "")))
+    table.add_row("Autonomy", escape(str(policy_info.get("autonomy", ""))))
+    table.add_row("Min Approver Role", escape(str(policy_info.get("min_approver_role", ""))))
     table.add_row(
         "Prevent Self-Approval",
-        str(policy_info.get("prevent_self_approval", "")),
+        escape(str(policy_info.get("prevent_self_approval", ""))),
     )
     _append_artifacts_rows(table, receipt_dict.get("artifacts"))
     table.add_row("Runs", str(len(runs_list) if isinstance(runs_list, list) else 0))
@@ -183,13 +185,16 @@ def receipt_get(
         "Approvals",
         str(len(approvals_list) if isinstance(approvals_list, list) else 0),
     )
-    table.add_row("Key ID", f"{envelope.key_id} ({envelope.algorithm})")
+    table.add_row(
+        "Key ID",
+        f"{escape(str(envelope.key_id))} ({escape(str(envelope.algorithm))})",
+    )
     sig_short = (
         f"{envelope.signature[:20]}...{envelope.signature[-10:]}"
         if len(envelope.signature) > 34
         else envelope.signature
     )
-    table.add_row("Signature", sig_short)
+    table.add_row("Signature", escape(str(sig_short)))
     console.print(table)
 
 
@@ -234,7 +239,7 @@ def receipt_verify(
         if opts.output == "json":
             dump_json({"valid": False, "detail": msg, "key_id": None})
         else:
-            err_console.print(f"[red]Error:[/red] {msg}")
+            err_console.print(f"[red]Error:[/red] {escape(msg)}")
         raise typer.Exit(1)
 
     arg = path_or_stdin.strip()
@@ -244,7 +249,7 @@ def receipt_verify(
         try:
             envelope = json.loads(raw_text)
         except Exception as exc:
-            err_console.print(f"[red]Error:[/red] Failed to parse receipt JSON: {exc}")
+            err_console.print(f"[red]Error:[/red] Failed to parse receipt JSON: {escape(str(exc))}")
             raise typer.Exit(1) from exc
     else:
         target = Path(arg)
@@ -253,7 +258,9 @@ def receipt_verify(
             try:
                 envelope = json.loads(raw_text)
             except Exception as exc:
-                err_console.print(f"[red]Error:[/red] Failed to parse receipt JSON: {exc}")
+                err_console.print(
+                    f"[red]Error:[/red] Failed to parse receipt JSON: {escape(str(exc))}"
+                )
                 raise typer.Exit(1) from exc
         elif not arg.lower().endswith(".json") and (
             "#" in arg or arg.startswith("sed_") or arg.lstrip("#").isdigit()
@@ -268,14 +275,16 @@ def receipt_verify(
             env_model = client.get_seed_receipt(arg, project_override=opts.project)
             envelope = env_model.model_dump(mode="json")
         else:
-            err_console.print(f"[red]Error:[/red] File not found: {path_or_stdin}")
+            err_console.print(f"[red]Error:[/red] File not found: {escape(str(path_or_stdin))}")
             raise typer.Exit(1)
 
     pub_pem: str | None = None
     untrusted_key_error: str | None = None
     if public_key_file is not None:
         if not public_key_file.is_file():
-            err_console.print(f"[red]Error:[/red] Public key file not found: {public_key_file}")
+            err_console.print(
+                f"[red]Error:[/red] Public key file not found: {escape(str(public_key_file))}"
+            )
             raise typer.Exit(1)
         pub_pem = public_key_file.read_text(encoding="utf-8")
     elif public_key and public_key.strip():
@@ -339,7 +348,10 @@ def receipt_verify(
 
     if ok:
         console.print(
-            Panel(f"[bold green]VERIFIED[/bold green] - {detail}", title="Governance Receipt")
+            Panel(
+                f"[bold green]VERIFIED[/bold green] - {escape(str(detail))}",
+                title="Governance Receipt",
+            )
         )
         receipt_payload = envelope.get("receipt") if isinstance(envelope, dict) else None
         artifacts_payload = (
@@ -353,6 +365,9 @@ def receipt_verify(
             console.print(art_table)
     else:
         err_console.print(
-            Panel(f"[bold red]INVALID[/bold red] - {detail}", title="Governance Receipt")
+            Panel(
+                f"[bold red]INVALID[/bold red] - {escape(str(detail))}",
+                title="Governance Receipt",
+            )
         )
         raise typer.Exit(1)

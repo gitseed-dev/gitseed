@@ -19,6 +19,7 @@ from gitseed_cli.config import RuntimeOptions, get_opts, make_client
 from gitseed_cli.formatting import (
     console,
     dump_json,
+    extract_log_tail_delta,
     print_agent_sessions_table,
     print_sessions_table,
 )
@@ -126,8 +127,9 @@ def sandbox_start(
         return
 
     console.print(
-        f"[green]✓[/green] Started sandbox [bold]{sbx.id}[/bold] "
-        f"(status: [bold]{sbx.status}[/bold], ref: {sbx.ref}, image: {sbx.image})"
+        f"[green]✓[/green] Started sandbox [bold]{escape(str(sbx.id))}[/bold] "
+        f"(status: [bold]{escape(str(sbx.status))}[/bold], "
+        f"ref: {escape(str(sbx.ref))}, image: {escape(str(sbx.image))})"
     )
 
 
@@ -194,14 +196,12 @@ def sandbox_logs(
         dump_json(sbx)
         return
 
-    printed_len = 0
-    current_log = sbx.log_tail or ""
-    if current_log:
-        console.print(current_log, end="", highlight=False, markup=False)
-        printed_len = len(current_log)
+    printed_text = sbx.log_tail or ""
+    if printed_text:
+        console.print(printed_text, end="", highlight=False, markup=False)
 
     if not follow:
-        if current_log and not current_log.endswith("\n"):
+        if printed_text and not printed_text.endswith("\n"):
             console.print()
         return
 
@@ -210,10 +210,11 @@ def sandbox_logs(
             time.sleep(1.0)
             sbx = client.get_sandbox(proj_ref, sandbox_id)
             updated_log = sbx.log_tail or ""
-            if len(updated_log) > printed_len:
-                delta = updated_log[printed_len:]
+            delta = extract_log_tail_delta(printed_text, updated_log)
+            if delta:
                 console.print(delta, end="", highlight=False, markup=False)
-                printed_len = len(updated_log)
+            if updated_log:
+                printed_text = updated_log
     except KeyboardInterrupt:
         console.print("\n[dim]Stopped following sandbox output.[/dim]")
 
@@ -340,9 +341,10 @@ def session_start(
         dump_json(sess)
         return
     console.print(
-        f"[green]✓[/green] Started agent session [bold]{sess.id}[/bold] "
-        f"(status: [bold]{sess.status}[/bold], agent: @{sess.agent_handle or sess.agent_id or 'default'}, "
-        f"model: {sess.model})"
+        f"[green]✓[/green] Started agent session [bold]{escape(str(sess.id))}[/bold] "
+        f"(status: [bold]{escape(str(sess.status))}[/bold], "
+        f"agent: @{escape(str(sess.agent_handle or sess.agent_id or 'default'))}, "
+        f"model: {escape(str(sess.model))})"
     )
 
 

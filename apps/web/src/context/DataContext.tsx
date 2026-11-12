@@ -82,7 +82,30 @@ const EMPTY_USERS: User[] = []
 
 const GUIDE_STORAGE_KEY = 'gitseed_show_guide_nav'
 const SSE_INVALIDATE_THROTTLE_MS = 500
-export const SEEDS_LIST_LIMIT = 200
+export const SEEDS_LIST_LIMIT = 1000
+
+function mergeSeedsById(primary: Seed[], extra: Seed[]): Seed[] {
+  if (extra.length === 0) return primary
+  if (primary.length === 0) return extra
+  const byId = new Map<string, Seed>()
+  for (const s of primary) {
+    byId.set(s.id, s)
+  }
+  let addedAny = false
+  for (const s of extra) {
+    if (!byId.has(s.id)) {
+      byId.set(s.id, s)
+      addedAny = true
+    }
+  }
+  if (!addedAny) return primary
+  return Array.from(byId.values()).sort((a, b) => {
+    const ta = a.created_at ? new Date(a.created_at).getTime() : 0
+    const tb = b.created_at ? new Date(b.created_at).getTime() : 0
+    if (tb !== ta) return tb - ta
+    return b.number - a.number
+  })
+}
 
 const PROJECT_METADATA_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
   VIEWS.DASHBOARD,
@@ -263,7 +286,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               if (!prev) return prev
               return prev.map((r) =>
                 r.id === runId
-                  ? { ...r, output: { ...(r.output || {}), log_tail: logTail } }
+                  ? { ...r, output: { ...r.output, log_tail: logTail } }
                   : r
               )
             }
@@ -344,9 +367,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     enabled: isAuthenticated,
   })
 
-  const { data: allSeeds = EMPTY_SEEDS, isPending: isSeedsPending } = useQuery({
+  const selectedProjectObj = useMemo(
+    () =>
+      selectedProject
+        ? projects.find((p) => p.id === selectedProject && !p.archived_at) || null
+        : null,
+    [projects, selectedProject]
+  )
+
+  const effectiveSelectedProjectId = selectedProjectObj?.id ?? null
+
+  const { data: globalSeeds = EMPTY_SEEDS, isPending: isSeedsPending } = useQuery({
     queryKey: queryKeys.seeds,
-    queryFn: () => api.seeds.list(null, SEEDS_LIST_LIMIT, 0),
+    queryFn: async () => {
+      const page = await api.seeds.list(null, SEEDS_LIST_LIMIT, 0)
+      if (page.length < SEEDS_LIST_LIMIT) {
+        return page
+      }
+      const openSeeds = await api.seeds.list(null, SEEDS_LIST_LIMIT, 0, {
+        openOnly: true,
+      })
+      return mergeSeedsById(openSeeds, page)
+    },
     enabled: isAuthenticated,
     refetchInterval: (query) => {
       const list = query.state.data || []
@@ -355,6 +397,40 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return sseConnected ? 30000 : 12000
     },
   })
+
+  const { data: projectScopedSeeds = EMPTY_SEEDS } = useQuery({
+    queryKey: ['seeds', 'project', effectiveSelectedProjectId] as const,
+    queryFn: async () => {
+      if (!effectiveSelectedProjectId) return EMPTY_SEEDS
+      const projPage = await api.seeds.list(
+        effectiveSelectedProjectId,
+        SEEDS_LIST_LIMIT,
+        0
+      )
+      if (projPage.length < SEEDS_LIST_LIMIT) {
+        return projPage
+      }
+      const projOpen = await api.seeds.list(
+        effectiveSelectedProjectId,
+        SEEDS_LIST_LIMIT,
+        0,
+        { openOnly: true }
+      )
+      return mergeSeedsById(projOpen, projPage)
+    },
+    enabled: isAuthenticated && Boolean(effectiveSelectedProjectId),
+    refetchInterval: (query) => {
+      const list = query.state.data || []
+      const hasActive = list.some((s) => s.status === 'queued' || s.status === 'running')
+      if (hasActive) return 3000
+      return sseConnected ? 30000 : 12000
+    },
+  })
+
+  const allSeeds = useMemo(
+    () => mergeSeedsById(globalSeeds, projectScopedSeeds),
+    [globalSeeds, projectScopedSeeds]
+  )
 
   const { data: runs = EMPTY_RUNS } = useQuery({
     queryKey: queryKeys.runs,
@@ -661,14 +737,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem(GUIDE_STORAGE_KEY, String(show))
   }, [])
 
-  const selectedProjectObj = useMemo(
-    () =>
-      selectedProject
-        ? projects.find((p) => p.id === selectedProject && !p.archived_at) || null
-        : null,
-    [projects, selectedProject]
-  )
-
   useEffect(() => {
     if (
       isAuthenticated &&
@@ -680,8 +748,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('gitseed_selected_project')
     }
   }, [isAuthenticated, isProjectsPending, selectedProject, selectedProjectObj])
-
-  const effectiveSelectedProjectId = selectedProjectObj?.id ?? null
 
   const seeds = useMemo(
     () =>

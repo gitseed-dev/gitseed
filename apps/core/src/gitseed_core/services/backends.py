@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 import secrets as py_secrets
@@ -5,6 +6,7 @@ import shutil
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from gitseed_common.enums import (
@@ -34,6 +36,7 @@ from gitseed_core.security import create_github_app_jwt, decrypt_secrets, encryp
 from gitseed_core.services.activity import record
 from gitseed_core.services.compute_runtime import (
     _resolve_k8s_ssl_context,
+    build_docker_ssl_context,
     read_incluster_k8s_token,
 )
 from gitseed_core.services.errors import Conflict, Forbidden, Invalid, NotFound
@@ -45,7 +48,104 @@ from gitseed_core.services.gateway import (
     sync_backend_to_litellm,
 )
 from gitseed_core.services.git_auth import resolve_git_backend_token
+from gitseed_core.services.net_safety import normalize_hostname
 from gitseed_core.services.policies import ensure_org_policies
+
+_BLOCKED_BACKEND_ENDPOINT_HOSTS = frozenset(
+    {
+        "metadata.google.internal",
+        "metadata",
+        "instance-data",
+        "postgresql",
+        "gitseed-postgresql",
+        "gitseed-postgres",
+        "valkey",
+        "gitseed-valkey",
+        "redis",
+        "litellm",
+        "gitseed-litellm",
+    }
+)
+
+
+def _validate_backend_endpoint(
+    backend_type: BackendType,
+    provider: str,
+    endpoint: str | None,
+) -> str | None:
+    """Validate custom backend `endpoint` URLs against credential embedding, SSRF metadata, and unsafe schemes."""
+    if endpoint is None:
+        return None
+    cleaned = endpoint.strip()
+    if not cleaned:
+        return None
+    if any(ch in cleaned for ch in ("\r", "\n", "\x00")):
+        raise Invalid("Backend endpoint must not contain control characters")
+
+    norm_provider = provider.strip().lower()
+    if backend_type == BackendType.TOOLS and norm_provider == "mcp-stdio":
+        return cleaned
+    if backend_type == BackendType.GIT and norm_provider == "local":
+        return cleaned
+    if backend_type == BackendType.COMPUTE and cleaned.startswith("unix://"):
+        return cleaned
+
+    parse_target = cleaned
+    allowed_schemes: tuple[str, ...] = ("http", "https")
+    if backend_type == BackendType.COMPUTE:
+        if norm_provider == "docker":
+            allowed_schemes = ("http", "https", "tcp")
+            if not cleaned.startswith(("http://", "https://", "tcp://", "unix://")) and "://" not in cleaned:
+                parse_target = f"tcp://{cleaned}"
+        elif norm_provider in ("kubernetes", "k8s"):
+            if "://" not in cleaned:
+                parse_target = f"https://{cleaned}"
+
+    try:
+        parts = urlsplit(parse_target)
+        _ = parts.port
+    except ValueError as exc:
+        raise Invalid("Backend endpoint URL is malformed") from exc
+
+    scheme = parts.scheme.lower()
+    if scheme not in allowed_schemes:
+        raise Invalid(
+            f"Backend endpoint URL must use {', '.join(s + '://' for s in allowed_schemes)}"
+        )
+    if parts.username or parts.password:
+        raise Invalid("Backend endpoint URL must not embed credentials")
+
+    host = normalize_hostname(parts.hostname or "")
+    if not host:
+        raise Invalid("Backend endpoint URL must include a valid hostname")
+    if host in _BLOCKED_BACKEND_ENDPOINT_HOSTS:
+        raise Invalid(
+            f"Backend endpoint URL cannot target restricted internal or metadata host '{host}'"
+        )
+
+    try:
+        ip_raw = ipaddress.ip_address(host)
+    except ValueError:
+        ip_raw = None
+
+    if ip_raw is not None:
+        ip_norm: ipaddress.IPv4Address | ipaddress.IPv6Address = ip_raw
+        if isinstance(ip_raw, ipaddress.IPv6Address):
+            mapped = ip_raw.ipv4_mapped or ip_raw.sixtofour
+            if mapped is not None:
+                ip_norm = mapped
+        aws_imds_v6 = ipaddress.ip_network("fd00:ec2::/32")
+        if (
+            ip_norm.is_link_local
+            or ip_norm.is_unspecified
+            or ip_norm.is_multicast
+            or (isinstance(ip_norm, ipaddress.IPv6Address) and ip_norm in aws_imds_v6)
+        ):
+            raise Invalid(
+                "Backend endpoint URL cannot target cloud metadata, link-local, or unspecified IP addresses"
+            )
+
+    return cleaned
 
 
 def _validate_provider_and_secrets(
@@ -172,6 +272,7 @@ async def create_backend(
     cleaned_secrets = _validate_provider_and_secrets(
         type, normalized_provider, secrets or {}, auth_mode=auth_mode
     )
+    cleaned_endpoint = _validate_backend_endpoint(type, normalized_provider, endpoint)
 
     now = datetime.now(UTC)
     if type == BackendType.INFERENCE and auth_mode == "cli_oauth":
@@ -196,7 +297,7 @@ async def create_backend(
         name=name.strip(),
         type=type,
         provider=normalized_provider,
-        endpoint=endpoint.strip() if endpoint else None,
+        endpoint=cleaned_endpoint,
         config=initial_config,
         secrets_encrypted=encrypt_secrets(cleaned_secrets) if cleaned_secrets else None,
         capacity=capacity,
@@ -311,7 +412,9 @@ async def update_backend(
     if name is not None:
         backend.name = name.strip()
     if "endpoint" in fields:
-        backend.endpoint = endpoint.strip() if endpoint else None
+        backend.endpoint = _validate_backend_endpoint(
+            backend.type, backend.provider, endpoint
+        )
     if config is not None:
         backend.config = config
     if "capacity" in fields:
@@ -577,7 +680,12 @@ async def _probe_backend(
             if token:
                 headers["Authorization"] = f"Bearer {token}"
             ssl_ctx = _resolve_k8s_ssl_context(backend, secrets_map)
-            async with httpx.AsyncClient(headers=headers, verify=ssl_ctx, timeout=5.0) as client:
+            async with httpx.AsyncClient(
+                headers=headers,
+                verify=ssl_ctx,
+                timeout=5.0,
+                follow_redirects=False,
+            ) as client:
                 resp = await client.get(f"{base_url}/version")
                 if resp.status_code in (401, 403):
                     return (
@@ -620,10 +728,20 @@ async def _probe_backend(
                 )
 
         base_url = target
+        has_tls_secrets = bool(secrets_map.get("tls_cert") or secrets_map.get("tls_ca"))
         if base_url.startswith("tcp://"):
-            scheme = "https://" if secrets_map.get("tls_cert") else "http://"
+            scheme = "https://" if has_tls_secrets else "http://"
             base_url = scheme + base_url.removeprefix("tcp://")
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        docker_ssl_ctx = (
+            build_docker_ssl_context(secrets_map)
+            if base_url.startswith("https://")
+            else None
+        )
+        async with httpx.AsyncClient(
+            verify=docker_ssl_ctx if docker_ssl_ctx is not None else True,
+            timeout=5.0,
+            follow_redirects=False,
+        ) as client:
             resp = await client.get(f"{base_url}/_ping")
             if resp.status_code == 200:
                 return BackendHealth.HEALTHY, None
@@ -670,7 +788,7 @@ async def _probe_backend(
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
 
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=False) as client:
             try:
                 resp = await client.get(url, headers=headers)
             except httpx.ConnectError:
@@ -737,7 +855,7 @@ async def _probe_backend(
             if token:
                 headers["Authorization"] = f"Bearer {token}"
 
-        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=False) as client:
             resp = await client.get(url, headers=headers)
             if resp.status_code in (401, 403):
                 return (
@@ -772,7 +890,7 @@ async def _probe_backend(
         if secrets_map.get("api_key"):
             headers["X-API-Key"] = secrets_map["api_key"]
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             async with client.stream("GET", endpoint, headers=headers) as resp:
                 if resp.status_code in (401, 403):
                     return (
@@ -804,6 +922,9 @@ async def probe_backend_config(
         cleaned_secrets = _validate_provider_and_secrets(
             type, normalized_provider, secrets or {}, auth_mode=auth_mode
         )
+        cleaned_endpoint = _validate_backend_endpoint(
+            type, normalized_provider, endpoint
+        )
     except Invalid as exc:
         return BackendHealth.UNREACHABLE, None, exc.message
 
@@ -811,7 +932,7 @@ async def probe_backend_config(
         name="probe",
         type=type,
         provider=normalized_provider,
-        endpoint=endpoint.strip() if endpoint else None,
+        endpoint=cleaned_endpoint,
         config=dict(config or {}),
     )
 
@@ -918,7 +1039,7 @@ async def _fetch_git_repositories(
     token = await resolve_git_backend_token(backend, secrets_map)
     headers: dict[str, str] = {}
 
-    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
         if provider in ("github", "github-enterprise", "github-app"):
             base = endpoint or "https://api.github.com"
             headers["Accept"] = "application/vnd.github+json"
@@ -1134,7 +1255,7 @@ async def create_remote_repository(
         if not token:
             raise Invalid("Git backend does not have an access token configured")
 
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             if provider in ("github", "github-enterprise", "github-app"):
                 base = endpoint or "https://api.github.com"
                 headers = {
@@ -1499,7 +1620,7 @@ async def _fetch_backend_models(
 
     discovered: list[dict[str, Any]] = []
     try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
             try:
                 resp = await client.get(url, headers=headers)
             except httpx.ConnectError:
@@ -1630,6 +1751,8 @@ async def start_github_app_manifest(
 ) -> dict[str, Any]:
     """Prepare a 1-click GitHub App Manifest registration payload and state token."""
     clean_origin = (origin or "http://localhost:8421").strip().rstrip("/")
+    if endpoint is not None and endpoint.strip():
+        _validate_backend_endpoint(BackendType.GIT, "github-app", endpoint)
     clean_endpoint = _github_api_base_from_endpoint(endpoint)
     web_base = _github_web_base_from_endpoint(clean_endpoint)
     clean_org = (organization or "").strip().strip("/")
@@ -1828,7 +1951,7 @@ async def sync_github_app_installation(
                 "Authorization": f"Bearer {jwt_token}",
                 "X-GitHub-Api-Version": "2022-11-28",
             }
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
                 inst_resp = await client.get(
                     f"{api_base}/app/installations", headers=headers
                 )
@@ -1906,7 +2029,7 @@ async def complete_github_app_setup(
             try:
                 jwt_token = create_github_app_jwt(app_id, private_key)
                 api_base = _github_api_base_from_endpoint(b.endpoint)
-                async with httpx.AsyncClient(timeout=6.0) as client:
+                async with httpx.AsyncClient(timeout=6.0, follow_redirects=False) as client:
                     resp = await client.get(
                         f"{api_base}/app/installations/{installation_id.strip()}",
                         headers={
@@ -1946,6 +2069,8 @@ async def start_github_device_flow(
     if norm_provider not in ("github", "github-enterprise"):
         raise Invalid("GitHub Device OAuth is only supported for github and github-enterprise")
 
+    if endpoint is not None and endpoint.strip():
+        _validate_backend_endpoint(BackendType.GIT, norm_provider, endpoint)
     clean_endpoint = _github_api_base_from_endpoint(endpoint)
     web_base = _github_web_base_from_endpoint(clean_endpoint)
     client_id = (

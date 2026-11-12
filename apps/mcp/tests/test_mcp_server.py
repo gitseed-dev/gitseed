@@ -1315,11 +1315,33 @@ def test_cli_default_loopback_host_and_list_seeds_limit_schema(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    import gitseed_mcp.main as mcp_main
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("HOST", raising=False)
     parsed = build_arg_parser().parse_args([])
-    assert parsed.host == "127.0.0.1"
+    assert parsed.host is None
     assert MCPSettings().HOST == "127.0.0.1"
+
+    uvicorn_calls: list[dict[str, Any]] = []
+
+    def fake_uvicorn_run(app_obj: Any, **kwargs: Any) -> None:
+        uvicorn_calls.append({"app": app_obj, **kwargs})
+
+    monkeypatch.setattr(mcp_main.uvicorn, "run", fake_uvicorn_run)
+
+    # Default when HOST env is unset -> 127.0.0.1
+    mcp_main.cli([])
+    assert uvicorn_calls[-1]["host"] == "127.0.0.1"
+
+    # HOST env var is respected when --host is omitted
+    monkeypatch.setenv("HOST", "0.0.0.0")
+    mcp_main.cli([])
+    assert uvicorn_calls[-1]["host"] == "0.0.0.0"
+
+    # Explicit --host flag overrides HOST env var
+    mcp_main.cli(["--host", "127.0.0.1"])
+    assert uvicorn_calls[-1]["host"] == "127.0.0.1"
 
     list_seeds_tool = next(tool for tool in TOOLS_CATALOG if tool["name"] == "list_seeds")
     limit_prop = list_seeds_tool["inputSchema"]["properties"]["limit"]
@@ -1329,6 +1351,127 @@ def test_cli_default_loopback_host_and_list_seeds_limit_schema(
         tool for tool in TOOLS_CATALOG if tool["name"] == "approve_seed_checkpoint"
     )
     assert approve_ckpt_tool["inputSchema"]["required"] == ["seed_id", "approved_through"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_cors_query_token_rejection_and_sse_messages_session_guard() -> None:
+    recorded: list[dict[str, Any]] = []
+    settings = MCPSettings(
+        GITSEED_VERSION="0.1.0-test",
+        GITSEED_API_URL="http://api:8420",
+        GITSEED_MCP_ALLOWED_ORIGINS="http://localhost:8421,http://127.0.0.1:8421",
+    )
+    app = create_app(
+        settings=settings,
+        http_transport=_make_mock_api_transport(recorded),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://mcp.test",
+    ) as client:
+        # 1. Query-string PATs (?token= / ?api_key=) MUST be ignored and rejected with 401
+        query_tok_mcp = await client.post(
+            "/mcp?token=gsp_valid_token",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        )
+        assert query_tok_mcp.status_code == 401
+
+        query_apikey_sse = await client.get("/sse?once=1&api_key=gsp_valid_token")
+        assert query_apikey_sse.status_code == 401
+
+        app.state.sse_sessions["sess_bound"] = SSESession(
+            session_id="sess_bound",
+            token="gsp_valid_token",
+        )
+        query_tok_msg = await client.post(
+            "/messages?session_id=sess_bound&token=gsp_valid_token",
+            json={"jsonrpc": "2.0", "id": 2, "method": "ping"},
+        )
+        assert query_tok_msg.status_code == 401
+
+        # 2. CORS OPTIONS /mcp preflight and exposed Mcp-Session-Id header
+        preflight_resp = await client.options(
+            "/mcp",
+            headers={
+                "Origin": "http://localhost:8421",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Authorization, Content-Type, Mcp-Session-Id",
+            },
+        )
+        assert preflight_resp.status_code == 200
+        assert (
+            preflight_resp.headers.get("access-control-allow-origin")
+            == "http://localhost:8421"
+        )
+        allow_methods = preflight_resp.headers.get("access-control-allow-methods", "")
+        assert "POST" in allow_methods
+        allow_headers = preflight_resp.headers.get(
+            "access-control-allow-headers", ""
+        ).lower()
+        assert "authorization" in allow_headers
+        assert "mcp-session-id" in allow_headers
+
+        cors_post_resp = await client.post(
+            "/mcp",
+            headers={
+                "Origin": "http://localhost:8421",
+                "Authorization": "Bearer gsp_valid_token",
+            },
+            json={"jsonrpc": "2.0", "id": 3, "method": "ping"},
+        )
+        assert cors_post_resp.status_code == 200
+        assert (
+            cors_post_resp.headers.get("access-control-allow-origin")
+            == "http://localhost:8421"
+        )
+        assert (
+            cors_post_resp.headers.get("access-control-expose-headers")
+            == "Mcp-Session-Id"
+        )
+
+        # 3. POST /messages?session_id=nonexistent returns 404 without invoking upstream API
+        recorded.clear()
+        missing_sess_resp = await client.post(
+            "/messages?session_id=nonexistent",
+            headers={"Authorization": "Bearer gsp_valid_token"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "list_projects", "arguments": {}},
+            },
+        )
+        assert missing_sess_resp.status_code == 404
+        assert missing_sess_resp.json() == {"error": "Unknown or expired SSE session"}
+        assert recorded == []
+
+        no_sess_param_resp = await client.post(
+            "/messages",
+            headers={"Authorization": "Bearer gsp_valid_token"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {"name": "list_projects", "arguments": {}},
+            },
+        )
+        assert no_sess_param_resp.status_code == 404
+        assert recorded == []
+
+        # Mismatched bound_token on SSE session is rejected with 401 without upstream calls
+        hijack_sess_resp = await client.post(
+            "/messages?session_id=sess_bound",
+            headers={"Authorization": "Bearer gsp_other_token"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {"name": "list_projects", "arguments": {}},
+            },
+        )
+        assert hijack_sess_resp.status_code == 401
+        assert recorded == []
 
 
 def test_streamable_http_post_does_not_duplicate_response_into_sse_queue() -> None:
@@ -1392,6 +1535,198 @@ def test_streamable_http_post_does_not_duplicate_response_into_sse_queue() -> No
     parsed = json.loads(body_msg["body"].decode("utf-8"))
     assert parsed == {"jsonrpc": "2.0", "id": 77, "result": {}}
     assert queue.empty() is True
+
+
+def _step_coro_sync(coro: Any) -> Any:
+    """Drive a non-sleeping coroutine synchronously without creating a socketpair loop."""
+    try:
+        while True:
+            coro.send(None)
+    except StopIteration as stop:
+        return stop.value
+    finally:
+        coro.close()
+
+
+def _send_asgi_sync(
+    app: Any,
+    *,
+    method: str,
+    path: str,
+    query_string: str = "",
+    headers: list[tuple[bytes, bytes]] | None = None,
+    body: bytes = b"",
+) -> tuple[int, list[tuple[bytes, bytes]], bytes]:
+    sent_messages: list[dict[str, Any]] = []
+    body_consumed = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal body_consumed
+        if not body_consumed:
+            body_consumed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent_messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "query_string": query_string.encode("utf-8"),
+        "headers": headers or [],
+    }
+    _step_coro_sync(app(scope, receive, send))
+    start_msg = next(m for m in sent_messages if m["type"] == "http.response.start")
+    resp_body = b"".join(
+        m.get("body", b"") for m in sent_messages if m["type"] == "http.response.body"
+    )
+    return int(start_msg["status"]), list(start_msg.get("headers", [])), resp_body
+
+
+def test_cross_user_mcp_get_and_delete_against_sse_session_return_403() -> None:
+    """Cross-user GET /mcp and DELETE /mcp targeting an /sse session must return 403 Forbidden."""
+    cfg = MCPSettings(GITSEED_API_URL="http://api:8420")
+    app = create_app(settings=cfg, http_transport=_make_mock_api_transport([]))
+
+    victim_sse = SSESession(session_id="sse_victim_1", token="gsp_owner_token")
+    app.state.sse_sessions["sse_victim_1"] = victim_sse
+
+    # Attacker with different token attempts DELETE /mcp against /sse session -> 403
+    del_status, _, _ = _send_asgi_sync(
+        app,
+        method="DELETE",
+        path="/mcp",
+        headers=[
+            (b"mcp-session-id", b"sse_victim_1"),
+            (b"authorization", b"Bearer gsp_attacker_token"),
+        ],
+    )
+    assert del_status == 403
+    assert app.state.sse_sessions.get("sse_victim_1") is victim_sse
+    assert victim_sse.queue.empty() is True
+
+    # Attacker with different token attempts GET /mcp (SSE and JSON) against /sse session -> 403
+    get_sse_status, _, _ = _send_asgi_sync(
+        app,
+        method="GET",
+        path="/mcp",
+        query_string="once=1",
+        headers=[
+            (b"mcp-session-id", b"sse_victim_1"),
+            (b"authorization", b"Bearer gsp_attacker_token"),
+            (b"accept", b"text/event-stream"),
+        ],
+    )
+    assert get_sse_status == 403
+    assert app.state.sse_sessions.get("sse_victim_1") is victim_sse
+    assert victim_sse.queue.empty() is True
+
+    get_json_status, _, _ = _send_asgi_sync(
+        app,
+        method="GET",
+        path="/mcp",
+        headers=[
+            (b"mcp-session-id", b"sse_victim_1"),
+            (b"authorization", b"Bearer gsp_attacker_token"),
+        ],
+    )
+    assert get_json_status == 403
+    assert app.state.sse_sessions.get("sse_victim_1") is victim_sse
+
+    # Owner with matching token can terminate via DELETE /mcp -> 204 and None pushed to queue
+    del_owner_status, _, _ = _send_asgi_sync(
+        app,
+        method="DELETE",
+        path="/mcp",
+        headers=[
+            (b"mcp-session-id", b"sse_victim_1"),
+            (b"authorization", b"Bearer gsp_owner_token"),
+        ],
+    )
+    assert del_owner_status == 204
+    assert "sse_victim_1" not in app.state.sse_sessions
+    assert victim_sse.queue.get_nowait() is None
+
+
+def test_mcp_get_reconnect_does_not_clobber_replacement_session() -> None:
+    """Reconnecting GET /mcp closes old stream queue and old finally block preserves new session."""
+    from starlette.requests import Request
+
+    cfg = MCPSettings(GITSEED_API_URL="http://api:8420")
+    app = create_app(settings=cfg, http_transport=_make_mock_api_transport([]))
+    sid = "sess_reconnect_1"
+
+    mcp_get_route = next(
+        r
+        for r in app.routes
+        if getattr(r, "path", None) == "/mcp" and "GET" in getattr(r, "methods", set())
+    )
+
+    def _make_request() -> Request:
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/mcp",
+            "raw_path": b"/mcp",
+            "query_string": b"",
+            "headers": [
+                (b"authorization", b"Bearer gsp_valid_token"),
+                (b"accept", b"text/event-stream"),
+                (b"mcp-session-id", sid.encode("utf-8")),
+            ],
+        }
+        return Request(scope, receive)
+
+    # 1. Start stream 1 and advance into its event_stream() try-block
+    resp1 = _step_coro_sync(mcp_get_route.endpoint(_make_request()))
+    it1 = resp1.body_iterator
+    first_chunk = _step_coro_sync(it1.__anext__())
+    assert f": session {sid}" in (
+        first_chunk.decode("utf-8") if isinstance(first_chunk, bytes) else first_chunk
+    )
+    first_session = app.state.sse_sessions.get(sid)
+    assert first_session is not None
+    assert app.state.streamable_sessions[sid]["queue"] is first_session.queue
+    assert first_session.queue.empty() is True
+
+    # 2. Reconnect stream 2 with the same Mcp-Session-Id while stream 1 is still open
+    resp2 = _step_coro_sync(mcp_get_route.endpoint(_make_request()))
+    it2 = resp2.body_iterator
+    second_chunk = _step_coro_sync(it2.__anext__())
+    assert f": session {sid}" in (
+        second_chunk.decode("utf-8") if isinstance(second_chunk, bytes) else second_chunk
+    )
+
+    # Stream 1's queue received the None sentinel and stream 2 replaced the active session
+    assert first_session.queue.get_nowait() is None
+    second_session = app.state.sse_sessions.get(sid)
+    assert second_session is not None
+    assert second_session is not first_session
+    assert app.state.streamable_sessions[sid]["queue"] is second_session.queue
+
+    # 3. Run stream 1's finally block AFTER stream 2 is active — must NOT clobber stream 2!
+    _step_coro_sync(it1.aclose())
+    assert app.state.sse_sessions.get(sid) is second_session
+    assert app.state.streamable_sessions[sid]["queue"] is second_session.queue
+
+    # 4. Closing stream 2 now cleans up its own session cleanly
+    _step_coro_sync(it2.aclose())
+    assert sid not in app.state.sse_sessions
+    assert app.state.streamable_sessions[sid]["queue"] is None
+
+
 
 
 

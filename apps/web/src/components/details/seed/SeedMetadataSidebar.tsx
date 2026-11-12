@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   Check,
   Copy,
   Download,
@@ -11,6 +12,7 @@ import {
   KeyRound,
   Loader2,
   RefreshCw,
+  ShieldAlert,
   ShieldCheck,
   Terminal,
 } from 'lucide-react'
@@ -19,7 +21,11 @@ import { api } from '../../../api/client'
 import { VIEWS } from '../../../constants'
 import { useData } from '../../../context/DataContext'
 import { formatRelativeTime, formatTokens, formatUsd } from '../../../utils/format'
-import { buildRepoWebUrl } from '../../../utils/gitUrls'
+import { buildRepoWebUrl, safeExternalUrl } from '../../../utils/gitUrls'
+import {
+  verifyGovernanceReceiptClientSide,
+  type ReceiptVerificationResult,
+} from '../../../utils/receiptVerification'
 import {
   AUTONOMY_DESCRIPTIONS,
   AUTONOMY_LABELS,
@@ -96,11 +102,26 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
   const { backends, navigateToDetail } = useData()
   const [receiptEnvelope, setReceiptEnvelope] =
     useState<GovernanceReceiptEnvelope | null>(null)
+  const [receiptVerification, setReceiptVerification] =
+    useState<ReceiptVerificationResult | null>(null)
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false)
   const [isLoadingReceipt, setIsLoadingReceipt] = useState(false)
   const [receiptError, setReceiptError] = useState<string | null>(null)
   const [copiedReceipt, setCopiedReceipt] = useState(false)
   const [copiedVerifyCmd, setCopiedVerifyCmd] = useState(false)
+  const receiptRequestIdRef = useRef(0)
+  const activeSeedKey = `${seed.id}:${seed.stage}:${seed.status}:${seed.updated_at || ''}`
+  const activeSeedKeyRef = useRef(activeSeedKey)
+  activeSeedKeyRef.current = activeSeedKey
+
+  // Invalidate cached receipt whenever seed stage, status, or updated_at changes
+  useEffect(() => {
+    receiptRequestIdRef.current += 1
+    setIsLoadingReceipt(false)
+    setReceiptEnvelope(null)
+    setReceiptVerification(null)
+    setReceiptError(null)
+  }, [seed.id, seed.stage, seed.status, seed.updated_at])
 
   const spendEnforcement: BudgetEnforcement = useMemo(() => {
     if (seed.enforcement === 'unpriced') return 'unpriced'
@@ -153,20 +174,39 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
   const verifyCommand = `gitseed receipt verify ${receiptFilename} --offline --public-key-file receipt-pub.pem`
 
   const handleFetchReceipt = async (openModal = true) => {
+    const requestId = ++receiptRequestIdRef.current
+    const requestSeedKey = activeSeedKeyRef.current
+    const isStale = () =>
+      receiptRequestIdRef.current !== requestId ||
+      activeSeedKeyRef.current !== requestSeedKey
+
     setIsLoadingReceipt(true)
     setReceiptError(null)
     try {
-      const res = await api.seeds.getReceipt(seed.id)
+      const [res, publicKeyInfo] = await Promise.all([
+        api.seeds.getReceipt(seed.id),
+        api.receipts.getPublicKey().catch(() => null),
+      ])
+      if (isStale()) return
+      const verification = await verifyGovernanceReceiptClientSide(
+        res,
+        publicKeyInfo
+      )
+      if (isStale()) return
       setReceiptEnvelope(res)
+      setReceiptVerification(verification)
       if (openModal) {
         setIsReceiptModalOpen(true)
       }
     } catch (err) {
+      if (isStale()) return
       setReceiptError(
         err instanceof Error ? err.message : 'Failed to load governance receipt'
       )
     } finally {
-      setIsLoadingReceipt(false)
+      if (!isStale()) {
+        setIsLoadingReceipt(false)
+      }
     }
   }
 
@@ -265,8 +305,9 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
   const pullRequestUrls = useMemo(() => {
     const seen = new Set<string>()
     const addUrl = (val: unknown) => {
-      if (typeof val === 'string' && val.trim()) {
-        seen.add(val.trim())
+      const safe = safeExternalUrl(typeof val === 'string' ? val : null)
+      if (safe) {
+        seen.add(safe)
       }
     }
 
@@ -365,17 +406,24 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                   <GitBranch size={11} />
                   <span>{primaryRepo.default_branch}</span>
                 </button>
-                <a
-                  href={buildRepoWebUrl(primaryRepo, primaryGitBackend, {
-                    ref: primaryRepo.default_branch,
-                  })}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Open repository on remote Git provider"
-                  className="text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition shrink-0"
-                >
-                  <ExternalLink size={12} />
-                </a>
+                {(() => {
+                  const defaultRepoWebUrl = safeExternalUrl(
+                    buildRepoWebUrl(primaryRepo, primaryGitBackend, {
+                      ref: primaryRepo.default_branch,
+                    })
+                  )
+                  return defaultRepoWebUrl ? (
+                    <a
+                      href={defaultRepoWebUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open repository on remote Git provider"
+                      className="text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition shrink-0"
+                    >
+                      <ExternalLink size={12} />
+                    </a>
+                  ) : null
+                })()}
               </dd>
             </div>
 
@@ -394,17 +442,24 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                     <GitBranch size={11} className="shrink-0" />
                     <span className="truncate">{seedBranch}</span>
                   </button>
-                  <a
-                    href={buildRepoWebUrl(primaryRepo, primaryGitBackend, {
-                      ref: seedBranch,
-                    })}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`Open branch ${seedBranch} on remote Git provider`}
-                    className="text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition shrink-0"
-                  >
-                    <ExternalLink size={12} />
-                  </a>
+                  {(() => {
+                    const seedBranchWebUrl = safeExternalUrl(
+                      buildRepoWebUrl(primaryRepo, primaryGitBackend, {
+                        ref: seedBranch,
+                      })
+                    )
+                    return seedBranchWebUrl ? (
+                      <a
+                        href={seedBranchWebUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`Open branch ${seedBranch} on remote Git provider`}
+                        className="text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition shrink-0"
+                      >
+                        <ExternalLink size={12} />
+                      </a>
+                    ) : null
+                  })()}
                 </dd>
               </div>
             )}
@@ -629,11 +684,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
               type="button"
               data-testid="fetch-governance-receipt-btn"
               onClick={() => {
-                if (receiptEnvelope) {
-                  setIsReceiptModalOpen(true)
-                } else {
-                  void handleFetchReceipt(true)
-                }
+                void handleFetchReceipt(true)
               }}
               disabled={isLoadingReceipt}
               className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700/80 transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
@@ -656,10 +707,22 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
           {receiptEnvelope && (
             <div className="p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700/80 flex flex-col gap-2 text-[11px]">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-300">
-                  <Check size={12} />
-                  <span>{receiptEnvelope.algorithm} Signed</span>
-                </span>
+                {receiptVerification?.status === 'invalid' ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-rose-600 dark:text-rose-400">
+                    <AlertTriangle size={12} />
+                    <span>Signature Invalid / Tampered</span>
+                  </span>
+                ) : receiptVerification?.status === 'unsupported' ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-teal-700 dark:text-teal-300">
+                    <ShieldCheck size={12} />
+                    <span>Server-Signed (Ed25519)</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-300">
+                    <Check size={12} />
+                    <span>{receiptVerification?.label || 'Verified (Ed25519)'}</span>
+                  </span>
+                )}
                 <span className="font-mono text-zinc-500 dark:text-zinc-400">
                   key:{receiptEnvelope.key_id}
                 </span>
@@ -688,8 +751,11 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
               <div className="flex items-center gap-1.5 pt-1">
                 <button
                   type="button"
-                  onClick={() => setIsReceiptModalOpen(true)}
-                  className="flex-1 px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 font-semibold inline-flex items-center justify-center gap-1 hover:border-teal-500/40 transition cursor-pointer"
+                  onClick={() => {
+                    void handleFetchReceipt(true)
+                  }}
+                  disabled={isLoadingReceipt}
+                  className="flex-1 px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 font-semibold inline-flex items-center justify-center gap-1 hover:border-teal-500/40 transition cursor-pointer disabled:opacity-50"
                 >
                   <FileCheck2 size={11} />
                   <span>Inspect</span>
@@ -725,13 +791,46 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
             className="flex flex-col gap-5 text-xs"
           >
             {/* Cryptographic Signature Summary */}
-            <div className="p-4 rounded-xl bg-emerald-500/[0.06] dark:bg-emerald-500/[0.1] border border-emerald-500/25 flex flex-col gap-2.5">
+            <div
+              className={`p-4 rounded-xl border flex flex-col gap-2.5 ${
+                receiptVerification?.status === 'invalid'
+                  ? 'bg-rose-500/[0.08] dark:bg-rose-500/[0.14] border-rose-500/35'
+                  : 'bg-emerald-500/[0.06] dark:bg-emerald-500/[0.1] border-emerald-500/25'
+              }`}
+            >
               <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="inline-flex items-center gap-2 font-semibold text-sm text-emerald-800 dark:text-emerald-200">
-                  <ShieldCheck size={16} className="text-emerald-600 dark:text-emerald-400" />
-                  <span>{receiptEnvelope.algorithm} Cryptographic Attestation</span>
+                <div
+                  className={`inline-flex items-center gap-2 font-semibold text-sm ${
+                    receiptVerification?.status === 'invalid'
+                      ? 'text-rose-800 dark:text-rose-200'
+                      : 'text-emerald-800 dark:text-emerald-200'
+                  }`}
+                >
+                  {receiptVerification?.status === 'invalid' ? (
+                    <ShieldAlert size={16} className="text-rose-600 dark:text-rose-400" />
+                  ) : (
+                    <ShieldCheck size={16} className="text-emerald-600 dark:text-emerald-400" />
+                  )}
+                  <span>
+                    {receiptVerification?.status === 'invalid'
+                      ? 'Signature Invalid / Tampered'
+                      : receiptVerification?.status === 'unsupported'
+                        ? 'Server-Signed (Ed25519)'
+                        : `${receiptEnvelope.algorithm} Cryptographic Attestation · Verified`}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-semibold text-[11px] ${
+                      receiptVerification?.status === 'invalid'
+                        ? 'bg-rose-500/15 text-rose-700 dark:text-rose-200 border-rose-500/35'
+                        : receiptVerification?.status === 'unsupported'
+                          ? 'bg-teal-500/10 text-teal-700 dark:text-teal-200 border-teal-500/30'
+                          : 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/30'
+                    }`}
+                  >
+                    {receiptVerification?.label || 'Verified (Ed25519)'}
+                  </span>
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/80 dark:bg-zinc-900/80 border border-emerald-500/25 font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
                     <KeyRound size={11} className="text-teal-600 dark:text-teal-400" />
                     <span>key_id: {receiptEnvelope.key_id}</span>
@@ -747,6 +846,18 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                   </button>
                 </div>
               </div>
+
+              {receiptVerification?.detail && (
+                <p
+                  className={`text-[11px] ${
+                    receiptVerification.status === 'invalid'
+                      ? 'font-semibold text-rose-700 dark:text-rose-300'
+                      : 'text-zinc-600 dark:text-zinc-300'
+                  }`}
+                >
+                  {receiptVerification.detail}
+                </p>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-zinc-600 dark:text-zinc-300">
                 <div>

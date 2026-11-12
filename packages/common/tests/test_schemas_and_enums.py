@@ -109,6 +109,22 @@ class TestStageOutputValidation:
         assert result["commit_sha"] == "abc1234"
         assert result["pull_request_url"] == "https://github.com/org/repo/pull/7"
 
+        # Empty string normalizes to None; unsafe schemes (javascript:, data:) are rejected
+        empty_pr = validate_stage_output_data(
+            "execute",
+            {"summary_comment": "Implemented feature cleanly.", "pull_request_url": "   "},
+        )
+        assert empty_pr["pull_request_url"] is None
+
+        with pytest.raises(ValidationError):
+            validate_stage_output_data(
+                "execute",
+                {
+                    "summary_comment": "Implemented feature cleanly.",
+                    "pull_request_url": "javascript:alert(1)",
+                },
+            )
+
     def test_validate_review_stage_output(self) -> None:
         raw = {
             "approved": False,
@@ -290,3 +306,7 @@ class TestSchemaExports:
         assert ReviewStageOutput is not None
         assert MergeStageOutput is not None
         assert PlanStageOutput is not None
+
+        partial_update = common_schemas.UpdateSeedRequest.model_validate({"title": "New Title"})
+        assert partial_update.acceptance_criteria is None
+        assert partial_update.model_fields_set == {"title"}

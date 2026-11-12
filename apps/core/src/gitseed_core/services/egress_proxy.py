@@ -65,8 +65,40 @@ class EgressDeniedError(UnsafeDestinationError):
     """Raised when an outbound connection via the egress proxy is blocked."""
 
 
+MAX_PROXY_LINE_BYTES = 8192
+MAX_PROXY_HEADERS = 128
+MAX_PROXY_HEADER_TOTAL_BYTES = 65536
+DEFAULT_INTERNAL_ALLOWED_PORTS: frozenset[int] = frozenset({80, 443, 4000, 8000, 8420})
+DEFAULT_EXTERNAL_ALLOWED_PORTS: frozenset[int] = frozenset({80, 443})
+
+
+class _HeaderTooLargeError(Exception):
+    """Raised when an incoming HTTP proxy request line or header block exceeds limits."""
+
+
+def _split_host_and_optional_port(raw_item: str) -> tuple[str, int | None]:
+    cleaned = (raw_item or "").strip()
+    if not cleaned:
+        return "", None
+    if ":" in cleaned and not cleaned.startswith("["):
+        host_part, port_part = cleaned.rsplit(":", 1)
+        if port_part.isdigit():
+            port_num = int(port_part)
+            if 1 <= port_num <= 65535:
+                return normalize_hostname(host_part), port_num
+    return normalize_hostname(cleaned), None
+
+
 def _parse_csv(raw: str) -> list[str]:
-    return [normalize_hostname(part) for part in (raw or "").split(",") if normalize_hostname(part)]
+    out: list[str] = []
+    for part in (raw or "").split(","):
+        host, port = _split_host_and_optional_port(part)
+        if not host:
+            continue
+        entry = f"{host}:{port}" if port is not None else host
+        if entry not in out:
+            out.append(entry)
+    return out
 
 
 def resolve_egress_allowlist(
@@ -80,8 +112,11 @@ def resolve_egress_allowlist(
     extra = _parse_csv(raw_extra)
     merged: list[str] = []
     for item in (*base, *extra):
-        norm = normalize_hostname(item)
-        if norm and norm not in merged:
+        host, port = _split_host_and_optional_port(item)
+        if not host:
+            continue
+        norm = f"{host}:{port}" if port is not None else host
+        if norm not in merged:
             merged.append(norm)
     return merged
 
@@ -89,7 +124,34 @@ def resolve_egress_allowlist(
 def resolve_internal_hosts(internal_raw: str | None = None) -> set[str]:
     """Return internal service names that may resolve to container-network private IPs."""
     raw = settings.EGRESS_INTERNAL_HOSTS if internal_raw is None else internal_raw
-    return set(_parse_csv(raw))
+    hosts: set[str] = set()
+    for part in (raw or "").split(","):
+        host, _ = _split_host_and_optional_port(part)
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _resolve_internal_host_ports(
+    internal_hosts: Iterable[str] | None = None,
+) -> dict[str, set[int] | None]:
+    items = (
+        list(internal_hosts)
+        if internal_hosts is not None
+        else (settings.EGRESS_INTERNAL_HOSTS or "").split(",")
+    )
+    mapping: dict[str, set[int] | None] = {}
+    for raw_item in items:
+        host, port = _split_host_and_optional_port(raw_item)
+        if not host:
+            continue
+        if port is None:
+            mapping[host] = None
+        elif host not in mapping:
+            mapping[host] = {port}
+        elif mapping[host] is not None:
+            mapping[host].add(port)  # type: ignore[union-attr]
+    return mapping
 
 
 async def check_egress_destination(
@@ -112,12 +174,17 @@ async def check_egress_destination(
     if port <= 0 or port > 65535:
         raise EgressDeniedError(f"Egress destination port {port} is invalid")
 
-    internals = (
-        {normalize_hostname(h) for h in internal_hosts if normalize_hostname(h)}
-        if internal_hosts is not None
-        else resolve_internal_hosts()
-    )
-    if name in internals:
+    internal_ports_map = _resolve_internal_host_ports(internal_hosts)
+    if name in internal_ports_map:
+        explicit_ports = internal_ports_map[name]
+        default_internal_ports = DEFAULT_INTERNAL_ALLOWED_PORTS | {
+            int(getattr(settings, "API_PORT", 8420) or 8420)
+        }
+        allowed_ports = explicit_ports if explicit_ports is not None else default_internal_ports
+        if port not in allowed_ports:
+            raise EgressDeniedError(
+                f"Port {port} is not permitted for internal host {name}"
+            )
         try:
             addrs = await (resolver or default_resolver)(name, port)
         except (OSError, UnicodeError) as exc:
@@ -126,9 +193,30 @@ async def check_egress_destination(
             raise EgressDeniedError(f"Internal host {name} did not resolve")
         return addrs
 
-    patterns = list(allowlist) if allowlist is not None else resolve_egress_allowlist()
-    if not host_matches(name, patterns):
+    raw_patterns = list(allowlist) if allowlist is not None else resolve_egress_allowlist()
+    host_only_patterns: list[str] = []
+    explicit_external_ports: set[int] = set()
+    matched_host = False
+    for pat in raw_patterns:
+        pat_host, pat_port = _split_host_and_optional_port(pat)
+        if not pat_host:
+            continue
+        if host_matches(name, [pat_host]):
+            matched_host = True
+            if pat_port is not None:
+                explicit_external_ports.add(pat_port)
+            else:
+                host_only_patterns.append(pat_host)
+    if not matched_host:
         raise EgressDeniedError(f"Host {name} is not in the egress allowlist")
+
+    allowed_ext_ports = set(explicit_external_ports)
+    if host_only_patterns:
+        allowed_ext_ports |= DEFAULT_EXTERNAL_ALLOWED_PORTS
+    if port not in allowed_ext_ports:
+        raise EgressDeniedError(
+            f"Port {port} is not permitted for allowlisted host {name}"
+        )
 
     try:
         return await resolve_public_ips(name, port, resolver=resolver)
@@ -171,6 +259,24 @@ def _parse_connect_authority(target: str) -> tuple[str, int]:
     return cleaned, 443
 
 
+async def _read_bounded_line(
+    reader: asyncio.StreamReader,
+    max_bytes: int = MAX_PROXY_LINE_BYTES,
+    *,
+    timeout: float = 15.0,
+) -> bytes:
+    """Read a single CRLF/LF line bounded to ``max_bytes`` to prevent unbounded OOM buffering."""
+    try:
+        line = await asyncio.wait_for(reader.readuntil(b"\n"), timeout=timeout)
+    except asyncio.LimitOverrunError as exc:
+        raise _HeaderTooLargeError("Proxy header line exceeds maximum length") from exc
+    except asyncio.IncompleteReadError as exc:
+        line = exc.partial
+    if len(line) > max_bytes:
+        raise _HeaderTooLargeError("Proxy header line exceeds maximum length")
+    return line
+
+
 async def handle_proxy_client(
     client_reader: asyncio.StreamReader,
     client_writer: asyncio.StreamWriter,
@@ -183,7 +289,12 @@ async def handle_proxy_client(
     """Handle a single HTTP proxy or HTTP CONNECT client connection."""
     upstream_writer: asyncio.StreamWriter | None = None
     try:
-        request_line_bytes = await asyncio.wait_for(client_reader.readline(), timeout=15.0)
+        try:
+            request_line_bytes = await _read_bounded_line(client_reader)
+        except _HeaderTooLargeError:
+            client_writer.write(b"HTTP/1.1 414 URI Too Long\r\nConnection: close\r\n\r\n")
+            await client_writer.drain()
+            return
         if not request_line_bytes:
             return
         request_line = request_line_bytes.decode("latin-1", errors="replace").strip()
@@ -198,15 +309,29 @@ async def handle_proxy_client(
         version = parts[2] if len(parts) > 2 else "HTTP/1.1"
 
         headers_raw: list[bytes] = []
+        total_header_bytes = len(request_line_bytes)
         host_header = ""
-        while True:
-            line = await asyncio.wait_for(client_reader.readline(), timeout=15.0)
-            if not line or line in (b"\r\n", b"\n"):
-                break
-            headers_raw.append(line)
-            decoded = line.decode("latin-1", errors="replace")
-            if decoded.lower().startswith("host:"):
-                host_header = decoded.split(":", 1)[1].strip()
+        try:
+            while True:
+                line = await _read_bounded_line(client_reader)
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+                total_header_bytes += len(line)
+                if (
+                    len(headers_raw) >= MAX_PROXY_HEADERS
+                    or total_header_bytes > MAX_PROXY_HEADER_TOTAL_BYTES
+                ):
+                    raise _HeaderTooLargeError("Too many or oversized proxy headers")
+                headers_raw.append(line)
+                decoded = line.decode("latin-1", errors="replace")
+                if decoded.lower().startswith("host:"):
+                    host_header = decoded.split(":", 1)[1].strip()
+        except _HeaderTooLargeError:
+            client_writer.write(
+                b"HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n"
+            )
+            await client_writer.drain()
+            return
 
         if method == "CONNECT":
             try:

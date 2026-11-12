@@ -795,10 +795,16 @@ export const api = {
   },
 
   seeds: {
-    list: (projectId?: string | null, limit = 100, offset = 0) => {
+    list: (
+      projectId?: string | null,
+      limit = 100,
+      offset = 0,
+      options?: { openOnly?: boolean }
+    ) => {
       const qs = new URLSearchParams({ limit: String(limit) })
       if (projectId) qs.set('project_id', projectId)
       if (offset > 0) qs.set('offset', String(offset))
+      if (options?.openOnly) qs.set('open_only', 'true')
       return request<Seed[]>(`/api/v1/seeds?${qs.toString()}`)
     },
     get: (seedId: string) => request<Seed>(`/api/v1/seeds/${encodeURIComponent(seedId)}`),

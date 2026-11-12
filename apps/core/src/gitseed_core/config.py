@@ -160,6 +160,7 @@ class Settings(BaseSettings):
     GITSEED_EMBED_SCHEDULER: bool = False
     SCHEDULER_POLL_SECONDS: float = 3.0
     LITELLM_URL: str = "http://litellm:4000"
+    LITELLM_BASE_URL: str = ""
     LITELLM_MASTER_KEY: str = _DEFAULT_LITELLM_MASTER_KEY
     LITELLM_SALT_KEY: str = ""
     RUNNER_IMAGE: str = "gitseed/runner:dev"
@@ -187,6 +188,7 @@ class Settings(BaseSettings):
     # Project Sandbox & Artifacts
     ARTIFACTS_DIR: str = "/app/data/artifacts"
     SANDBOX_DOCKER_NETWORK: str = "gitseed-sandboxes"
+    SANDBOX_ALLOWED_IMAGE_PREFIXES: str = ""
     SANDBOX_DEFAULT_TTL_MINUTES: int = 15
     SANDBOX_ARTIFACT_RETENTION_DAYS: int = 7
     SANDBOX_MAX_ARTIFACT_BYTES: int = 500 * 1024 * 1024

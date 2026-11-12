@@ -1,4 +1,5 @@
 import inspect
+import logging
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -46,6 +47,8 @@ from gitseed_core.services.policies import (
 )
 from gitseed_core.services.projects import get_member_role, get_project
 from gitseed_core.services.settings import get_org_settings
+
+logger = logging.getLogger(__name__)
 
 
 async def resolve_should_stage_seed(
@@ -131,7 +134,12 @@ async def reset_orphaned_running_tasks(
                 task.updated_at = ts
                 reset_count += 1
         return reset_count
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to reset orphaned running tasks for seed %s: %s",
+            seed_id,
+            exc,
+        )
         return 0
 
 
@@ -638,7 +646,9 @@ async def update_seed(
                     "Specification is locked after the Ideate stage (or when a seed is closed/merged) and cannot be modified"
                 )
             seed.specification = cleaned_spec
-    if acceptance_criteria is not None:
+    if (
+        fields_set is None or "acceptance_criteria" in fields
+    ) and acceptance_criteria is not None:
         cleaned_criteria = [
             c.strip() for c in acceptance_criteria if c and c.strip()
         ]
@@ -1008,6 +1018,7 @@ async def reopen_seed(
     seed.closed_at = None
     seed.closed_by = None
     seed.blocked_reason = None
+    seed.stage_entered_at = now
     seed.updated_at = now
 
     record(
@@ -1673,8 +1684,10 @@ async def create_approval(
     seed = await get_seed(session, actor, seed_id)
     _, actor_role = await _require_seed_developer(session, actor, seed)
 
-    if seed.status in (SeedStatus.MERGED, SeedStatus.CLOSED):
+    if seed.status in (SeedStatus.MERGED, SeedStatus.CLOSED, SeedStatus.STAGED):
         raise Invalid(f"Cannot submit an approval on a {str(seed.status)} seed")
+    if decision == ApprovalDecision.APPROVED and seed.status == SeedStatus.FAILED:
+        raise Invalid("Cannot approve a failed seed; retry or request changes instead")
 
     cleaned_comment = comment.strip() if comment and comment.strip() else None
     review_summary: str | None = None
@@ -1974,10 +1987,15 @@ def _return_seed_to_plan_gate_if_past_plan(
     seed: Seed,
     actor: User,
     now: datetime,
-) -> None:
-    """If a seed's tasks are modified after Plan approval, return it to the Plan gate."""
+) -> bool:
+    """If a seed's tasks are modified after Plan approval, return it to the Plan gate.
+
+    Returns True when an active/queued `EXECUTE` seed was reverted and any in-flight
+    `EXECUTE` runs should be cancelled.
+    """
     if seed.stage in (SeedStage.EXECUTE, SeedStage.REVIEW):
         prev_stage = seed.stage
+        prev_status = seed.status
         seed.stage = SeedStage.PLAN
         seed.status = SeedStatus.AWAITING_APPROVAL
         seed.stage_entered_at = now
@@ -1995,6 +2013,51 @@ def _return_seed_to_plan_gate_if_past_plan(
                 "reason": "tasks_modified",
             },
         )
+        return prev_stage == SeedStage.EXECUTE and prev_status in (
+            SeedStatus.RUNNING,
+            SeedStatus.QUEUED,
+        )
+    return False
+
+
+async def _cancel_active_execute_runs(
+    session: AsyncSession,
+    actor: User,
+    seed_id: str,
+) -> None:
+    """Cancel any active `EXECUTE` runs on `seed_id` after reverting back to `PLAN`."""
+    from gitseed_core.services.runs import cancel_run
+
+    exec_fn = getattr(session, "execute", None)
+    if not callable(exec_fn):
+        return
+    try:
+        active_runs_res = await session.execute(
+            select(Run).where(
+                Run.seed_id == seed_id,
+                Run.stage == SeedStage.EXECUTE,
+                col(Run.status).in_([s.value for s in RUN_ACTIVE_STATUSES]),
+            )
+        )
+    except Exception:
+        return
+
+    scalars_fn = getattr(active_runs_res, "scalars", None)
+    if not callable(scalars_fn):
+        return
+    scalars_obj = scalars_fn()
+    if inspect.iscoroutine(scalars_obj):
+        scalars_obj.close()
+        return
+    all_fn = getattr(scalars_obj, "all", None)
+    rows = all_fn() if callable(all_fn) else []
+    if inspect.iscoroutine(rows):
+        rows.close()
+        return
+    if isinstance(rows, (list, tuple)):
+        for r in rows:
+            if isinstance(r, Run) and r.stage == SeedStage.EXECUTE:
+                await cancel_run(session, actor, r.id)
 
 
 async def create_task(
@@ -2042,8 +2105,10 @@ async def create_task(
         updated_at=now,
     )
     session.add(task)
-    _return_seed_to_plan_gate_if_past_plan(session, seed, actor, now)
+    cancel_execute = _return_seed_to_plan_gate_if_past_plan(session, seed, actor, now)
     await session.commit()
+    if cancel_execute:
+        await _cancel_active_execute_runs(session, actor, seed.id)
     await session.refresh(task)
     return task
 
@@ -2101,11 +2166,14 @@ async def update_task(
         for idx, item in enumerate(ordered):
             item.position = idx
 
+    cancel_execute = False
     if plan_spec_changed:
-        _return_seed_to_plan_gate_if_past_plan(session, seed, actor, now)
+        cancel_execute = _return_seed_to_plan_gate_if_past_plan(session, seed, actor, now)
 
     task.updated_at = now
     await session.commit()
+    if cancel_execute:
+        await _cancel_active_execute_runs(session, actor, seed.id)
     await session.refresh(task)
     return task
 
@@ -2138,8 +2206,10 @@ async def delete_task(
         item.position = idx
 
     now = datetime.now(UTC)
-    _return_seed_to_plan_gate_if_past_plan(session, seed, actor, now)
+    cancel_execute = _return_seed_to_plan_gate_if_past_plan(session, seed, actor, now)
     await session.commit()
+    if cancel_execute:
+        await _cancel_active_execute_runs(session, actor, seed.id)
 
 
 async def list_comments(

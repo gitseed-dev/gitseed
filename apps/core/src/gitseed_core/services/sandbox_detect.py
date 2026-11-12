@@ -8,10 +8,101 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
+from gitseed_core.config import settings
 from gitseed_core.models.project import ProjectRepository
 from gitseed_core.models.user import User
 from gitseed_core.services import git_browse
 from gitseed_core.services import projects as projects_service
+
+_SAFE_IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
+_ALLOWED_OFFICIAL_REPOS = frozenset(
+    {
+        "python",
+        "node",
+        "golang",
+        "rust",
+        "ubuntu",
+        "debian",
+        "alpine",
+        "ruby",
+        "php",
+        "openjdk",
+        "eclipse-temurin",
+        "dotnet",
+        "deno",
+        "bun",
+        "elixir",
+        "erlang",
+        "swift",
+        "gradle",
+        "maven",
+        "gcc",
+        "busybox",
+    }
+)
+_ALLOWED_IMAGE_PREFIXES: tuple[str, ...] = (
+    "mcr.microsoft.com/devcontainers/",
+    "mcr.microsoft.com/dotnet/",
+    "ghcr.io/gitseed/",
+    "gitseed/",
+    "oven/bun:",
+    "denoland/deno:",
+)
+
+
+def is_allowed_sandbox_image(
+    image: str | None,
+    *,
+    project_sandbox_config: dict[str, Any] | None = None,
+) -> bool:
+    """Return True when `image` matches an approved runtime base image or project-configured image."""
+    raw = str(image or "").strip()
+    if not raw or not _SAFE_IMAGE_REF_RE.match(raw) or ".." in raw:
+        return False
+
+    runner_img = str(getattr(settings, "RUNNER_IMAGE", "") or "").strip()
+    if runner_img and (
+        raw == runner_img or raw.split(":", 1)[0] == runner_img.split(":", 1)[0]
+    ):
+        return True
+
+    if isinstance(project_sandbox_config, dict):
+        proj_img = str(project_sandbox_config.get("image") or "").strip()
+        if proj_img and raw == proj_img:
+            return True
+
+    extra_prefixes = [
+        p.strip()
+        for p in str(getattr(settings, "SANDBOX_ALLOWED_IMAGE_PREFIXES", "") or "").split(",")
+        if p.strip()
+    ]
+    for prefix in (*_ALLOWED_IMAGE_PREFIXES, *extra_prefixes):
+        if raw.startswith(prefix):
+            return True
+
+    # Strip tag/digest and optional official Docker Hub library prefix
+    repo_part = raw.split("@", 1)[0].split(":", 1)[0]
+    for lib_prefix in ("docker.io/library/", "index.docker.io/library/", "library/"):
+        if repo_part.startswith(lib_prefix):
+            repo_part = repo_part[len(lib_prefix) :]
+            break
+    if "/" not in repo_part and repo_part in _ALLOWED_OFFICIAL_REPOS:
+        return True
+    return False
+
+
+def sanitize_run_json_image(
+    raw_image: str | None,
+    *,
+    project_sandbox_config: dict[str, Any] | None = None,
+    fallback: str = "python:3.12-slim",
+) -> str:
+    candidate = str(raw_image or "").strip()
+    if candidate and is_allowed_sandbox_image(
+        candidate, project_sandbox_config=project_sandbox_config
+    ):
+        return candidate
+    return fallback
 
 
 def _apply_project_sandbox_overrides(
@@ -259,9 +350,10 @@ async def get_sandbox_run_config(
                         {
                             "source": "run_json",
                             "ref": candidate_ref,
-                            "image": str(
-                                parsed.get("image") or "python:3.12-slim"
-                            ).strip(),
+                            "image": sanitize_run_json_image(
+                                str(parsed.get("image") or "").strip() or None,
+                                project_sandbox_config=proj_cfg,
+                            ),
                             "setup_command": str(
                                 parsed.get("setup_command") or ""
                             ).strip()

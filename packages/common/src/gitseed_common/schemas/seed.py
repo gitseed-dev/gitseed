@@ -79,7 +79,7 @@ class UpdateSeedRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
     specification: str | None = None
-    acceptance_criteria: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] | None = None
     plan: str | None = None
     tags: list[str] | None = None
     autonomy: SeedAutonomy | None = None

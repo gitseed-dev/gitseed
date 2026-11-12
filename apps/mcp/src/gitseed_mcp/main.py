@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import secrets
 import sys
 import uuid
 from collections.abc import AsyncIterator
@@ -14,6 +15,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.middleware.cors import CORSMiddleware
 
 from gitseed_mcp.client import GitSeedApiError
 from gitseed_mcp.config import MCPSettings, get_settings
@@ -34,9 +36,13 @@ class SSESession:
     token: str | None = None
     queue: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
+    @property
+    def bound_token(self) -> str | None:
+        return self.token
+
 
 def extract_request_token(request: Request) -> str | None:
-    """Extract a caller API token from Authorization Bearer, X-API-Key, or query parameters."""
+    """Extract a caller API token from Authorization Bearer or X-API-Key headers."""
     auth_header = request.headers.get("authorization")
     if auth_header:
         parts = auth_header.strip().split(None, 1)
@@ -48,10 +54,6 @@ def extract_request_token(request: Request) -> str | None:
     api_key = request.headers.get("x-api-key")
     if api_key and api_key.strip():
         return api_key.strip()
-
-    query_token = request.query_params.get("token") or request.query_params.get("api_key")
-    if query_token and query_token.strip():
-        return query_token.strip()
 
     return None
 
@@ -90,6 +92,37 @@ def _unauthorized_response(
     )
 
 
+def _forbidden_session_response(
+    detail: str = "Forbidden: mismatched bearer token for MCP session",
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={"error": detail},
+    )
+
+
+def _tokens_match(token_a: str | None, token_b: str | None) -> bool:
+    """Compare bearer tokens in constant time; returns False if only one is set."""
+    if token_a is None and token_b is None:
+        return True
+    if token_a is None or token_b is None:
+        return False
+    return secrets.compare_digest(
+        token_a.encode("utf-8"),
+        token_b.encode("utf-8"),
+    )
+
+
+def _signal_sse_close(sess: SSESession | None) -> None:
+    """Push None sentinel onto an SSESession queue so its generator exits cleanly."""
+    if sess is None:
+        return
+    try:
+        sess.queue.put_nowait(None)
+    except asyncio.QueueFull:
+        pass
+
+
 def create_app(
     settings: MCPSettings | None = None,
     *,
@@ -114,6 +147,22 @@ def create_app(
         description="Model Context Protocol (MCP) server for the GitSeed AI-native SDLC platform.",
         lifespan=lifespan,
     )
+    allowed_origins = list(cfg.allowed_origins)
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "Accept",
+                "Mcp-Session-Id",
+                "Last-Event-ID",
+                "X-API-Key",
+            ],
+            expose_headers=["Mcp-Session-Id"],
+        )
     app.state.mcp_server = mcp_server
     app.state.sse_sessions = sse_sessions
     app.state.streamable_sessions = streamable_sessions
@@ -183,14 +232,20 @@ def create_app(
 
         session_id = request.headers.get("mcp-session-id")
         session_state = streamable_sessions.get(session_id) if session_id else None
+        existing_sse = sse_sessions.get(session_id) if session_id else None
 
         if session_state is not None:
             cached_token = session_state.get("token")
-            if cached_token is not None and incoming_token != cached_token:
+            if not _tokens_match(cached_token, incoming_token):
                 # Never allow an unauthenticated or differently-authenticated caller
                 # to inherit or overwrite another user's authenticated session.
                 session_id = uuid.uuid4().hex
                 session_state = None
+        elif existing_sse is not None and not _tokens_match(
+            existing_sse.bound_token, incoming_token
+        ):
+            session_id = uuid.uuid4().hex
+            session_state = None
 
         if not session_id:
             session_id = uuid.uuid4().hex
@@ -199,7 +254,16 @@ def create_app(
             session_state = {"token": incoming_token, "queue": None}
             streamable_sessions[session_id] = session_state
             while len(streamable_sessions) > 1000:
-                streamable_sessions.pop(next(iter(streamable_sessions)), None)
+                evicted_state = streamable_sessions.pop(
+                    next(iter(streamable_sessions)), None
+                )
+                if isinstance(evicted_state, dict):
+                    evicted_q = evicted_state.get("queue")
+                    if isinstance(evicted_q, asyncio.Queue):
+                        try:
+                            evicted_q.put_nowait(None)
+                        except asyncio.QueueFull:
+                            pass
 
         request_token = incoming_token
 
@@ -245,15 +309,35 @@ def create_app(
         if incoming_token is None:
             return _unauthorized_response()
 
-        mcp_session_id = request.headers.get("mcp-session-id") or uuid.uuid4().hex
+        raw_session_id = request.headers.get("mcp-session-id")
+        if raw_session_id:
+            existing_sse = sse_sessions.get(raw_session_id)
+            if existing_sse is not None and not _tokens_match(
+                existing_sse.bound_token, incoming_token
+            ):
+                return _forbidden_session_response()
+            existing_state_check = streamable_sessions.get(raw_session_id)
+            if isinstance(existing_state_check, dict) and not _tokens_match(
+                existing_state_check.get("token"), incoming_token
+            ):
+                return _forbidden_session_response()
+
+        mcp_session_id = raw_session_id or uuid.uuid4().hex
         accept = request.headers.get("accept", "")
         if "text/event-stream" in accept:
             existing_state = streamable_sessions.get(mcp_session_id)
-            if existing_state is not None:
-                cached_token = existing_state.get("token")
-                if cached_token is not None and incoming_token != cached_token:
-                    mcp_session_id = uuid.uuid4().hex
-                    existing_state = None
+            prev_sse = sse_sessions.get(mcp_session_id)
+            if prev_sse is not None:
+                _signal_sse_close(prev_sse)
+            if isinstance(existing_state, dict):
+                prev_q = existing_state.get("queue")
+                if isinstance(prev_q, asyncio.Queue) and (
+                    prev_sse is None or prev_q is not prev_sse.queue
+                ):
+                    try:
+                        prev_q.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass
 
             session = SSESession(
                 session_id=mcp_session_id,
@@ -261,7 +345,9 @@ def create_app(
             )
             sse_sessions[mcp_session_id] = session
             while len(sse_sessions) > 1000:
-                sse_sessions.pop(next(iter(sse_sessions)), None)
+                evicted_sse = sse_sessions.pop(next(iter(sse_sessions)), None)
+                if evicted_sse is not session:
+                    _signal_sse_close(evicted_sse)
 
             if existing_state is None:
                 streamable_sessions[mcp_session_id] = {
@@ -269,7 +355,19 @@ def create_app(
                     "queue": session.queue,
                 }
                 while len(streamable_sessions) > 1000:
-                    streamable_sessions.pop(next(iter(streamable_sessions)), None)
+                    evicted_st = streamable_sessions.pop(
+                        next(iter(streamable_sessions)), None
+                    )
+                    if isinstance(evicted_st, dict):
+                        evicted_q = evicted_st.get("queue")
+                        if (
+                            isinstance(evicted_q, asyncio.Queue)
+                            and evicted_q is not session.queue
+                        ):
+                            try:
+                                evicted_q.put_nowait(None)
+                            except asyncio.QueueFull:
+                                pass
             else:
                 streamable_sessions[mcp_session_id]["queue"] = session.queue
 
@@ -290,9 +388,10 @@ def create_app(
                             break
                         yield f"event: message\ndata: {msg}\n\n"
                 finally:
-                    sse_sessions.pop(mcp_session_id, None)
+                    if sse_sessions.get(mcp_session_id) is session:
+                        sse_sessions.pop(mcp_session_id, None)
                     st = streamable_sessions.get(mcp_session_id)
-                    if isinstance(st, dict):
+                    if isinstance(st, dict) and st.get("queue") is session.queue:
                         st["queue"] = None
 
             return StreamingResponse(
@@ -325,23 +424,27 @@ def create_app(
 
         session_id = request.headers.get("mcp-session-id")
         if session_id:
-            existing_state = streamable_sessions.get(session_id)
-            if (
-                isinstance(existing_state, dict)
-                and existing_state.get("token") is not None
-                and existing_state.get("token") != incoming_token
+            existing_sse = sse_sessions.get(session_id)
+            if existing_sse is not None and not _tokens_match(
+                existing_sse.bound_token, incoming_token
             ):
-                return _unauthorized_response(
-                    "Unauthorized: mismatched bearer token for MCP session"
-                )
+                return _forbidden_session_response()
+            existing_state = streamable_sessions.get(session_id)
+            if isinstance(existing_state, dict) and not _tokens_match(
+                existing_state.get("token"), incoming_token
+            ):
+                return _forbidden_session_response()
+
             session_state = streamable_sessions.pop(session_id, None)
             if isinstance(session_state, dict):
                 q = session_state.get("queue")
                 if isinstance(q, asyncio.Queue):
-                    await q.put(None)
+                    try:
+                        q.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass
             sse_session = sse_sessions.pop(session_id, None)
-            if sse_session is not None:
-                await sse_session.queue.put(None)
+            _signal_sse_close(sse_session)
         return Response(status_code=204)
 
     # ── MCP HTTP + SSE Transport (/sse + /messages) ───────────────────
@@ -361,7 +464,9 @@ def create_app(
         )
         sse_sessions[session_id] = session
         while len(sse_sessions) > 1000:
-            sse_sessions.pop(next(iter(sse_sessions)), None)
+            evicted_sse = sse_sessions.pop(next(iter(sse_sessions)), None)
+            if evicted_sse is not session:
+                _signal_sse_close(evicted_sse)
         once = request.query_params.get("once") in ("1", "true")
 
         async def sse_generator() -> AsyncIterator[str]:
@@ -379,7 +484,8 @@ def create_app(
                         break
                     yield f"event: message\ndata: {msg}\n\n"
             finally:
-                sse_sessions.pop(session_id, None)
+                if sse_sessions.get(session_id) is session:
+                    sse_sessions.pop(session_id, None)
 
         return StreamingResponse(
             sse_generator(),
@@ -398,14 +504,20 @@ def create_app(
         if (ct_err := _validate_json_content_type(request)) is not None:
             return ct_err
 
+        incoming_token = extract_request_token(request)
+        if incoming_token is None:
+            return _unauthorized_response()
+
         session_id = request.query_params.get("session_id") or request.headers.get(
             "mcp-session-id"
         )
         session = sse_sessions.get(session_id) if session_id else None
-        incoming_token = extract_request_token(request)
-        if incoming_token is None:
-            return _unauthorized_response()
-        if session is not None and session.token is not None and incoming_token != session.token:
+        if not session_id or session is None:
+            return JSONResponse(
+                {"error": "Unknown or expired SSE session"},
+                status_code=404,
+            )
+        if not _tokens_match(session.bound_token, incoming_token):
             return _unauthorized_response(
                 "Unauthorized: missing or mismatched bearer token for SSE session"
             )
@@ -417,8 +529,7 @@ def create_app(
             err = GitSeedMCPServer._error_response(
                 None, JSONRPC_PARSE_ERROR, f"Parse error: {exc}"
             )
-            if session is not None:
-                await session.queue.put(json.dumps(err))
+            await session.queue.put(json.dumps(err))
             return JSONResponse(status_code=400, content=err)
 
         response_data = await mcp_server.handle_payload(
@@ -429,12 +540,11 @@ def create_app(
         if response_data is None:
             return Response(status_code=202)
 
-        if session is not None:
-            if isinstance(response_data, list):
-                for item in response_data:
-                    await session.queue.put(json.dumps(item))
-            else:
-                await session.queue.put(json.dumps(response_data))
+        if isinstance(response_data, list):
+            for item in response_data:
+                await session.queue.put(json.dumps(item))
+        else:
+            await session.queue.put(json.dumps(response_data))
 
         return JSONResponse(status_code=202, content=response_data)
 
@@ -453,9 +563,14 @@ async def run_stdio_async(
     """Process newline-delimited JSON-RPC 2.0 messages over stdin/stdout."""
     reader = input_stream or sys.stdin
     writer = output_stream or sys.stdout
+    raw_buffer = getattr(reader, "buffer", None)
 
     while True:
-        line = await asyncio.to_thread(reader.readline)
+        if raw_buffer is not None:
+            raw_line: bytes = await asyncio.to_thread(raw_buffer.readline)
+            line = raw_line.decode("utf-8", errors="replace")
+        else:
+            line = await asyncio.to_thread(reader.readline)
         if not line:
             break
         stripped = line.strip()
@@ -497,8 +612,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--host",
         type=str,
-        default="127.0.0.1",
-        help="HTTP bind host (defaults to 127.0.0.1).",
+        default=None,
+        help="HTTP bind host (defaults to HOST env or 127.0.0.1).",
     )
     parser.add_argument(
         "--port",
@@ -523,7 +638,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def cli(argv: list[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
-    base_settings = get_settings()
+    base_settings = MCPSettings()
 
     overrides: dict[str, Any] = {}
     if args.host is not None:
@@ -539,7 +654,14 @@ def cli(argv: list[str] | None = None) -> None:
 
     if args.stdio or args.transport == "stdio":
         server = GitSeedMCPServer(settings=settings)
-        asyncio.run(run_stdio_async(server))
+
+        async def _run_stdio_with_cleanup() -> None:
+            try:
+                await run_stdio_async(server)
+            finally:
+                await server.aclose()
+
+        asyncio.run(_run_stdio_with_cleanup())
         return
 
     app = create_app(settings=settings)

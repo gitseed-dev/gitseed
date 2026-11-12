@@ -12,6 +12,7 @@ from gitseed_common.schemas import (
     CreateSeedCommentRequest,
 )
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 
 from gitseed_cli.client import CLIError, GitSeedClient
@@ -71,7 +72,7 @@ def register_workflow_commands(app: typer.Typer) -> None:
                 console.print(
                     f"[green]✓[/green] Approved spend checkpoint for seed "
                     f"[bold]#{sd.number}[/bold] through [bold]${amt:.2f}[/bold] "
-                    f"(status: {sd.status})."
+                    f"(status: {escape(str(sd.status))})."
                 )
             return
 
@@ -93,9 +94,10 @@ def register_workflow_commands(app: typer.Typer) -> None:
             )
             return
         console.print(
-            f"[green]✓[/green] Approved stage [bold]{approval.stage}[/bold] on seed "
-            f"[bold]#{updated_seed.number}[/bold] -> stage: [bold]{updated_seed.stage}[/bold], "
-            f"status: [bold]{updated_seed.status}[/bold]."
+            f"[green]✓[/green] Approved stage [bold]{escape(str(approval.stage))}[/bold] on seed "
+            f"[bold]#{updated_seed.number}[/bold] -> "
+            f"stage: [bold]{escape(str(updated_seed.stage))}[/bold], "
+            f"status: [bold]{escape(str(updated_seed.status))}[/bold]."
         )
 
     @app.command("request-changes")
@@ -127,10 +129,11 @@ def register_workflow_commands(app: typer.Typer) -> None:
             )
             return
         console.print(
-            f"[yellow]✓[/yellow] Requested changes on stage [bold]{approval.stage}[/bold] "
+            f"[yellow]✓[/yellow] Requested changes on stage "
+            f"[bold]{escape(str(approval.stage))}[/bold] "
             f"for seed [bold]#{updated_seed.number}[/bold] -> "
-            f"stage: [bold]{updated_seed.stage}[/bold], "
-            f"status: [bold]{updated_seed.status}[/bold]."
+            f"stage: [bold]{escape(str(updated_seed.stage))}[/bold], "
+            f"status: [bold]{escape(str(updated_seed.status))}[/bold]."
         )
 
     @app.command("reject")
@@ -161,7 +164,8 @@ def register_workflow_commands(app: typer.Typer) -> None:
             return
         console.print(
             f"[red]✓[/red] Rejected seed [bold]#{updated_seed.number}[/bold] "
-            f"at stage [bold]{approval.stage}[/bold] (status: [bold]{updated_seed.status}[/bold])."
+            f"at stage [bold]{escape(str(approval.stage))}[/bold] "
+            f"(status: [bold]{escape(str(updated_seed.status))}[/bold])."
         )
 
     @app.command("comment")
@@ -181,7 +185,10 @@ def register_workflow_commands(app: typer.Typer) -> None:
         if opts.output == "json":
             dump_json(comment)
             return
-        console.print(f"[green]✓[/green] Posted comment ({comment.id}) on seed {comment.seed_id}.")
+        console.print(
+            f"[green]✓[/green] Posted comment ({escape(str(comment.id))}) "
+            f"on seed {escape(str(comment.seed_id))}."
+        )
 
     @app.command("steer")
     def steer_cmd(
@@ -220,8 +227,8 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(comment)
             return
         console.print(
-            f"[green]✓[/green] Sent steering directive to [bold]@{handle}[/bold] "
-            f"on seed [bold]#{seed.number}[/bold] ({comment.id})."
+            f"[green]✓[/green] Sent steering directive to [bold]@{escape(handle)}[/bold] "
+            f"on seed [bold]#{seed.number}[/bold] ({escape(str(comment.id))})."
         )
 
     @app.command("retry")
@@ -246,9 +253,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(run)
             return
         console.print(
-            f"[green]✓[/green] Queued retry run [bold]{run.id}[/bold] "
+            f"[green]✓[/green] Queued retry run [bold]{escape(str(run.id))}[/bold] "
             f"(attempt #{run.attempt}) for seed [bold]#{seed.number}[/bold] "
-            f"in stage [bold]{run.stage}[/bold]."
+            f"in stage [bold]{escape(str(run.stage))}[/bold]."
         )
 
     @app.command("start")
@@ -264,8 +271,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(seed)
             return
         console.print(
-            f"[green]✓[/green] Started seed [bold]#{seed.number}[/bold] ({seed.id}) "
-            f"in stage [bold]{seed.stage}[/bold] (status: [bold]{seed.status}[/bold])."
+            f"[green]✓[/green] Started seed [bold]#{seed.number}[/bold] ({escape(str(seed.id))}) "
+            f"in stage [bold]{escape(str(seed.stage))}[/bold] "
+            f"(status: [bold]{escape(str(seed.status))}[/bold])."
         )
 
     @app.command("advance")
@@ -298,8 +306,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(seed)
             return
         console.print(
-            f"[green]✓[/green] Advanced seed [bold]#{seed.number}[/bold] ({seed.id}) "
-            f"to stage [bold]{seed.stage}[/bold] (status: [bold]{seed.status}[/bold])."
+            f"[green]✓[/green] Advanced seed [bold]#{seed.number}[/bold] ({escape(str(seed.id))}) "
+            f"to stage [bold]{escape(str(seed.stage))}[/bold] "
+            f"(status: [bold]{escape(str(seed.status))}[/bold])."
         )
 
     @app.command("move-back")
@@ -329,8 +338,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(seed)
             return
         console.print(
-            f"[yellow]✓[/yellow] Moved seed [bold]#{seed.number}[/bold] ({seed.id}) "
-            f"back to stage [bold]{seed.stage}[/bold] (status: [bold]{seed.status}[/bold])."
+            f"[yellow]✓[/yellow] Moved seed [bold]#{seed.number}[/bold] ({escape(str(seed.id))}) "
+            f"back to stage [bold]{escape(str(seed.stage))}[/bold] "
+            f"(status: [bold]{escape(str(seed.status))}[/bold])."
         )
 
     @app.command("stop")
@@ -346,8 +356,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(seed)
             return
         console.print(
-            f"[yellow]✓[/yellow] Stopped seed [bold]#{seed.number}[/bold] ({seed.id}) "
-            f"in stage [bold]{seed.stage}[/bold] (status: [bold]{seed.status}[/bold])."
+            f"[yellow]✓[/yellow] Stopped seed [bold]#{seed.number}[/bold] ({escape(str(seed.id))}) "
+            f"in stage [bold]{escape(str(seed.stage))}[/bold] "
+            f"(status: [bold]{escape(str(seed.status))}[/bold])."
         )
 
     @app.command("resume")
@@ -363,8 +374,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(seed)
             return
         console.print(
-            f"[green]✓[/green] Resumed seed [bold]#{seed.number}[/bold] ({seed.id}) "
-            f"in stage [bold]{seed.stage}[/bold] (status: [bold]{seed.status}[/bold])."
+            f"[green]✓[/green] Resumed seed [bold]#{seed.number}[/bold] ({escape(str(seed.id))}) "
+            f"in stage [bold]{escape(str(seed.stage))}[/bold] "
+            f"(status: [bold]{escape(str(seed.status))}[/bold])."
         )
 
     @app.command("cancel")
@@ -392,8 +404,8 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(cancelled)
             return
         console.print(
-            f"[green]✓[/green] Cancelled run [bold]{cancelled.id}[/bold] "
-            f"(status: {cancelled.status})."
+            f"[green]✓[/green] Cancelled run [bold]{escape(str(cancelled.id))}[/bold] "
+            f"(status: {escape(str(cancelled.status))})."
         )
 
     @app.command("close")
@@ -408,7 +420,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
         if opts.output == "json":
             dump_json(seed)
             return
-        console.print(f"[green]✓[/green] Closed seed [bold]#{seed.number}[/bold] ({seed.id}).")
+        console.print(
+            f"[green]✓[/green] Closed seed [bold]#{seed.number}[/bold] ({escape(str(seed.id))})."
+        )
 
     @app.command("reopen")
     def reopen_cmd(
@@ -423,8 +437,9 @@ def register_workflow_commands(app: typer.Typer) -> None:
             dump_json(seed)
             return
         console.print(
-            f"[green]✓[/green] Reopened seed [bold]#{seed.number}[/bold] ({seed.id}) "
-            f"in stage [bold]{seed.stage}[/bold] (status: {seed.status})."
+            f"[green]✓[/green] Reopened seed [bold]#{seed.number}[/bold] ({escape(str(seed.id))}) "
+            f"in stage [bold]{escape(str(seed.stage))}[/bold] "
+            f"(status: {escape(str(seed.status))})."
         )
 
     @app.command("ask")
@@ -472,19 +487,19 @@ def register_workflow_commands(app: typer.Typer) -> None:
         console.print(
             Panel(
                 Markdown(resp.reply),
-                title=f"@{resp.agent_handle} ({resp.model})",
+                title=f"@{escape(str(resp.agent_handle))} ({escape(str(resp.model))})",
                 expand=False,
             )
         )
         if resp.referenced_files:
-            console.print(
-                "[dim]Referenced files:[/dim] " + ", ".join(resp.referenced_files)
-            )
+            escaped_refs = ", ".join(escape(str(rf)) for rf in resp.referenced_files)
+            console.print(f"[dim]Referenced files:[/dim] {escaped_refs}")
         if resp.proposed_seeds:
             console.print("\n[bold cyan]Proposed Seeds:[/bold cyan]")
             for idx, prop in enumerate(resp.proposed_seeds, start=1):
                 console.print(
-                    f"  [bold]{idx}. {prop.title}[/bold] (autonomy: {prop.autonomy})"
+                    f"  [bold]{idx}. {escape(str(prop.title))}[/bold] "
+                    f"(autonomy: {escape(str(prop.autonomy))})"
                 )
                 if prop.description:
-                    console.print(f"     {prop.description}")
+                    console.print(f"     {escape(str(prop.description))}")

@@ -17,6 +17,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -106,7 +107,95 @@ _IGNORED_FILES = {
 }
 MAX_PUSH_FILES = 500
 MAX_PUSH_BYTES = 50 * 1024 * 1024
+MAX_SESSION_FILE_BYTES = 10 * 1024 * 1024
+MAX_SESSION_ARCHIVE_UNPACKED_BYTES = 128 * 1024 * 1024
+MAX_SESSION_ARCHIVE_FILES = 10_000
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[@-Z\\-_]")
+
+_ENV_TEMPLATE_NAMES = frozenset(
+    {
+        ".env.example",
+        ".env.sample",
+        ".env.template",
+        ".env.dist",
+    }
+)
+_DEFAULT_PROTECTED_PUSH_PATTERNS: tuple[str, ...] = (
+    ".vscode/*",
+    ".vscode/**",
+    ".gitseed/*",
+    ".gitseed/**",
+    ".gitmodules",
+    ".env",
+    ".env.*",
+    "*id_rsa*",
+    "*id_dsa*",
+    "*id_ecdsa*",
+    "*id_ed25519*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+)
+_SESSION_SECRET_SCAN_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("aws_access_key_id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("aws_sts_key_id", re.compile(r"\bASIA[0-9A-Z]{16}\b")),
+    (
+        "github_token",
+        re.compile(
+            r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9_]{20,255}\b"
+            r"|\bgithub_pat_[A-Za-z0-9_]{20,255}\b"
+        ),
+    ),
+    ("gitlab_pat", re.compile(r"\bglpat-[A-Za-z0-9_\-=]{20,255}\b")),
+    ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,255}\b")),
+    (
+        "private_key_pem",
+        re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED |)?PRIVATE KEY-----"),
+    ),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("google_oauth_token", re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}\b")),
+    ("xai_api_key", re.compile(r"\bxai-[A-Za-z0-9]{20,}\b")),
+    ("gitseed_token", re.compile(r"(?<![A-Za-z0-9_])gs(?:p|sse|r)_[A-Za-z0-9_.-]{16,}")),
+    ("anthropic_api_key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{16,255}\b")),
+    ("openai_api_key", re.compile(r"\bsk-(?:proj-|live-|svcacct-)?[A-Za-z0-9_\-]{20,255}\b")),
+)
+
+
+def _safe_git_env(home_dir: str | None = None) -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get(
+            "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        ),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C",
+    }
+    if home_dir:
+        env["HOME"] = home_dir
+    elif os.environ.get("HOME"):
+        env["HOME"] = os.environ["HOME"]
+    for win_var in ("SYSTEMROOT", "TEMP", "TMP", "USERPROFILE"):
+        if os.environ.get(win_var):
+            env[win_var] = os.environ[win_var]
+    return env
+
+
+def _safe_git_config_flags(*, allow_local_file_protocol: bool = False) -> list[str]:
+    flags = [
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.symlinks=false",
+        "-c",
+        "protocol.ext.allow=never",
+    ]
+    if not allow_local_file_protocol:
+        flags.extend(["-c", "protocol.file.allow=never"])
+    return flags
 
 
 def session_data_dir(owner_id: str) -> Path:
@@ -124,6 +213,45 @@ def is_ignored_path(rel_path: str) -> bool:
     return rel_path.startswith(_IGNORED_PREFIXES)
 
 
+def _strip_dot_slash(p: str) -> str:
+    cleaned = p.replace("\\", "/")
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    return cleaned.lstrip("/")
+
+
+strip_dot_slash = _strip_dot_slash
+
+
+def _matches_case_insensitive_glob(norm_path: str, norm_pat: str) -> bool:
+    if not norm_path or not norm_pat:
+        return False
+    if norm_pat.endswith("/"):
+        prefix = norm_pat.rstrip("/")
+        if prefix and (norm_path == prefix or norm_path.startswith(f"{prefix}/")):
+            return True
+    elif "*" not in norm_pat and "?" not in norm_pat and "[" not in norm_pat:
+        if norm_path == norm_pat or norm_path.startswith(f"{norm_pat}/"):
+            return True
+    if fnmatch.fnmatchcase(norm_path, norm_pat):
+        return True
+    if "/" not in norm_pat and fnmatch.fnmatchcase(PurePosixPath(norm_path).name, norm_pat):
+        return True
+    if "**" in norm_pat:
+        regex_pat = (
+            "^"
+            + re.escape(norm_pat)
+            .replace(r"\*\*/", "(?:.+/)?")
+            .replace(r"\*\*", ".*")
+            .replace(r"\*", "[^/]*")
+            .replace(r"\?", ".")
+            + "$"
+        )
+        if re.match(regex_pat, norm_path) is not None:
+            return True
+    return False
+
+
 def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text).replace("\r", "")
 
@@ -136,17 +264,36 @@ def strip_ansi(text: str) -> str:
 def manifest_from_tar(tar_bytes: bytes) -> dict[str, str]:
     """Return `{rel_path: sha256}` for regular files in a workspace tar (paths relative to repo root)."""
     manifest: dict[str, str] = {}
-    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:*") as tar:
-        for member in tar.getmembers():
+    total_bytes = 0
+    file_count = 0
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r|*") as tar:
+        for member in tar:
             if not member.isfile():
                 continue
-            rel = member.name.lstrip("./").removeprefix("workspace/").strip("/")
-            if not rel or is_ignored_path(rel):
+            rel = _strip_dot_slash(member.name).removeprefix("workspace/").strip("/")
+            if not rel or rel == "." or ".." in PurePosixPath(rel).parts or is_ignored_path(rel):
+                continue
+            if member.size > MAX_SESSION_FILE_BYTES:
                 continue
             f_obj = tar.extractfile(member)
             if f_obj is None:
                 continue
-            manifest[rel] = hashlib.sha256(f_obj.read()).hexdigest()
+            raw = f_obj.read(MAX_SESSION_FILE_BYTES + 1)
+            if len(raw) > MAX_SESSION_FILE_BYTES:
+                continue
+            total_bytes += len(raw)
+            file_count += 1
+            if (
+                total_bytes > MAX_SESSION_ARCHIVE_UNPACKED_BYTES
+                or file_count > MAX_SESSION_ARCHIVE_FILES
+            ):
+                logger.warning(
+                    "Workspace baseline tar exceeded unpack bounds (%d files, %d bytes); truncating manifest",
+                    file_count,
+                    total_bytes,
+                )
+                break
+            manifest[rel] = hashlib.sha256(raw).hexdigest()
     return manifest
 
 
@@ -162,18 +309,20 @@ def init_clean_git_baseline(repo_dir: Path, *, ref: str = "main", head_sha: str 
     if git_dir.exists():
         shutil.rmtree(git_dir, ignore_errors=True)
     branch = (ref or "main").strip() or "main"
+    if branch.startswith("-"):
+        branch = "main"
     short_sha = head_sha[:7] if head_sha else "initial"
     env = {
-        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "HOME": str(repo_dir),
+        **_safe_git_env(str(repo_dir)),
         "GIT_AUTHOR_NAME": "GitSeed",
         "GIT_AUTHOR_EMAIL": "session@gitseed.local",
         "GIT_COMMITTER_NAME": "GitSeed",
         "GIT_COMMITTER_EMAIL": "session@gitseed.local",
     }
+    safe_git = ["git", *_safe_git_config_flags()]
     try:
         subprocess.run(
-            ["git", "init", "-q", "-b", branch],
+            [*safe_git, "init", "-q", "-b", branch],
             cwd=str(repo_dir),
             env=env,
             capture_output=True,
@@ -181,7 +330,7 @@ def init_clean_git_baseline(repo_dir: Path, *, ref: str = "main", head_sha: str 
             timeout=15,
         )
         subprocess.run(
-            ["git", "config", "user.name", "GitSeed"],
+            [*safe_git, "config", "user.name", "GitSeed"],
             cwd=str(repo_dir),
             env=env,
             capture_output=True,
@@ -189,7 +338,7 @@ def init_clean_git_baseline(repo_dir: Path, *, ref: str = "main", head_sha: str 
             timeout=10,
         )
         subprocess.run(
-            ["git", "config", "user.email", "session@gitseed.local"],
+            [*safe_git, "config", "user.email", "session@gitseed.local"],
             cwd=str(repo_dir),
             env=env,
             capture_output=True,
@@ -197,7 +346,7 @@ def init_clean_git_baseline(repo_dir: Path, *, ref: str = "main", head_sha: str 
             timeout=10,
         )
         subprocess.run(
-            ["git", "add", "-A"],
+            [*safe_git, "add", "-A"],
             cwd=str(repo_dir),
             env=env,
             capture_output=True,
@@ -206,7 +355,7 @@ def init_clean_git_baseline(repo_dir: Path, *, ref: str = "main", head_sha: str 
         )
         subprocess.run(
             [
-                "git",
+                *safe_git,
                 "commit",
                 "-q",
                 "--allow-empty",
@@ -357,18 +506,36 @@ def files_from_archive(archive: bytes, strip_prefix: str) -> dict[str, bytes]:
     """Return `{rel_path: bytes}` for regular files, stripping the archive's top-level dir."""
     out: dict[str, bytes] = {}
     prefix = strip_prefix.strip("/") + "/"
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as tar:
-        for member in tar.getmembers():
+    total_bytes = 0
+    file_count = 0
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r|*") as tar:
+        for member in tar:
             if not member.isfile():
                 continue
-            name = member.name.lstrip("./")
+            name = _strip_dot_slash(member.name)
             rel = name[len(prefix):] if name.startswith(prefix) else name
-            rel = rel.strip("/")
-            if not rel or ".." in PurePosixPath(rel).parts or is_ignored_path(rel):
+            rel = _strip_dot_slash(rel).strip("/")
+            if not rel or rel == "." or ".." in PurePosixPath(rel).parts or is_ignored_path(rel):
+                continue
+            if member.size > MAX_SESSION_FILE_BYTES:
                 continue
             f_obj = tar.extractfile(member)
-            if f_obj is not None:
-                out[rel] = f_obj.read()
+            if f_obj is None:
+                continue
+            raw = f_obj.read(MAX_SESSION_FILE_BYTES + 1)
+            if len(raw) > MAX_SESSION_FILE_BYTES:
+                continue
+            total_bytes += len(raw)
+            file_count += 1
+            if (
+                total_bytes > MAX_SESSION_ARCHIVE_UNPACKED_BYTES
+                or file_count > MAX_SESSION_ARCHIVE_FILES
+            ):
+                raise Invalid(
+                    f"Workspace archive exceeds safe unpack limits ({MAX_SESSION_ARCHIVE_UNPACKED_BYTES // (1024 * 1024)} MiB / {MAX_SESSION_ARCHIVE_FILES} files). "
+                    "Remove large build artifacts or generated files from /workspace first."
+                )
+            out[rel] = raw
     return out
 
 
@@ -468,12 +635,12 @@ async def export_workspace(
 
 
 def _blocked(rel_path: str, blocked_paths: list[str]) -> bool:
+    norm_rel = _strip_dot_slash(rel_path.strip()).lower()
+    if not norm_rel:
+        return False
     for pat in blocked_paths:
-        clean = str(pat).strip().lstrip("./")
-        if clean and (
-            fnmatch.fnmatch(rel_path, clean)
-            or rel_path.startswith(clean.rstrip("/") + "/")
-        ):
+        clean = _strip_dot_slash(str(pat).strip()).lower()
+        if clean and _matches_case_insensitive_glob(norm_rel, clean):
             return True
     return False
 
@@ -509,13 +676,13 @@ def project_blocked_paths(project: Project) -> list[str]:
 
 
 def _clean_rel_path(path: str) -> str:
-    rel = path.strip().replace("\\", "/").removeprefix("/workspace/").lstrip("/")
-    if not rel:
+    rel = _strip_dot_slash(path.strip().replace("\\", "/").removeprefix("/workspace/"))
+    if not rel or rel == ".":
         raise Invalid("File path cannot be empty")
     parts = PurePosixPath(rel).parts
     if any(p in ("..", ".") for p in parts):
         raise Invalid("Invalid relative file path")
-    if ".git" in parts:
+    if any(p.lower() == ".git" for p in parts):
         raise Invalid("Cannot read or modify .git metadata directly")
     return "/".join(parts)
 
@@ -678,12 +845,21 @@ async def read_workspace_file(
         archive = await fetch_volume_archive(compute_backend, owner_id, f"/workspace/{rel}")
     current_bytes: bytes | None = None
     if archive is not None:
-        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as tar:
-            for member in tar.getmembers():
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r|*") as tar:
+            for member in tar:
                 if member.isfile():
+                    if member.size > MAX_SESSION_FILE_BYTES:
+                        raise Invalid(
+                            f"File '{rel}' exceeds the {MAX_SESSION_FILE_BYTES // (1024 * 1024)} MiB preview/edit limit"
+                        )
                     f_obj = tar.extractfile(member)
                     if f_obj is not None:
-                        current_bytes = f_obj.read()
+                        raw = f_obj.read(MAX_SESSION_FILE_BYTES + 1)
+                        if len(raw) > MAX_SESSION_FILE_BYTES:
+                            raise Invalid(
+                                f"File '{rel}' exceeds the {MAX_SESSION_FILE_BYTES // (1024 * 1024)} MiB preview/edit limit"
+                            )
+                        current_bytes = raw
                         break
 
     if current_bytes is None:
@@ -914,15 +1090,93 @@ async def draft_push_summary(
 # ---------------------------------------------------------------------------
 
 
-def _run_git(args: list[str], cwd: str, token: str = "", timeout: int = 180) -> subprocess.CompletedProcess[str]:
+def _is_protected_push_path(rel_path: str, blocked_paths: list[str] | None = None) -> bool:
+    clean_rel = _strip_dot_slash(rel_path.strip())
+    if not clean_rel or clean_rel == ".":
+        return True
+    parts = PurePosixPath(clean_rel).parts
+    if any(p.lower() == ".git" or p in ("..", ".") for p in parts):
+        return True
+    explicit_blocked = [p for p in (blocked_paths or []) if p]
+    if _blocked(clean_rel, explicit_blocked):
+        return True
+    norm_rel = clean_rel.lower()
+    name_low = PurePosixPath(norm_rel).name
+    if name_low in _ENV_TEMPLATE_NAMES:
+        return False
+    if clean_rel == ".gitseed/run.json":
+        return False
+    for pat in _DEFAULT_PROTECTED_PUSH_PATTERNS:
+        clean_pat = _strip_dot_slash(pat).lower()
+        if _matches_case_insensitive_glob(norm_rel, clean_pat):
+            return True
+    return False
+
+
+def _validate_session_push_governance(
+    changes: list[dict[str, str]],
+    files: dict[str, bytes],
+    blocked_paths: list[str] | None = None,
+) -> None:
+    """Enforce blocked-path governance and added-file secret scans before pushing session commits."""
+    for c in changes:
+        rel_path = str(c.get("path") or "").strip()
+        status = str(c.get("status") or "").strip()
+        if _is_protected_push_path(rel_path, blocked_paths):
+            raise Invalid(
+                f"Cannot push protected path '{rel_path}': blocked by repository governance rules"
+            )
+        if status == "deleted":
+            continue
+        raw = files.get(rel_path, b"")
+        if len(raw) > MAX_SESSION_FILE_BYTES:
+            raise Invalid(
+                f"Cannot push '{rel_path}': file exceeds {MAX_SESSION_FILE_BYTES // (1024 * 1024)} MiB limit"
+            )
+        text, is_bin = _decode_text_or_binary(raw)
+        if is_bin or not text:
+            continue
+        for rule_name, pattern in _SESSION_SECRET_SCAN_RULES:
+            if pattern.search(text):
+                raise Invalid(
+                    f"Secret scan blocked push: potential '{rule_name}' detected in '{rel_path}'"
+                )
+
+
+def _is_local_git_dir(url: str) -> bool:
+    cleaned = (url or "").strip()
+    if not cleaned or "://" in cleaned or cleaned.startswith("git@"):
+        return False
+    try:
+        return Path(cleaned).exists()
+    except OSError:
+        return False
+
+
+def _run_git(
+    args: list[str],
+    cwd: str,
+    token: str = "",
+    timeout: int = 180,
+    *,
+    allow_local_file_protocol: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    cmd = ["git", *_safe_git_config_flags(allow_local_file_protocol=allow_local_file_protocol), *args]
     res = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout
+        cmd,
+        cwd=cwd,
+        env=_safe_git_env(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
     )
     if res.returncode != 0:
         err = (res.stderr or res.stdout or "git failed").strip()
         if token:
             err = err.replace(token, "***")
-        raise Invalid(f"git {args[0]} failed: {err[:300]}")
+        subcmd = next((a for a in args if not a.startswith("-")), args[0] if args else "cmd")
+        raise Invalid(f"git {subcmd} failed: {err[:300]}")
     return res
 
 
@@ -938,37 +1192,82 @@ def push_changes_to_branch(
     commit_message: str,
     author_name: str,
     author_email: str,
+    blocked_paths: list[str] | None = None,
 ) -> str:
     """Clone `base_ref`, check out `head_sha`, apply changes, commit to `branch`, push. Returns commit SHA."""
+    clean_base = (base_ref or "main").strip()
+    clean_branch = (branch or "").strip()
+    if not clean_base or clean_base.startswith("-") or not clean_branch or clean_branch.startswith("-"):
+        raise Invalid("Invalid Git branch or base reference")
+    _validate_session_push_governance(changes, files, blocked_paths)
+    is_local = _is_local_git_dir(auth_url)
+
     with tempfile.TemporaryDirectory() as tmp:
         repo_dir = str(Path(tmp) / "repo")
-        _run_git(["clone", "--depth", "50", "--branch", base_ref, auth_url, repo_dir], tmp, token)
-        if head_sha:
+        clone_args = (
+            ["clone", "--branch", clean_base, "--", auth_url, repo_dir]
+            if is_local
+            else ["clone", "--depth", "50", "--branch", clean_base, "--", auth_url, repo_dir]
+        )
+        _run_git(clone_args, tmp, token, allow_local_file_protocol=is_local)
+        if head_sha and not head_sha.startswith("-"):
             try:
-                _run_git(["checkout", "-q", head_sha], repo_dir, token)
+                _run_git(["checkout", "-q", head_sha], repo_dir, token, allow_local_file_protocol=is_local)
             except Invalid:
                 try:
-                    _run_git(["fetch", "--depth", "1", "origin", head_sha], repo_dir, token)
-                    _run_git(["checkout", "-q", head_sha], repo_dir, token)
+                    _run_git(
+                        ["fetch", "--depth", "1", "origin", head_sha],
+                        repo_dir,
+                        token,
+                        allow_local_file_protocol=is_local,
+                    )
+                    _run_git(["checkout", "-q", head_sha], repo_dir, token, allow_local_file_protocol=is_local)
                 except Invalid:
-                    logger.warning("Session base %s unavailable; applying on %s tip", head_sha[:7], base_ref)
-        _run_git(["checkout", "-q", "-B", branch], repo_dir, token)
+                    logger.warning("Session base %s unavailable; applying on %s tip", head_sha[:7], clean_base)
+        _run_git(["checkout", "-q", "-B", clean_branch], repo_dir, token, allow_local_file_protocol=is_local)
 
-        root = Path(repo_dir).resolve()
+        root = Path(repo_dir)
+        root_resolved = root.resolve()
         for c in changes:
-            target = (root / c["path"]).resolve()
-            if not target.is_relative_to(root) or ".git" in Path(c["path"]).parts:
+            rel_clean = _strip_dot_slash(str(c["path"]).strip())
+            if not rel_clean or rel_clean == ".":
                 continue
+            rel_parts = PurePosixPath(rel_clean).parts
+            if any(p.lower() == ".git" or p in ("..", ".") for p in rel_parts):
+                continue
+            raw_target = root / rel_clean
+            cur_parent = root
+            for part in rel_parts[:-1]:
+                cur_parent = cur_parent / part
+                if cur_parent.is_symlink():
+                    raise Invalid(
+                        f"Cannot push '{c['path']}': parent directory in repository is a symlink"
+                    )
+            if not raw_target.parent.resolve().is_relative_to(root_resolved):
+                raise Invalid(
+                    f"Cannot push '{c['path']}': resolved path escapes repository root"
+                )
             if c["status"] == "deleted":
-                if target.is_file():
-                    target.unlink()
+                if raw_target.is_symlink() or raw_target.is_file():
+                    raw_target.unlink()
             else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(files[c["path"]])
+                if raw_target.is_symlink():
+                    raw_target.unlink()
+                raw_target.parent.mkdir(parents=True, exist_ok=True)
+                if not raw_target.parent.resolve().is_relative_to(root_resolved):
+                    raise Invalid(
+                        f"Cannot push '{c['path']}': resolved path escapes repository root"
+                    )
+                if raw_target.is_symlink():
+                    raw_target.unlink()
+                raw_target.write_bytes(files[c["path"]])
 
-        _run_git(["add", "-A"], repo_dir, token)
+        _run_git(["add", "-A"], repo_dir, token, allow_local_file_protocol=is_local)
         staged = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"], cwd=repo_dir, check=False
+            ["git", *_safe_git_config_flags(allow_local_file_protocol=is_local), "diff", "--cached", "--quiet"],
+            cwd=repo_dir,
+            env=_safe_git_env(repo_dir),
+            check=False,
         )
         if staged.returncode == 0:
             raise Invalid("No changes to push: the workspace matches the branch it started from")
@@ -976,13 +1275,19 @@ def push_changes_to_branch(
             [
                 "-c", f"user.name={author_name}",
                 "-c", f"user.email={author_email}",
-                "commit", "-q", "-m", commit_message,
+                "commit", "-q", "--no-verify", "-m", commit_message,
             ],
             repo_dir,
             token,
+            allow_local_file_protocol=is_local,
         )
-        sha = _run_git(["rev-parse", "HEAD"], repo_dir, token).stdout.strip()
-        _run_git(["push", "--force-with-lease", "origin", f"HEAD:refs/heads/{branch}"], repo_dir, token)
+        sha = _run_git(["rev-parse", "HEAD"], repo_dir, token, allow_local_file_protocol=is_local).stdout.strip()
+        _run_git(
+            ["push", "--no-verify", "--force-with-lease", "origin", f"HEAD:refs/heads/{clean_branch}"],
+            repo_dir,
+            token,
+            allow_local_file_protocol=is_local,
+        )
         return sha
 
 
@@ -1052,6 +1357,8 @@ async def push_session_to_seed(
             f"Too many changes to push ({len(changes)} files, {total_bytes // 1024} KB). "
             "Add build outputs to blocked paths or clean the workspace first."
         )
+    blocked_paths = project_blocked_paths(project)
+    _validate_session_push_governance(changes, files, blocked_paths)
 
     repo: ProjectRepository | None = None
     if repository_id is not None:
@@ -1108,6 +1415,7 @@ async def push_session_to_seed(
             commit_message=commit_msg,
             author_name=author_display,
             author_email=actor.email or "gitseed@localhost",
+            blocked_paths=blocked_paths,
         )
 
         now = datetime.now(UTC)
@@ -1276,6 +1584,7 @@ async def push_session_to_seed(
             commit_message=f"[{project.slug}#{seed.number}] {title.strip()}\n\nPushed from {session_label}.",
             author_name=actor.name or "GitSeed",
             author_email=actor.email or "gitseed@localhost",
+            blocked_paths=blocked_paths,
         )
     except Exception:
         # Roll back the placeholder seed so a failed push leaves nothing behind

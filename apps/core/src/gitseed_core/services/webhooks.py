@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import ipaddress
 import json
 import logging
@@ -232,7 +233,7 @@ async def _is_trusted_gitlab_author(
             f"{api_base}/projects/{quote(str(gl_project_id), safe='')}"
             f"/members/all/{quote(str(user_id), safe='')}"
         )
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
             resp = await client.get(member_url, headers=headers)
         if resp.status_code == 200 and isinstance(resp.json(), dict):
             member_data = resp.json()
@@ -574,7 +575,7 @@ async def dispatch_outbound_webhook(
         headers["X-GitSeed-Signature-256"] = f"sha256={digest}"
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
             resp = await client.post(outbound_url, content=raw_body, headers=headers)
             ok = 200 <= resp.status_code < 300
             return ok, resp.status_code, f"HTTP {resp.status_code}"
@@ -670,6 +671,151 @@ async def _resolve_project_unauthenticated(
     if project is None or project.archived_at is not None:
         raise NotFound("Project not found")
     return project
+
+
+def _extract_github_repo_full_name(payload: dict[str, Any]) -> str:
+    repo_obj = payload.get("repository")
+    if isinstance(repo_obj, dict):
+        return str(repo_obj.get("full_name") or "").strip()
+    return ""
+
+
+def _extract_gitlab_repo_full_name(payload: dict[str, Any]) -> str:
+    proj_obj = payload.get("project")
+    if isinstance(proj_obj, dict):
+        p_ns = str(proj_obj.get("path_with_namespace") or "").strip()
+        if p_ns:
+            return p_ns
+    repo_obj = payload.get("repository")
+    if isinstance(repo_obj, dict):
+        return str(
+            repo_obj.get("path_with_namespace") or repo_obj.get("full_name") or ""
+        ).strip()
+    return ""
+
+
+def _extract_bitbucket_repo_full_name(payload: dict[str, Any]) -> str:
+    repo_obj = payload.get("repository")
+    if isinstance(repo_obj, dict):
+        return str(repo_obj.get("full_name") or "").strip()
+    return ""
+
+
+async def _resolve_projects_from_repo_full_name(
+    session: AsyncSession,
+    full_name: str,
+    *,
+    provider: str | None = None,
+    provider_label: str | None = None,
+    missing_detail: str | None = None,
+) -> list[Project]:
+    if not provider_label:
+        prov_map = {
+            "github": "GitHub",
+            "gitlab": "GitLab",
+            "bitbucket": "Bitbucket",
+        }
+        provider_label = prov_map.get(
+            (provider or "").strip().lower(), provider or "Git"
+        )
+    if not missing_detail:
+        if (provider or "").strip().lower() == "gitlab":
+            missing_detail = "GitLab webhook payload missing project.path_with_namespace"
+        else:
+            missing_detail = f"{provider_label} webhook payload missing repository.full_name"
+    clean_name = (full_name or "").strip().lower()
+    if not clean_name:
+        raise NotFound(missing_detail)
+    stmt = (
+        select(Project)
+        .join(ProjectRepository, col(ProjectRepository.project_id) == col(Project.id))
+        .where(Project.archived_at == None)  # noqa: E711
+        .order_by(
+            col(ProjectRepository.is_primary).desc(),
+            col(ProjectRepository.id).asc(),
+        )
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    matched: list[Project] = []
+    seen_ids: set[str] = set()
+    for p_obj in rows:
+        if not isinstance(p_obj, Project) or p_obj.id in seen_ids:
+            continue
+        repo_stmt = select(ProjectRepository).where(
+            ProjectRepository.project_id == p_obj.id
+        )
+        p_repos = (await session.execute(repo_stmt)).scalars().all()
+        if any(
+            isinstance(r, ProjectRepository)
+            and (r.full_name or "").strip().lower() == clean_name
+            for r in p_repos
+        ):
+            seen_ids.add(p_obj.id)
+            matched.append(p_obj)
+    if not matched:
+        raise NotFound(
+            f"No project found for {provider_label} repository '{full_name.strip()}'"
+        )
+    matched.sort(
+        key=lambda p: 0
+        if bool(((p.sandbox_config or {}).get("webhook_config") or {}).get("enabled"))
+        else 1
+    )
+    return matched
+
+
+async def _verify_payload_repo_matches_project(
+    session: AsyncSession,
+    project: Project,
+    payload_repo: str,
+) -> None:
+    """Reject cross-repository webhook spoofing when payload repository is not attached to `project`."""
+    clean_repo = (payload_repo or "").strip().lower()
+    if not clean_repo:
+        return
+    exec_fn = getattr(session, "execute", None)
+    if not callable(exec_fn):
+        return
+    res = await session.execute(
+        select(ProjectRepository).where(ProjectRepository.project_id == project.id)
+    )
+    repo_rows: list[ProjectRepository] = []
+    scalars_fn = getattr(res, "scalars", None)
+    if callable(scalars_fn):
+        scalars_obj = scalars_fn()
+        if inspect.iscoroutine(scalars_obj):
+            scalars_obj.close()
+        else:
+            all_fn = getattr(scalars_obj, "all", None)
+            raw_rows = all_fn() if callable(all_fn) else []
+            if inspect.iscoroutine(raw_rows):
+                raw_rows.close()
+            elif isinstance(raw_rows, (list, tuple)):
+                repo_rows = [
+                    r for r in raw_rows if isinstance(r, ProjectRepository)
+                ]
+
+    if repo_rows:
+        if not any(
+            (r.full_name or "").strip().lower() == clean_repo for r in repo_rows
+        ):
+            raise Forbidden(
+                f"Webhook repository '{payload_repo}' is not attached to project '{project.slug}'"
+            )
+        return
+
+    if not isinstance(session, AsyncSession):
+        one_fn = getattr(res, "scalar_one_or_none", None)
+        if callable(one_fn):
+            one_val = one_fn()
+            if inspect.iscoroutine(one_val):
+                one_val.close()
+            elif isinstance(one_val, Seed):
+                return
+
+    raise Forbidden(
+        f"Webhook repository '{payload_repo}' is not attached to project '{project.slug}'"
+    )
 
 
 async def _resolve_webhook_secret(
@@ -960,7 +1106,7 @@ async def _handle_ci_failure_remediation(
 
 async def handle_github_webhook(
     session: AsyncSession,
-    project_id_or_slug: str,
+    project_id_or_slug: str | None,
     event_name: str,
     raw_body: bytes,
     signature_header: str | None,
@@ -968,7 +1114,70 @@ async def handle_github_webhook(
     *,
     delivery_id: str | None = None,
 ) -> WebhookDeliveryResponse:
-    """Verify and process an inbound GitHub webhook event for a project."""
+    """Verify and process an inbound GitHub webhook event for a project (or root GitHub App webhook)."""
+    event = (event_name or "").strip().lower()
+    repo_full_name = _extract_github_repo_full_name(payload)
+
+    if not (project_id_or_slug and project_id_or_slug.strip()):
+        if event == "ping" and not repo_full_name:
+            git_backends = (
+                await session.execute(
+                    select(Backend).where(Backend.enabled == True)  # noqa: E712
+                )
+            ).scalars().all()
+            for b_obj in git_backends:
+                if not isinstance(b_obj, Backend):
+                    continue
+                if (b_obj.provider or "").strip().lower() not in (
+                    "github",
+                    "github-app",
+                    "github-enterprise",
+                ):
+                    continue
+                secrets_map = decrypt_secrets(b_obj.secrets_encrypted)
+                b_secret = (secrets_map.get("webhook_secret") or "").strip()
+                if b_secret and verify_github_signature(
+                    raw_body, b_secret, signature_header
+                ):
+                    return WebhookDeliveryResponse(
+                        accepted=True,
+                        provider="github",
+                        event="ping",
+                        action="pong",
+                        detail="GitHub App webhook ping verified",
+                    )
+            raise Forbidden("Invalid X-Hub-Signature-256 webhook signature")
+
+        candidates = await _resolve_projects_from_repo_full_name(
+            session,
+            repo_full_name,
+            provider_label="GitHub",
+            missing_detail="GitHub webhook payload missing repository.full_name",
+        )
+        last_err: Exception | None = None
+        last_resp: WebhookDeliveryResponse | None = None
+        for cand in candidates:
+            try:
+                resp = await handle_github_webhook(
+                    session,
+                    cand.id,
+                    event_name=event_name,
+                    raw_body=raw_body,
+                    signature_header=signature_header,
+                    payload=payload,
+                    delivery_id=delivery_id,
+                )
+                if resp.accepted:
+                    return resp
+                last_resp = resp
+            except Forbidden as exc:
+                last_err = exc
+        if last_resp is not None:
+            return last_resp
+        if last_err is not None:
+            raise last_err
+        raise NotFound("Project not found")
+
     project = await _resolve_project_unauthenticated(session, project_id_or_slug)
     wh = (project.sandbox_config or {}).get("webhook_config") or {}
     if not wh.get("enabled", False):
@@ -978,9 +1187,10 @@ async def handle_github_webhook(
     if not secret or not verify_github_signature(raw_body, secret, signature_header):
         raise Forbidden("Invalid X-Hub-Signature-256 webhook signature")
 
-    event = (event_name or "").strip().lower()
+    await _verify_payload_repo_matches_project(session, project, repo_full_name)
+
     eff_delivery_id = delivery_id or str(payload.get("delivery_id") or "").strip() or None
-    if not await _check_and_record_delivery_id_async("github", eff_delivery_id):
+    if not await _check_and_record_delivery_id_async(f"github:{project.id}", eff_delivery_id):
         return WebhookDeliveryResponse(
             accepted=False,
             provider="github",
@@ -1389,7 +1599,7 @@ async def handle_github_webhook(
 
 async def handle_gitlab_webhook(
     session: AsyncSession,
-    project_id_or_slug: str,
+    project_id_or_slug: str | None,
     event_name: str,
     token_header: str | None,
     payload: dict[str, Any],
@@ -1397,6 +1607,37 @@ async def handle_gitlab_webhook(
     delivery_id: str | None = None,
 ) -> WebhookDeliveryResponse:
     """Verify and process an inbound GitLab webhook event for a project."""
+    repo_full_name = _extract_gitlab_repo_full_name(payload)
+    if not (project_id_or_slug and project_id_or_slug.strip()):
+        candidates = await _resolve_projects_from_repo_full_name(
+            session,
+            repo_full_name,
+            provider_label="GitLab",
+            missing_detail="GitLab webhook payload missing project.path_with_namespace",
+        )
+        last_err: Exception | None = None
+        last_resp: WebhookDeliveryResponse | None = None
+        for cand in candidates:
+            try:
+                resp = await handle_gitlab_webhook(
+                    session,
+                    cand.id,
+                    event_name=event_name,
+                    token_header=token_header,
+                    payload=payload,
+                    delivery_id=delivery_id,
+                )
+                if resp.accepted:
+                    return resp
+                last_resp = resp
+            except Forbidden as exc:
+                last_err = exc
+        if last_resp is not None:
+            return last_resp
+        if last_err is not None:
+            raise last_err
+        raise NotFound("Project not found")
+
     project = await _resolve_project_unauthenticated(session, project_id_or_slug)
     wh = (project.sandbox_config or {}).get("webhook_config") or {}
     if not wh.get("enabled", False):
@@ -1406,13 +1647,15 @@ async def handle_gitlab_webhook(
     if not secret or not verify_gitlab_token(secret, token_header):
         raise Forbidden("Invalid X-Gitlab-Token webhook header")
 
+    await _verify_payload_repo_matches_project(session, project, repo_full_name)
+
     object_kind = str(payload.get("object_kind") or event_name or "").strip().lower()
     eff_delivery_id = (
         delivery_id
         or str(payload.get("event_uuid") or payload.get("delivery_id") or "").strip()
         or None
     )
-    if not await _check_and_record_delivery_id_async("gitlab", eff_delivery_id):
+    if not await _check_and_record_delivery_id_async(f"gitlab:{project.id}", eff_delivery_id):
         return WebhookDeliveryResponse(
             accepted=False,
             provider="gitlab",
@@ -1708,32 +1951,28 @@ async def handle_gitlab_webhook(
 async def _resolve_project_from_bitbucket_repo(
     session: AsyncSession, payload: dict[str, Any]
 ) -> Project:
-    repo_obj = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
-    full_name = str(repo_obj.get("full_name") or "").strip().lower()
-    if not full_name:
-        raise NotFound("Bitbucket webhook payload missing repository.full_name")
-    stmt = (
-        select(Project)
-        .join(ProjectRepository, col(ProjectRepository.project_id) == col(Project.id))
-        .where(Project.archived_at == None)  # noqa: E711
-        .order_by(col(ProjectRepository.is_primary).desc(), col(ProjectRepository.id).asc())
+    full_name = _extract_bitbucket_repo_full_name(payload)
+    projects = await _resolve_projects_from_repo_full_name(
+        session,
+        full_name,
+        provider="bitbucket",
+        provider_label="Bitbucket",
+        missing_detail="Bitbucket webhook payload missing repository.full_name",
     )
-    rows = (await session.execute(stmt)).scalars().all()
-    for p_obj in rows:
-        repo_stmt = select(ProjectRepository).where(ProjectRepository.project_id == p_obj.id)
-        p_repos = (await session.execute(repo_stmt)).scalars().all()
-        if any((r.full_name or "").strip().lower() == full_name for r in p_repos):
-            return p_obj
-    raise NotFound(f"No project found for Bitbucket repository '{full_name}'")
+    return projects[0]
 
 
 def _is_trusted_bitbucket_author(
     obj: dict[str, Any], payload: dict[str, Any]
 ) -> tuple[bool, str]:
+    actor_obj = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    user_obj = obj.get("user") if isinstance(obj.get("user"), dict) else {}
+
     raw_assoc = (
         obj.get("author_association")
         or payload.get("author_association")
-        or ((payload.get("actor") or {}).get("author_association") if isinstance(payload.get("actor"), dict) else None)
+        or actor_obj.get("author_association")
+        or user_obj.get("author_association")
     )
     if raw_assoc is not None:
         assoc = str(raw_assoc).strip().upper()
@@ -1741,8 +1980,33 @@ def _is_trusted_bitbucket_author(
             return True, assoc
         return False, assoc or "UNTRUSTED"
 
+    raw_perm = (
+        actor_obj.get("permission")
+        or obj.get("permission")
+        or payload.get("permission")
+        or user_obj.get("permission")
+    )
+    if raw_perm is not None:
+        perm = str(raw_perm).strip().lower()
+        if perm in ("admin", "write"):
+            return True, perm.upper()
+        return False, perm.upper() or "UNTRUSTED"
+
+    raw_role = (
+        actor_obj.get("role")
+        or obj.get("role")
+        or user_obj.get("role")
+    )
+    if raw_role is not None:
+        role = str(raw_role).strip().upper()
+        if role in ("OWNER", "ADMIN", "MAINTAINER", "DEVELOPER", "WRITE", "COLLABORATOR", "MEMBER"):
+            return True, role
+        return False, role or "UNTRUSTED"
+
+    if actor_obj.get("is_collaborator") is True or user_obj.get("is_collaborator") is True:
+        return True, "COLLABORATOR"
+
     repo_obj = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
-    actor_obj = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
     owner_obj = repo_obj.get("owner") if isinstance(repo_obj.get("owner"), dict) else {}
     for id_key in ("account_id", "uuid", "username", "nickname"):
         actor_val = str(actor_obj.get(id_key) or "").strip()
@@ -1750,10 +2014,8 @@ def _is_trusted_bitbucket_author(
         if actor_val and owner_val and actor_val == owner_val:
             return True, "OWNER"
 
-    # Bitbucket Cloud omits author_association; only private repositories enforce repo-level
-    # access before allowing issue/comment creation. Public or unknown-visibility repos fail closed.
-    if repo_obj.get("is_private") is True:
-        return True, "MEMBER"
+    # Never infer write trust from repository.is_private alone: read-only viewers on private
+    # Bitbucket repositories can open issues and comment on PRs without write privileges.
     return False, "UNTRUSTED"
 
 
@@ -1766,12 +2028,46 @@ async def handle_bitbucket_webhook(
     payload: dict[str, Any],
     *,
     delivery_id: str | None = None,
+    _resolved_project: Project | None = None,
 ) -> WebhookDeliveryResponse:
     """Verify and process an inbound Bitbucket Cloud webhook event (`X-Hub-Signature: sha256=<hmac>`)."""
-    if project_id_or_slug and project_id_or_slug.strip():
+    repo_full_name = _extract_bitbucket_repo_full_name(payload)
+    if _resolved_project is not None:
+        project = _resolved_project
+        explicit_project = False
+    elif project_id_or_slug and project_id_or_slug.strip():
         project = await _resolve_project_unauthenticated(session, project_id_or_slug)
+        explicit_project = True
     else:
-        project = await _resolve_project_from_bitbucket_repo(session, payload)
+        candidates = await _resolve_projects_from_repo_full_name(
+            session,
+            repo_full_name,
+            provider="bitbucket",
+        )
+        last_err: Exception | None = None
+        last_resp: WebhookDeliveryResponse | None = None
+        for cand in candidates:
+            try:
+                resp = await handle_bitbucket_webhook(
+                    session,
+                    cand.id,
+                    event_name=event_name,
+                    raw_body=raw_body,
+                    signature_header=signature_header,
+                    payload=payload,
+                    delivery_id=delivery_id,
+                    _resolved_project=cand,
+                )
+                if resp.accepted:
+                    return resp
+                last_resp = resp
+            except Forbidden as exc:
+                last_err = exc
+        if last_resp is not None:
+            return last_resp
+        if last_err is not None:
+            raise last_err
+        raise NotFound("Project not found")
 
     wh = (project.sandbox_config or {}).get("webhook_config") or {}
     if not wh.get("enabled", False):
@@ -1781,9 +2077,12 @@ async def handle_bitbucket_webhook(
     if not secret or not verify_bitbucket_signature(raw_body, secret, signature_header):
         raise Forbidden("Invalid X-Hub-Signature webhook signature")
 
+    if explicit_project:
+        await _verify_payload_repo_matches_project(session, project, repo_full_name)
+
     event = (event_name or "").strip().lower()
     eff_delivery_id = delivery_id or str(payload.get("uuid") or "").strip() or None
-    if not await _check_and_record_delivery_id_async("bitbucket", eff_delivery_id):
+    if not await _check_and_record_delivery_id_async(f"bitbucket:{project.id}", eff_delivery_id):
         return WebhookDeliveryResponse(
             accepted=False,
             provider="bitbucket",

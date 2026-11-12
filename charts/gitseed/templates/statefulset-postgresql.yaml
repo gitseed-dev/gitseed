@@ -21,10 +21,18 @@ spec:
         {{- include "gitseed.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: postgresql
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgresql
           image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
           imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - name: tcp-postgresql
               containerPort: {{ .Values.postgresql.port }}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typer
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -80,9 +81,10 @@ def register_auth_commands(app: typer.Typer) -> None:
         save_config(cfg)
 
         console.print(
-            f"[green]✓[/green] Logged in as [bold]{user.email}[/bold] "
-            f"({user.org_role}) on [bold]{resolved_url}[/bold] "
-            f"[dim](context '{target_ctx}', credentials stored in {backend_used})[/dim]"
+            f"[green]✓[/green] Logged in as [bold]{escape(str(user.email))}[/bold] "
+            f"({escape(str(user.org_role))}) on [bold]{escape(str(resolved_url))}[/bold] "
+            f"[dim](context '{escape(str(target_ctx))}', "
+            f"credentials stored in {escape(str(backend_used))})[/dim]"
         )
 
     @app.command("logout")
@@ -98,7 +100,8 @@ def register_auth_commands(app: typer.Typer) -> None:
         target_ctx = context_name or opts.context or cfg.current_context
         delete_token(target_ctx)
         console.print(
-            f"[green]✓[/green] Removed stored credentials for context [bold]{target_ctx}[/bold]."
+            f"[green]✓[/green] Removed stored credentials for context "
+            f"[bold]{escape(str(target_ctx))}[/bold]."
         )
 
     @app.command("whoami")
@@ -120,11 +123,14 @@ def register_auth_commands(app: typer.Typer) -> None:
             return
 
         lines = [
-            f"[bold]User:[/bold]      {user.name} <{user.email}> ({user.id})",
-            f"[bold]Org Role:[/bold]  {user.org_role}",
-            f"[bold]Context:[/bold]   {ctx_name}",
-            f"[bold]Server:[/bold]    {api_url}",
-            f"[bold]Project:[/bold]   {project or '(none)'}",
+            (
+                f"[bold]User:[/bold]      {escape(str(user.name))} "
+                f"<{escape(str(user.email))}> ({escape(str(user.id))})"
+            ),
+            f"[bold]Org Role:[/bold]  {escape(str(user.org_role))}",
+            f"[bold]Context:[/bold]   {escape(str(ctx_name))}",
+            f"[bold]Server:[/bold]    {escape(str(api_url))}",
+            f"[bold]Project:[/bold]   {escape(str(project or '(none)'))}",
         ]
         console.print(Panel("\n".join(lines), title="GitSeed Identity", expand=False))
 
@@ -163,12 +169,15 @@ def register_auth_commands(app: typer.Typer) -> None:
             return
 
         lines = [
-            f"[bold]Server:[/bold]             {api_url} (v{version.version})",
+            f"[bold]Server:[/bold]             {escape(str(api_url))} (v{escape(str(version.version))})",
             (
-                f"[bold]Status:[/bold]             {health.status} "
-                f"(db={health.database}, redis={health.redis})"
+                f"[bold]Status:[/bold]             {escape(str(health.status))} "
+                f"(db={escape(str(health.database))}, redis={escape(str(health.redis))})"
             ),
-            f"[bold]Context:[/bold]            {ctx_name} (project={project or 'all'})",
+            (
+                f"[bold]Context:[/bold]            {escape(str(ctx_name))} "
+                f"(project={escape(str(project or 'all'))})"
+            ),
         ]
         if active_runs_count is not None:
             lines.append(f"[bold]Active Runs:[/bold]        {active_runs_count}")
@@ -206,9 +215,9 @@ def config_get_contexts(ctx: typer.Context) -> None:
         has_auth = "authenticated" if load_token(name) else "none"
         table.add_row(
             "*" if name == cfg.current_context else "",
-            name,
-            c.api_url,
-            c.project or "-",
+            escape(str(name)),
+            escape(str(c.api_url)),
+            escape(str(c.project or "-")),
             has_auth,
         )
     console.print(table)
@@ -237,7 +246,7 @@ def config_use_context(
 
     cfg.current_context = name
     save_config(cfg)
-    console.print(f"[green]✓[/green] Switched to context [bold]{name}[/bold].")
+    console.print(f"[green]✓[/green] Switched to context [bold]{escape(str(name))}[/bold].")
 
 
 @config_app.command("use-project")
@@ -258,10 +267,11 @@ def config_use_project(
     save_config(cfg)
     if cleaned:
         console.print(
-            f"[green]✓[/green] Default project for context [bold]{target_ctx}[/bold] "
-            f"set to [bold]{cleaned}[/bold]."
+            f"[green]✓[/green] Default project for context [bold]{escape(str(target_ctx))}[/bold] "
+            f"set to [bold]{escape(str(cleaned))}[/bold]."
         )
     else:
         console.print(
-            f"[green]✓[/green] Cleared default project for context [bold]{target_ctx}[/bold]."
+            f"[green]✓[/green] Cleared default project for context "
+            f"[bold]{escape(str(target_ctx))}[/bold]."
         )

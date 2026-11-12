@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -63,6 +64,10 @@ _SPECIAL_KEY_TOKENS: frozenset[str] = frozenset(
         "RIGHT",
         "PGUP",
         "PGDN",
+        "DELETE",
+        "HOME",
+        "END",
+        "SHIFT_TAB",
         "Escape",
         "esc",
         "ESC",
@@ -339,6 +344,9 @@ class TUIController:
             None
         )
         self._detail_worker: threading.Thread | None = None
+        self._deferred_sync_actions: list[Callable[[], None]] = []
+        self._pending_bg_actions: list[Callable[[], None]] = []
+        self._action_threads: list[threading.Thread] = []
         self._closed = False
 
         view = initial_view if initial_view in VIEWS else "seeds"
@@ -639,11 +647,14 @@ class TUIController:
             expected_proj_id = target_proj_id
 
         if not self.async_mode:
-            self._fetch_details_for(
-                expected_seed_id,
-                expected_proj_id,
-                include_changes=need_changes,
-            )
+            with self.lock:
+                self._deferred_sync_actions.append(
+                    lambda: self._fetch_details_for(
+                        expected_seed_id,
+                        expected_proj_id,
+                        include_changes=need_changes,
+                    )
+                )
             return
 
         # In interactive TUI mode, schedule debounced background fetch (0ms keypress latency)
@@ -927,10 +938,80 @@ class TUIController:
                 "(↑/↓ or 1-9 or click, Enter to confirm)."
             )
 
+    def _flush_deferred_sync_actions(self) -> None:
+        """Execute queued synchronous detail fetches outside self.lock."""
+        while True:
+            with self.lock:
+                if not self._deferred_sync_actions:
+                    return
+                actions = list(self._deferred_sync_actions)
+                self._deferred_sync_actions.clear()
+            for fn in actions:
+                fn()
+
+    def _enqueue_network_action(self, fn: Callable[[], None]) -> None:
+        with self.lock:
+            self._pending_bg_actions.append(fn)
+
+    def _dispatch_pending_network_actions(self) -> None:
+        with self.lock:
+            if not self._pending_bg_actions:
+                return
+            actions = list(self._pending_bg_actions)
+            self._pending_bg_actions.clear()
+            run_in_bg = self.async_mode
+
+        for fn in actions:
+            def _run_action(callback: Callable[[], None] = fn) -> None:
+                try:
+                    callback()
+                finally:
+                    self._flush_deferred_sync_actions()
+                    with self.lock:
+                        self.dirty = True
+
+            if run_in_bg:
+                worker = threading.Thread(
+                    target=_run_action,
+                    name="gitseed-tui-action",
+                    daemon=True,
+                )
+                with self.lock:
+                    self._action_threads = [t for t in self._action_threads if t.is_alive()]
+                    self._action_threads.append(worker)
+                worker.start()
+            else:
+                _run_action()
+
+    def wait_for_actions(self, timeout: float = 2.0) -> None:
+        """Wait for in-flight background action threads (useful for async TUI tests)."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            with self.lock:
+                alive = [t for t in self._action_threads if t.is_alive()]
+                self._action_threads = alive
+            if not alive:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            alive[0].join(timeout=min(0.05, remaining))
+
+    def refresh_all(self) -> None:
+        """Refresh workspace data outside self.lock and update status message."""
+        self.refresh_data(invalidate=True)
+        with self.lock:
+            if self.state.last_refresh_ok:
+                self.state.status_message = "Refreshed workspace data from Control Plane."
+            self.dirty = True
+
     def handle_key(self, key: str) -> bool:
         """Process a single keystroke, special key token, or mouse event. Return False to exit."""
         with self.lock:
-            return self._handle_key_unlocked(key)
+            keep_going = self._handle_key_unlocked(key)
+        self._flush_deferred_sync_actions()
+        self._dispatch_pending_network_actions()
+        return keep_going
 
     def _handle_key_unlocked(self, key: str) -> bool:
         if not key:
@@ -944,11 +1025,13 @@ class TUIController:
         if self.state.input_mode is not None:
             return self._handle_input_mode_key(key)
 
-        # Help overlay toggle
+        # Help overlay toggle: consume ALL keys while Help is open so hidden actions cannot fire
         if self.state.show_help:
+            if key == "\x03":
+                return False
             if key in {"?", "Escape", "esc", "q", "Enter", "\r", "\n"}:
                 self.state.show_help = False
-                return True
+            return True
 
         # Quit
         if key in {"q", "Q", "\x03"}:
@@ -1010,7 +1093,7 @@ class TUIController:
                     self.state.diff_file_index = 0
                     self._on_selection_or_tab_changed()
             return True
-        if key == "g":
+        if key in {"g", "HOME"}:
             if self.state.selected_index != 0:
                 self.state.selected_index = 0
                 self.state.list_scroll_offsets[self.state.active_view] = 0
@@ -1018,7 +1101,7 @@ class TUIController:
                 self.state.diff_file_index = 0
                 self._on_selection_or_tab_changed()
             return True
-        if key == "G":
+        if key in {"G", "END"}:
             count = self._current_view_len()
             if count > 0 and self.state.selected_index != count - 1:
                 self.state.selected_index = count - 1
@@ -1060,7 +1143,7 @@ class TUIController:
             self.state.scroll_offset = 0
             self._on_selection_or_tab_changed()
             return True
-        if key == "[":
+        if key in {"[", "SHIFT_TAB"}:
             idx = INSPECTOR_TABS.index(self.state.inspector_tab)
             self.state.inspector_tab = INSPECTOR_TABS[(idx - 1) % len(INSPECTOR_TABS)]
             self.state.scroll_offset = 0
@@ -1105,9 +1188,10 @@ class TUIController:
 
         # Manual refresh
         if key == "R":
-            self.refresh_data(invalidate=True)
-            if self.state.last_refresh_ok:
-                self.state.status_message = "Refreshed workspace data from Control Plane."
+            self.state.status_message = "Refreshing workspace data from Control Plane..."
+            self.state.error_message = None
+            self.dirty = True
+            self._enqueue_network_action(self.refresh_all)
             return True
 
         # Operator workflow actions on the selected seed
@@ -1260,23 +1344,27 @@ class TUIController:
         )
 
         if kind == "MOUSE_WHEEL_UP":
+            if self.state.show_help:
+                return True
             if self.state.input_mode == "new_seed_project":
                 self._handle_input_mode_key("UP")
             elif self.state.input_mode == "new_seed_autonomy":
                 self._handle_input_mode_key("UP")
             elif col < split_col:
-                self.handle_key("UP")
+                self._handle_key_unlocked("UP")
             else:
                 self._scroll_inspector(-3)
             return True
 
         if kind == "MOUSE_WHEEL_DOWN":
+            if self.state.show_help:
+                return True
             if self.state.input_mode == "new_seed_project":
                 self._handle_input_mode_key("DOWN")
             elif self.state.input_mode == "new_seed_autonomy":
                 self._handle_input_mode_key("DOWN")
             elif col < split_col:
-                self.handle_key("DOWN")
+                self._handle_key_unlocked("DOWN")
             else:
                 self._scroll_inspector(3)
             return True
@@ -1296,13 +1384,13 @@ class TUIController:
         # Header Row 3: View navigation tabs
         if row in {3, 4}:
             if col < 18:
-                return self.handle_key("1")
+                return self._handle_key_unlocked("1")
             if col < 35:
-                return self.handle_key("2")
+                return self._handle_key_unlocked("2")
             if col < 60:
-                return self.handle_key("3")
+                return self._handle_key_unlocked("3")
             if col < 90:
-                return self.handle_key("4")
+                return self._handle_key_unlocked("4")
 
         # Interactive New Seed Wizard click handling in body pane
         if self.state.input_mode == "new_seed_project":
@@ -1341,7 +1429,7 @@ class TUIController:
             ]
             for c_start, c_end, act_key in footer_actions:
                 if c_start <= col < c_end:
-                    return self.handle_key(act_key)
+                    return self._handle_key_unlocked(act_key)
             return True
 
         # Main Body Area (rows 5 .. height - 4)
@@ -1425,6 +1513,14 @@ class TUIController:
                     self.state.new_seed_project_idx
                 ].id
                 return True
+            if key == "HOME":
+                self.state.new_seed_project_idx = 0
+                self.state.new_seed_project_id = self.state.projects[0].id
+                return True
+            if key == "END":
+                self.state.new_seed_project_idx = proj_count - 1
+                self.state.new_seed_project_id = self.state.projects[proj_count - 1].id
+                return True
             if len(key) == 1 and key.isdigit() and key != "0":
                 idx = int(key) - 1
                 if 0 <= idx < proj_count:
@@ -1461,6 +1557,14 @@ class TUIController:
                     self.state.new_seed_autonomy_idx
                 ][0]
                 return True
+            if key == "HOME":
+                self.state.new_seed_autonomy_idx = 0
+                self.state.new_seed_autonomy = AUTONOMY_CHOICES[0][0]
+                return True
+            if key == "END":
+                self.state.new_seed_autonomy_idx = mode_count - 1
+                self.state.new_seed_autonomy = AUTONOMY_CHOICES[mode_count - 1][0]
+                return True
             if key in {"1", "2", "3"}:
                 idx = int(key) - 1
                 self.state.new_seed_autonomy_idx = idx
@@ -1489,6 +1593,9 @@ class TUIController:
             self.state.input_buffer = self.state.input_buffer[:-1]
             return True
 
+        if key in {"DELETE", "HOME", "END", "SHIFT_TAB"}:
+            return True
+
         if key not in _SPECIAL_KEY_TOKENS and not key.startswith(("MOUSE_", "MOUSE:")):
             if len(key) == 1 and key.isprintable():
                 self.state.input_buffer += key
@@ -1502,6 +1609,126 @@ class TUIController:
 
     _handle_input_mode = _handle_input_mode_key
 
+    def _submit_approval(
+        self,
+        seed_id: str,
+        seed_number: int,
+        decision: ApprovalDecision,
+        comment: str | None,
+    ) -> None:
+        try:
+            approval = self.client.create_seed_approval(
+                seed_id,
+                CreateApprovalRequest(decision=decision, comment=comment),
+            )
+            self.refresh_data(invalidate=True)
+            with self.lock:
+                if decision == ApprovalDecision.APPROVED:
+                    self.state.status_message = (
+                        f"Approved stage {approval.stage} on seed #{seed_number}."
+                    )
+                elif decision == ApprovalDecision.CHANGES_REQUESTED:
+                    self.state.status_message = (
+                        f"Requested changes on stage {approval.stage} for seed #{seed_number}."
+                    )
+                else:
+                    self.state.status_message = (
+                        f"Rejected seed #{seed_number} at stage {approval.stage}."
+                    )
+                self.dirty = True
+        except CLIError as exc:
+            with self.lock:
+                self.state.error_message = exc.message
+                self.dirty = True
+
+    def _submit_seed_comment(
+        self,
+        seed_id: str,
+        seed_number: int,
+        body: str,
+        *,
+        steer_handle: str | None = None,
+    ) -> None:
+        try:
+            self.client.create_seed_comment(
+                seed_id,
+                CreateSeedCommentRequest(body=body),
+            )
+            self.invalidate_cache(seed_id)
+            self.refresh_data(invalidate=False)
+            with self.lock:
+                self.state.inspector_tab = "timeline"
+                if steer_handle is not None:
+                    self.state.status_message = (
+                        f"Sent steering directive to @{steer_handle} on seed #{seed_number}."
+                    )
+                else:
+                    self.state.status_message = f"Posted comment on seed #{seed_number}."
+                self.dirty = True
+            self._on_selection_or_tab_changed()
+        except CLIError as exc:
+            with self.lock:
+                self.state.error_message = exc.message
+                self.dirty = True
+
+    def _submit_create_seed(
+        self,
+        proj_id: str,
+        title: str,
+        description: str,
+        autonomy: SeedAutonomy,
+    ) -> None:
+        try:
+            created = self.client.create_seed(
+                CreateSeedRequest(
+                    project_id=proj_id,
+                    title=title,
+                    description=description,
+                    autonomy=autonomy,
+                )
+            )
+            self.refresh_data(invalidate=True)
+            selected_changed = False
+            with self.lock:
+                for idx, s in enumerate(self.state.filtered_seeds):
+                    if s.id == created.id:
+                        self.state.selected_indices["seeds"] = idx
+                        selected_changed = True
+                        break
+                proj_slug = self.state.project_slug_by_id.get(
+                    created.project_id, created.project_id
+                )
+                self.state.status_message = (
+                    f"Created seed {proj_slug}#{created.number} "
+                    f"({created.autonomy}): {created.title}"
+                )
+                self.dirty = True
+            if selected_changed:
+                self._on_selection_or_tab_changed()
+        except CLIError as exc:
+            with self.lock:
+                self.state.error_message = exc.message
+                self.dirty = True
+
+    def _submit_coordinator_question(
+        self,
+        question: str,
+        proj_id: str | None,
+        seed_id: str | None,
+    ) -> None:
+        try:
+            resp = self.client.chat_coordinator(
+                question, project_id=proj_id, seed_id=seed_id
+            )
+            with self.lock:
+                self.state.coordinator_reply = resp.reply
+                self.state.status_message = f"@coordinator replied ({resp.model})."
+                self.dirty = True
+        except CLIError as exc:
+            with self.lock:
+                self.state.error_message = exc.message
+                self.dirty = True
+
     def _submit_input(self, mode: str, text: str) -> None:
         if mode == "filter":
             self.state.search_query = text
@@ -1514,148 +1741,173 @@ class TUIController:
             return
 
         seed = self.state.selected_seed
+        if mode == "approve" and seed is not None:
+            seed_id = seed.id
+            seed_num = seed.number
+            comment_val = text if text else None
+            self.state.error_message = None
+            self.state.status_message = f"Approving stage on seed #{seed_num}..."
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._submit_approval(
+                    seed_id, seed_num, ApprovalDecision.APPROVED, comment_val
+                )
+            )
+            return
+
+        if mode == "request_changes" and seed is not None:
+            if not text:
+                self.state.error_message = (
+                    "Feedback comment is required when requesting changes."
+                )
+                return
+            seed_id = seed.id
+            seed_num = seed.number
+            self.state.error_message = None
+            self.state.status_message = f"Requesting changes on seed #{seed_num}..."
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._submit_approval(
+                    seed_id, seed_num, ApprovalDecision.CHANGES_REQUESTED, text
+                )
+            )
+            return
+
+        if mode == "reject" and seed is not None:
+            if not text:
+                self.state.error_message = "Rejection reason is required."
+                return
+            seed_id = seed.id
+            seed_num = seed.number
+            self.state.error_message = None
+            self.state.status_message = f"Rejecting seed #{seed_num}..."
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._submit_approval(
+                    seed_id, seed_num, ApprovalDecision.REJECTED, text
+                )
+            )
+            return
+
+        if mode == "steer" and seed is not None:
+            if not text:
+                self.state.error_message = "Steering directive cannot be empty."
+                return
+            seed_id = seed.id
+            seed_num = seed.number
+            handle = self._resolve_stage_agent_handle(seed.project_id, str(seed.stage))
+            existing = {m.group(1).lower() for m in _MENTION_RE.finditer(text)}
+            body = text if handle.lower() in existing else f"@{handle} {text}"
+            self.state.error_message = None
+            self.state.status_message = (
+                f"Sending steering directive to @{handle} on seed #{seed_num}..."
+            )
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._submit_seed_comment(
+                    seed_id, seed_num, body, steer_handle=handle
+                )
+            )
+            return
+
+        if mode == "comment" and seed is not None:
+            if not text:
+                self.state.error_message = "Comment text cannot be empty."
+                return
+            seed_id = seed.id
+            seed_num = seed.number
+            self.state.error_message = None
+            self.state.status_message = f"Posting comment on seed #{seed_num}..."
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._submit_seed_comment(seed_id, seed_num, text)
+            )
+            return
+
+        if mode in {"new_seed_prompt", "new_seed_title"}:
+            if not text:
+                self.state.error_message = "Seed prompt/title cannot be empty."
+                return
+            proj_id = (
+                self.state.new_seed_project_id
+                or self.state.project_filter
+                or (seed.project_id if seed else None)
+                or (self.state.projects[0].id if self.state.projects else None)
+            )
+            if not proj_id:
+                self.state.error_message = "No project available to create seed in."
+                return
+            resolved_proj = self._resolve_project_by_ref(proj_id)
+            if resolved_proj is not None:
+                proj_id = resolved_proj.id
+
+            title = text if len(text) <= 80 else f"{text[:77].rstrip()}..."
+            autonomy_val = SeedAutonomy(
+                self.state.new_seed_autonomy or SeedAutonomy.SUPERVISED
+            )
+            target_proj_id = proj_id
+            self.state.error_message = None
+            self.state.status_message = "Creating seed..."
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._submit_create_seed(
+                    target_proj_id, title, text, autonomy_val
+                )
+            )
+            return
+
+        if mode == "ask_coordinator":
+            if not text:
+                self.state.error_message = "Question for @coordinator cannot be empty."
+                return
+            coord_proj_id = seed.project_id if seed else None
+            coord_seed_id = seed.id if seed else None
+            self.state.error_message = None
+            self.state.status_message = "Waiting for @coordinator reply..."
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._submit_coordinator_question(
+                    text, coord_proj_id, coord_seed_id
+                )
+            )
+            return
+
+    def _execute_retry_seed(
+        self,
+        seed_id: str,
+        seed_number: int,
+        seed_status: SeedStatus | str,
+    ) -> None:
         try:
-            if mode == "approve" and seed is not None:
-                approval = self.client.create_seed_approval(
-                    seed.id,
-                    CreateApprovalRequest(
-                        decision=ApprovalDecision.APPROVED,
-                        comment=text if text else None,
-                    ),
-                )
+            if seed_status == SeedStatus.STAGED:
+                started = self.client.start_seed(seed_id)
                 self.refresh_data(invalidate=True)
-                self.state.status_message = (
-                    f"Approved stage {approval.stage} on seed #{seed.number}."
-                )
-                return
-
-            if mode == "request_changes" and seed is not None:
-                if not text:
-                    self.state.error_message = (
-                        "Feedback comment is required when requesting changes."
+                with self.lock:
+                    self.state.status_message = (
+                        f"Started staged seed #{started.number} in stage {started.stage}."
                     )
-                    return
-                approval = self.client.create_seed_approval(
-                    seed.id,
-                    CreateApprovalRequest(
-                        decision=ApprovalDecision.CHANGES_REQUESTED,
-                        comment=text,
-                    ),
-                )
+                    self.dirty = True
+                return
+            if seed_status == SeedStatus.STOPPED:
+                resumed = self.client.resume_seed(seed_id)
                 self.refresh_data(invalidate=True)
-                self.state.status_message = (
-                    f"Requested changes on stage {approval.stage} for seed #{seed.number}."
-                )
-                return
-
-            if mode == "reject" and seed is not None:
-                if not text:
-                    self.state.error_message = "Rejection reason is required."
-                    return
-                approval = self.client.create_seed_approval(
-                    seed.id,
-                    CreateApprovalRequest(
-                        decision=ApprovalDecision.REJECTED,
-                        comment=text,
-                    ),
-                )
-                self.refresh_data(invalidate=True)
-                self.state.status_message = (
-                    f"Rejected seed #{seed.number} at stage {approval.stage}."
-                )
-                return
-
-            if mode == "steer" and seed is not None:
-                if not text:
-                    self.state.error_message = "Steering directive cannot be empty."
-                    return
-                handle = self._resolve_stage_agent_handle(seed.project_id, str(seed.stage))
-                existing = {m.group(1).lower() for m in _MENTION_RE.finditer(text)}
-                body = text if handle.lower() in existing else f"@{handle} {text}"
-                self.client.create_seed_comment(
-                    seed.id,
-                    CreateSeedCommentRequest(body=body),
-                )
-                self.invalidate_cache(seed.id)
-                self.refresh_data(invalidate=False)
-                self.state.inspector_tab = "timeline"
-                self._on_selection_or_tab_changed()
-                self.state.status_message = (
-                    f"Sent steering directive to @{handle} on seed #{seed.number}."
-                )
-                return
-
-            if mode == "comment" and seed is not None:
-                if not text:
-                    self.state.error_message = "Comment text cannot be empty."
-                    return
-                self.client.create_seed_comment(
-                    seed.id,
-                    CreateSeedCommentRequest(body=text),
-                )
-                self.invalidate_cache(seed.id)
-                self.refresh_data(invalidate=False)
-                self.state.inspector_tab = "timeline"
-                self._on_selection_or_tab_changed()
-                self.state.status_message = f"Posted comment on seed #{seed.number}."
-                return
-
-            if mode in {"new_seed_prompt", "new_seed_title"}:
-                if not text:
-                    self.state.error_message = "Seed prompt/title cannot be empty."
-                    return
-                proj_id = (
-                    self.state.new_seed_project_id
-                    or self.state.project_filter
-                    or (seed.project_id if seed else None)
-                    or (self.state.projects[0].id if self.state.projects else None)
-                )
-                if not proj_id:
-                    self.state.error_message = "No project available to create seed in."
-                    return
-                resolved_proj = self._resolve_project_by_ref(proj_id)
-                if resolved_proj is not None:
-                    proj_id = resolved_proj.id
-
-                title = text if len(text) <= 80 else f"{text[:77].rstrip()}..."
-                autonomy_val = SeedAutonomy(
-                    self.state.new_seed_autonomy or SeedAutonomy.SUPERVISED
-                )
-                created = self.client.create_seed(
-                    CreateSeedRequest(
-                        project_id=proj_id,
-                        title=title,
-                        description=text,
-                        autonomy=autonomy_val,
+                with self.lock:
+                    self.state.status_message = (
+                        f"Resumed stopped seed #{resumed.number} in stage {resumed.stage}."
                     )
-                )
-                self.refresh_data(invalidate=True)
-                for idx, s in enumerate(self.state.filtered_seeds):
-                    if s.id == created.id:
-                        self.state.selected_indices["seeds"] = idx
-                        self._on_selection_or_tab_changed()
-                        break
-                proj_slug = self.state.project_slug_by_id.get(
-                    created.project_id, created.project_id
-                )
+                    self.dirty = True
+                return
+            run = self.client.create_run(CreateRunRequest(seed_id=seed_id))
+            self.refresh_data(invalidate=True)
+            with self.lock:
                 self.state.status_message = (
-                    f"Created seed {proj_slug}#{created.number} "
-                    f"({created.autonomy}): {created.title}"
+                    f"Queued retry run {run.id} (attempt #{run.attempt}) for seed #{seed_number}."
                 )
-                return
-
-            if mode == "ask_coordinator":
-                if not text:
-                    self.state.error_message = "Question for @coordinator cannot be empty."
-                    return
-                proj_id = seed.project_id if seed else None
-                seed_id = seed.id if seed else None
-                resp = self.client.chat_coordinator(text, project_id=proj_id, seed_id=seed_id)
-                self.state.coordinator_reply = resp.reply
-                self.state.status_message = f"@coordinator replied ({resp.model})."
-                return
+                self.dirty = True
         except CLIError as exc:
-            self.state.error_message = exc.message
+            with self.lock:
+                self.state.error_message = exc.message
+                self.dirty = True
 
     def _action_retry_seed(self) -> None:
         seed = self.state.selected_seed
@@ -1673,56 +1925,96 @@ class TUIController:
                 "Only 'failed', 'blocked', 'stopped', or 'staged' seeds can be started/retried."
             )
             return
+        seed_id = seed.id
+        seed_number = seed.number
+        seed_status = seed.status
+        self.state.error_message = None
+        self.state.status_message = f"Starting/retrying seed #{seed_number}..."
+        self.dirty = True
+        self._enqueue_network_action(
+            lambda: self._execute_retry_seed(seed_id, seed_number, seed_status)
+        )
+
+    def _execute_cancel_run(
+        self,
+        *,
+        run_id: str | None,
+        seed_id: str | None,
+        seed_number: int | None,
+        cached_active_run_id: str | None,
+    ) -> None:
         try:
-            if seed.status == SeedStatus.STAGED:
-                started = self.client.start_seed(seed.id)
+            if run_id is not None:
+                cancelled = self.client.cancel_run(run_id)
                 self.refresh_data(invalidate=True)
-                self.state.status_message = (
-                    f"Started staged seed #{started.number} in stage {started.stage}."
-                )
+                with self.lock:
+                    self.state.status_message = f"Cancelled run {cancelled.id}."
+                    self.dirty = True
                 return
-            if seed.status == SeedStatus.STOPPED:
-                resumed = self.client.resume_seed(seed.id)
-                self.refresh_data(invalidate=True)
-                self.state.status_message = (
-                    f"Resumed stopped seed #{resumed.number} in stage {resumed.stage}."
+
+            assert seed_id is not None and seed_number is not None
+            target_run_id = cached_active_run_id
+            if target_run_id is None:
+                active_runs = self.client.list_runs(
+                    seed_id=seed_id, active_only=True, limit=1
                 )
-                return
-            run = self.client.create_run(CreateRunRequest(seed_id=seed.id))
+                if not active_runs:
+                    with self.lock:
+                        self.state.error_message = (
+                            f"No active run found for seed #{seed_number}."
+                        )
+                        self.dirty = True
+                    return
+                target_run_id = active_runs[0].id
+
+            cancelled = self.client.cancel_run(target_run_id)
             self.refresh_data(invalidate=True)
-            self.state.status_message = (
-                f"Queued retry run {run.id} (attempt #{run.attempt}) for seed #{seed.number}."
-            )
+            with self.lock:
+                self.state.status_message = (
+                    f"Cancelled run {cancelled.id} on seed #{seed_number}."
+                )
+                self.dirty = True
         except CLIError as exc:
-            self.state.error_message = exc.message
+            with self.lock:
+                self.state.error_message = exc.message
+                self.dirty = True
 
     def _action_cancel_run(self) -> None:
-        try:
-            if self.state.active_view == "runs" and self.state.selected_run is not None:
-                run = self.state.selected_run
-                cancelled = self.client.cancel_run(run.id)
-                self.refresh_data(invalidate=True)
-                self.state.status_message = f"Cancelled run {cancelled.id}."
-                return
-
-            seed = self.state.selected_seed
-            if seed is None:
-                self.state.error_message = "No seed or run selected to cancel."
-                return
-            active_runs = [
-                r
-                for r in self.state.runs
-                if r.seed_id == seed.id and r.status in RUN_ACTIVE_STATUSES
-            ]
-            if not active_runs:
-                active_runs = self.client.list_runs(seed_id=seed.id, active_only=True, limit=1)
-            if not active_runs:
-                self.state.error_message = f"No active run found for seed #{seed.number}."
-                return
-            cancelled = self.client.cancel_run(active_runs[0].id)
-            self.refresh_data(invalidate=True)
-            self.state.status_message = (
-                f"Cancelled run {cancelled.id} on seed #{seed.number}."
+        if self.state.active_view == "runs" and self.state.selected_run is not None:
+            run_id = self.state.selected_run.id
+            self.state.error_message = None
+            self.state.status_message = f"Cancelling run {run_id}..."
+            self.dirty = True
+            self._enqueue_network_action(
+                lambda: self._execute_cancel_run(
+                    run_id=run_id,
+                    seed_id=None,
+                    seed_number=None,
+                    cached_active_run_id=None,
+                )
             )
-        except CLIError as exc:
-            self.state.error_message = exc.message
+            return
+
+        seed = self.state.selected_seed
+        if seed is None:
+            self.state.error_message = "No seed or run selected to cancel."
+            return
+        active_runs = [
+            r
+            for r in self.state.runs
+            if r.seed_id == seed.id and r.status in RUN_ACTIVE_STATUSES
+        ]
+        cached_run_id = active_runs[0].id if active_runs else None
+        seed_id = seed.id
+        seed_number = seed.number
+        self.state.error_message = None
+        self.state.status_message = f"Cancelling active run on seed #{seed_number}..."
+        self.dirty = True
+        self._enqueue_network_action(
+            lambda: self._execute_cancel_run(
+                run_id=None,
+                seed_id=seed_id,
+                seed_number=seed_number,
+                cached_active_run_id=cached_run_id,
+            )
+        )

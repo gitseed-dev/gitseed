@@ -65,6 +65,40 @@ def dump_json(obj: BaseModel | Sequence[Any] | dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
+def extract_log_tail_delta(previous_tail: str, current_tail: str) -> str:
+    """Return only newly appended log text between two sliding tail snapshots."""
+    if not current_tail or current_tail == previous_tail:
+        return ""
+    if not previous_tail:
+        return current_tail
+    if current_tail.startswith(previous_tail):
+        return current_tail[len(previous_tail) :]
+
+    # Search line-by-line from the longest suffix of previous_tail that prefixes current_tail
+    search_pos = 0
+    while True:
+        nl = previous_tail.find("\n", search_pos)
+        if nl == -1:
+            break
+        suffix = previous_tail[nl + 1 :]
+        if suffix and current_tail.startswith(suffix):
+            return current_tail[len(suffix) :]
+        search_pos = nl + 1
+
+    # Fallback for character-capped tail windows where current_tail starts mid-line
+    first_nl = current_tail.find("\n")
+    if first_nl != -1:
+        anchor = current_tail[: first_nl + 1]
+        pos = previous_tail.find(anchor)
+        while pos != -1:
+            suffix = previous_tail[pos:]
+            if current_tail.startswith(suffix):
+                return current_tail[len(suffix) :]
+            pos = previous_tail.find(anchor, pos + 1)
+
+    return current_tail
+
+
 def print_projects_table(projects: Sequence[ProjectResponse], *, wide: bool = False) -> None:
     table = Table(show_header=True, header_style="bold cyan", box=None)
     table.add_column("SLUG", style="bold")

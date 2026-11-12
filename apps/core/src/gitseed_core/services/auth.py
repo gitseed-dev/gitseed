@@ -31,6 +31,22 @@ from gitseed_core.services.errors import (
 
 # Pre-computed Argon2 hash used to equalize login timing when a user is not found
 _DUMMY_PASSWORD_HASH = hash_password("gitseed-timing-equalizer-dummy-password")
+_ACTIVITY_TOUCH_INTERVAL = timedelta(minutes=5)
+
+
+def _ensure_utc(ts: datetime) -> datetime:
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=UTC)
+    return ts.astimezone(UTC)
+
+
+def _should_refresh_activity_timestamp(
+    previous: datetime | None,
+    now: datetime,
+) -> bool:
+    if previous is None:
+        return True
+    return (now - _ensure_utc(previous)) >= _ACTIVITY_TOUCH_INTERVAL
 
 
 async def authenticate(
@@ -109,14 +125,20 @@ async def authenticate_token(session: AsyncSession, raw_token: str) -> User:
         raise Unauthorized("Invalid personal access token")
 
     pat, user = row
-    if pat.revoked_at is not None or pat.expires_at <= now:
+    if pat.revoked_at is not None or _ensure_utc(pat.expires_at) <= now:
         raise Unauthorized("Personal access token is expired or revoked")
     if user.status != UserStatus.ACTIVE:
         raise Forbidden("User account is not active")
 
-    pat.last_used_at = now
-    user.last_active_at = now
-    await session.commit()
+    dirty = False
+    if _should_refresh_activity_timestamp(pat.last_used_at, now):
+        pat.last_used_at = now
+        dirty = True
+    if _should_refresh_activity_timestamp(user.last_active_at, now):
+        user.last_active_at = now
+        dirty = True
+    if dirty:
+        await session.commit()
     return user
 
 
@@ -128,8 +150,10 @@ async def authenticate_session_cookie(session: AsyncSession, session_id: str) ->
     user = await session.get(User, user_id)
     if user is None or user.status != UserStatus.ACTIVE:
         return None
-    user.last_active_at = datetime.now(UTC)
-    await session.commit()
+    now = datetime.now(UTC)
+    if _should_refresh_activity_timestamp(user.last_active_at, now):
+        user.last_active_at = now
+        await session.commit()
     return user
 
 

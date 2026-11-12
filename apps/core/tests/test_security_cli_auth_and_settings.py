@@ -14,6 +14,7 @@ from gitseed_common.enums import (
     OrgRole,
     QueueStrategy,
     SeedAutonomy,
+    UserStatus,
 )
 from gitseed_core.config import Settings
 from gitseed_core.models.activity import Activity
@@ -257,6 +258,11 @@ class TestSecurityModule:
                 "relay-signing-secret-key",
             ),
             patch("gitseed_core.services.push_relay.httpx.AsyncClient", _MockRelayClient),
+            patch(
+                "gitseed_core.services.push_relay._resolve_authorized_project_user_ids",
+                new_callable=AsyncMock,
+                return_value={"usr_mobile_1"},
+            ),
         ):
             sent = await dispatch_push_relay(
                 {
@@ -627,7 +633,7 @@ class TestCoreHardeningW2:
 
         # 2. Docker socket proxy and internal runner/sandbox networks configured
         assert "docker-socket-proxy:" in compose_text
-        assert "tecnativa/docker-socket-proxy:latest" in compose_text
+        assert "tecnativa/docker-socket-proxy:v0.3.0" in compose_text
         assert "tcp://docker-socket-proxy:2375" in compose_text
         assert "egress-proxy:" in compose_text
         assert "http://egress-proxy:3128" in compose_text
@@ -797,7 +803,7 @@ class TestCoreHardeningW2:
         _install_post_receive_hook(bare_dir, default_branch="release/v1")
         hook_text = (bare_dir / "hooks" / "post-receive").read_text(encoding="utf-8")
         assert "release/v1" not in hook_text
-        assert 'DEF_BRANCH="$(git config --get gitseed.defaultBranch' in hook_text
+        assert 'DEF_BRANCH="$(git config --file "$BARE_REPO/config" --get gitseed.defaultBranch' in hook_text
 
         # 3. validate_workspace_path constrains to LOCAL_WORKSPACE_ROOTS and rejects symlink escapes
         allowed_root = tmp_path / "allowed_workspaces"
@@ -1049,7 +1055,13 @@ class TestCoreHardeningW2:
         deps_mod.verify_csrf(origin_post)  # type: ignore[arg-type]
 
         # 3. SSE stream token (`gssse_...`) accepted; raw `gsp_`/`gspat_` PAT in query string rejected
-        user = User(id="usr_sse_1", email="sse@example.com", name="SSE", org_role=OrgRole.ADMIN)
+        user = User(
+            id="usr_sse_1",
+            email="sse@example.com",
+            name="SSE",
+            org_role=OrgRole.ADMIN,
+            status=UserStatus.ACTIVE,
+        )
         session = AsyncMock()
         session.get.return_value = user
         req = SimpleNamespace(state=SimpleNamespace())

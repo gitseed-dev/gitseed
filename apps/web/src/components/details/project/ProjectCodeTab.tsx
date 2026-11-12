@@ -29,7 +29,7 @@ import { useAuth } from '../../../context/AuthContext'
 import { useData } from '../../../context/DataContext'
 import { useTheme } from '../../../context/ThemeContext'
 import { formatProviderName } from '../../../utils/backends'
-import { buildRepoWebUrl } from '../../../utils/gitUrls'
+import { buildRepoWebUrl, safeExternalUrl } from '../../../utils/gitUrls'
 import {
   CodeBlobViewer,
   RepoClonePopover,
@@ -284,9 +284,10 @@ export const ProjectCodeTab: React.FC<ProjectCodeTabProps> = ({
         commit_sha: null,
         is_default: true,
         protected: false,
-        web_url: buildRepoWebUrl(activeRepo, activeBackend, {
-          ref: activeRepo.default_branch || 'main',
-        }),
+        web_url:
+          buildRepoWebUrl(activeRepo, activeBackend, {
+            ref: activeRepo.default_branch || 'main',
+          }) || '',
       },
     ]
   }, [branchesQuery.data, activeRepo, activeBackend])
@@ -351,19 +352,29 @@ export const ProjectCodeTab: React.FC<ProjectCodeTabProps> = ({
     return entries.filter((e) => e.name.toLowerCase().includes(q))
   }, [treeQuery.data, filterText])
 
-  const currentExternalUrl = useMemo(() => {
-    if (!activeRepo) return '#'
+  const currentExternalUrl = useMemo<string | null>(() => {
+    if (
+      !activeRepo ||
+      activeBackend?.provider === 'local' ||
+      activeRepo.full_name.startsWith('local/')
+    ) {
+      return null
+    }
     if (viewMode === 'blob' && blobQuery.data?.web_url) {
-      return blobQuery.data.web_url
+      const safeBlobUrl = safeExternalUrl(blobQuery.data.web_url)
+      if (safeBlobUrl) return safeBlobUrl
     }
     if (viewMode === 'tree' && treeQuery.data?.web_url) {
-      return treeQuery.data.web_url
+      const safeTreeUrl = safeExternalUrl(treeQuery.data.web_url)
+      if (safeTreeUrl) return safeTreeUrl
     }
-    return buildRepoWebUrl(activeRepo, activeBackend, {
-      ref: selectedRef,
-      path: currentPath,
-      isDir: viewMode === 'tree',
-    })
+    return safeExternalUrl(
+      buildRepoWebUrl(activeRepo, activeBackend, {
+        ref: selectedRef,
+        path: currentPath,
+        isDir: viewMode === 'tree',
+      })
+    )
   }, [
     activeRepo,
     activeBackend,
@@ -613,15 +624,17 @@ export const ProjectCodeTab: React.FC<ProjectCodeTabProps> = ({
               selectedRef={selectedRef}
             />
 
-            <a
-              href={currentExternalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 transition whitespace-nowrap"
-            >
-              <span>Open in {providerLabel}</span>
-              <ExternalLink size={12} />
-            </a>
+            {currentExternalUrl && (
+              <a
+                href={currentExternalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 transition whitespace-nowrap"
+              >
+                <span>Open in {providerLabel}</span>
+                <ExternalLink size={12} />
+              </a>
+            )}
 
             {canManage && (
               <button
@@ -729,15 +742,17 @@ export const ProjectCodeTab: React.FC<ProjectCodeTabProps> = ({
                             Back to Root
                           </button>
                         )}
-                        <a
-                          href={currentExternalUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 border border-teal-500/30"
-                        >
-                          <span>View on {providerLabel}</span>
-                          <ExternalLink size={12} />
-                        </a>
+                        {currentExternalUrl && (
+                          <a
+                            href={currentExternalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 border border-teal-500/30"
+                          >
+                            <span>View on {providerLabel}</span>
+                            <ExternalLink size={12} />
+                          </a>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -777,6 +792,7 @@ export const ProjectCodeTab: React.FC<ProjectCodeTabProps> = ({
                   ) : (
                     filteredEntries.map((entry) => {
                       const isDir = entry.type === 'dir'
+                      const safeEntryWebUrl = safeExternalUrl(entry.web_url)
                       return (
                         <tr
                           key={entry.path}
@@ -826,15 +842,19 @@ export const ProjectCodeTab: React.FC<ProjectCodeTabProps> = ({
                           </td>
 
                           <td className="py-2.5 px-4 text-right">
-                            <a
-                              href={entry.web_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={`Open ${entry.name} on ${providerLabel}`}
-                              className="inline-flex items-center justify-center p-1.5 rounded-lg text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
-                            >
-                              <ExternalLink size={13} />
-                            </a>
+                            {safeEntryWebUrl ? (
+                              <a
+                                href={safeEntryWebUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`Open ${entry.name} on ${providerLabel}`}
+                                className="inline-flex items-center justify-center p-1.5 rounded-lg text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+                              >
+                                <ExternalLink size={13} />
+                              </a>
+                            ) : (
+                              <span className="text-xs text-zinc-400">-</span>
+                            )}
                           </td>
                         </tr>
                       )

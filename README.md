@@ -78,7 +78,7 @@ Ad-hoc coding prompts work for single files, but shipping production software wi
 - **Ed25519-Signed PR Governance Receipts**: Every Pull Request receives a cryptographically signed receipt (`gitseed.receipt.v1`) attesting to the locked spec, models, spend mode, security scans, and human approvals, verifiable offline via `gitseed receipt verify`.
 - **Parallel 3-Model "Second Opinions"**: Dispatch up to **3 agents in parallel** during `Ideate`, `Plan`, or `Review` to compare competing specs, task plans, or code reviews side-by-side before approving.
 - **Cloud BYOK, Local GPUs & Single-User "Personal Mode"**: Enforce hard per-run USD caps via **LiteLLM** (cloud APIs or local **Ollama / vLLM / LM Studio**), or sign in with your personal **Claude Pro/Max**, **ChatGPT Plus/Pro**, or **Gemini** subscription inside an isolated container.
-- **Autonomous Pipelines + Live Sandbox Rescue**: Drop into any workspace from the persistent **`SessionDock`** (`tmux` browser terminal, Monaco, and isolated **VS Code Web**), leave inline diff comments, or `@coder`-steer an active run without losing progress.
+- **Autonomous Pipelines + Live Sandbox Rescue**: Drop into any workspace from the persistent **`SessionDock`** (persistent browser PTY terminal, Monaco, and isolated **VS Code Web**), leave inline diff comments, or `@coder`-steer an active run without losing progress.
 - **5-Stage SDLC or ⚡ Fast-Track + Self-Healing CI**: Lock specs across `Ideate → Plan → Execute → Review → Merge` for complex features, **⚡ Fast-Track** (`Execute → Review → Merge`) for quick fixes, auto-remediate failing PR CI checks, or sync against a zero-remote **Local Folder**.
 
 ### How GitSeed Compares
@@ -124,7 +124,7 @@ Every stage agent (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`, `@c
 | Tier | Supported Providers & Engines | Agent Runtimes (`AgentRuntime`) | Spend Control & Governance Mode |
 | :--- | :--- | :--- | :--- |
 | **Team & Enterprise Cloud APIs (BYOK / LiteLLM)** | **Anthropic** (Claude), **OpenAI**, **Google Gemini**, **xAI (Grok)**, **LiteLLM**, **Custom OpenAI Gateways** | `opencode`, `claude-code`, `codex`, `antigravity`, `gemini`, `grok-build` | **Enforced (`enforced`)**: Per-run LiteLLM virtual keys hard-capped at `min(monthly_remaining, seed_cap_remaining, checkpoint_remaining)`. |
-| **Personal Mode (Single-User Subscription OAuth)** | **Claude Pro / Max**, **ChatGPT Plus / Pro**, **Gemini Code Assist**, **Google Antigravity**, **xAI Grok** | `claude-code`, `codex`, `antigravity`, `gemini`, `grok-build` | **Estimated (`estimated`)**: Owner-bound (`owner_user_id`) single-user OAuth bundle encrypted at rest. Spend is estimated from CLI token telemetry and bounded by broker-enforced container timeouts (`timeout_minutes`) and `--max-turns`. |
+| **Personal Mode (Single-User Subscription OAuth)** | **Claude Pro / Max**, **ChatGPT Plus / Pro**, **Gemini Code Assist**, **Google Antigravity**, **xAI Grok** | `claude-code`, `codex`, `antigravity`, `gemini`, `grok-build` | **Estimated (`estimated`)**: Owner-bound (`owner_user_id`) single-user OAuth bundle encrypted at rest. Spend is estimated from CLI token telemetry and bounded by broker-enforced container timeouts (`timeout_minutes`) and turn limits (`--max-turns` where supported by the CLI). |
 | **Local & Open-Weight LLMs (Air-Gapped / On-Prem)** | **Ollama** (`:11434`), **vLLM** (`:8000/v1`), **LM Studio** (`:1234/v1`) running open-weight models (*Qwen3-Coder*, *DeepSeek-V3 / R1*, *Llama 4*, *Codestral*, *Gemma 3*) | `opencode` (universal open-source agent runtime) | **Enforced (`enforced`)** via LiteLLM gateway with zero marginal cloud token cost and full air-gapped data sovereignty. |
 
 > [!IMPORTANT]
@@ -215,7 +215,7 @@ Every MCP tool includes explicit `ToolAnnotations` (`readOnlyHint`, `destructive
 
 ## Webhooks, Self-Healing CI & Local Folder Auto-Sync
 
-- **Inbound GitHub & GitLab Webhooks ([`services/webhooks.py`](./apps/core/src/gitseed_core/services/webhooks.py))**:
+- **Inbound GitHub, GitLab & Bitbucket Webhooks ([`services/webhooks.py`](./apps/core/src/gitseed_core/services/webhooks.py))**:
   - **Issue-to-Seed Trigger**: Labeling or opening an issue with the configured trigger label (default `gitseed`) automatically creates and queues a Seed linked back to the source issue.
   - **PR Comment Steering**: Commenting `@coder`, `@planner`, or `@reviewer` on a GitHub Pull Request or GitLab Merge Request syncs the comment into the Seed timeline and either steers the active container run in place or queues a remediation pass.
   - **Self-Healing CI Remediation**: When a GitHub Actions workflow or GitLab CI pipeline fails on a Seed branch (`check_run` / `workflow_run` / `pipeline`), GitSeed automatically creates a remediation task with the failure details and dispatches `@coder` back to `Execute` to fix the build.

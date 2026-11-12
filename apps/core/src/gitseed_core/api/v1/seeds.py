@@ -124,6 +124,7 @@ async def update_seed(
     session: DBSession,
 ) -> SeedResponse:
     """Update a seed's fields, autonomy mode, or budget cap."""
+    fields_set = set(payload.model_fields_set)
     seed = await seeds_service.update_seed(
         session,
         current_user,
@@ -131,12 +132,16 @@ async def update_seed(
         title=payload.title,
         description=payload.description,
         specification=payload.specification,
-        acceptance_criteria=payload.acceptance_criteria,
+        acceptance_criteria=(
+            payload.acceptance_criteria
+            if "acceptance_criteria" in fields_set
+            else None
+        ),
         plan=payload.plan,
-        tags=payload.tags,
+        tags=payload.tags if "tags" in fields_set else None,
         autonomy=payload.autonomy,
         budget_cap=payload.budget_cap,
-        fields_set=payload.model_fields_set,
+        fields_set=fields_set,
     )
     return SeedResponse.model_validate(seed)
 

@@ -220,8 +220,8 @@ def test_bitbucket_webhook_author_trust_fails_closed_on_public_repos() -> None:
         "actor": {"uuid": "{teammate-2}"},
     }
     trusted_priv, assoc_priv = _is_trusted_bitbucket_author({}, private_payload)
-    assert trusted_priv is True
-    assert assoc_priv == "MEMBER"
+    assert trusted_priv is False
+    assert assoc_priv == "UNTRUSTED"
 
 
 @pytest.mark.asyncio
@@ -474,3 +474,248 @@ async def test_cancel_run_resets_orphaned_running_task_and_advance_seed_forward_
         await seeds_svc.advance_seed(
             session, admin, seed.id, target_stage=SeedStage.PLAN
         )
+
+
+@pytest.mark.asyncio
+async def test_patch_seed_partial_update_preserves_acceptance_criteria_and_org_admin_rbac(
+    api_client_factory: Any,
+    admin_user: User,
+    member_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gitseed_core.services import seeds as seeds_svc
+
+    proj = Project(id="prj_patch", name="Patch", slug="patch")
+    seed = Seed(
+        id="sed_patch_1",
+        project_id=proj.id,
+        number=1,
+        title="Original title",
+        acceptance_criteria=["Criterion A", "Criterion B"],
+        stage=SeedStage.IDEATE,
+        status=SeedStatus.AWAITING_APPROVAL,
+    )
+    monkeypatch.setattr(seeds_svc, "get_seed", AsyncMock(return_value=seed))
+    monkeypatch.setattr(
+        seeds_svc, "_require_seed_developer", AsyncMock(return_value=(proj, None))
+    )
+
+    async with api_client_factory(admin_user) as ac:
+        resp = await ac.patch(
+            f"/api/v1/seeds/{seed.id}",
+            json={"title": "Updated title only"},
+            headers={"X-GitSeed-CSRF": "1"},
+        )
+        assert resp.status_code == 200
+        assert seed.title == "Updated title only"
+        assert seed.acceptance_criteria == ["Criterion A", "Criterion B"]
+
+    # Non-admin member must receive 403 on require_org_admin endpoints
+    async with api_client_factory(member_user) as member_ac:
+        admin_resp = await member_ac.patch(
+            "/api/v1/settings",
+            json={"org_name": "Unauthorized Rename"},
+            headers={"X-GitSeed-CSRF": "1"},
+        )
+        assert admin_resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_egress_proxy_port_scoping_sandbox_image_allowlist_and_session_push_governance() -> None:
+    from gitseed_core.services.egress_proxy import (
+        EgressDeniedError,
+        check_egress_destination,
+    )
+    from gitseed_core.services.sandbox_detect import sanitize_run_json_image
+    from gitseed_core.services.session_workspace import (
+        _validate_session_push_governance,
+    )
+
+    async def _fake_resolver(host: str, port: int) -> list[str]:
+        if host in ("litellm", "api"):
+            return ["172.18.0.5"]
+        return ["93.184.216.34"]
+
+    internal_hosts = ["litellm:4000", "api:8420"]
+    allowlist = ["api.openai.com"]
+    assert await check_egress_destination(
+        "litellm",
+        4000,
+        allowlist=allowlist,
+        internal_hosts=internal_hosts,
+        resolver=_fake_resolver,
+    ) == ["172.18.0.5"]
+    assert await check_egress_destination(
+        "api",
+        8420,
+        allowlist=allowlist,
+        internal_hosts=internal_hosts,
+        resolver=_fake_resolver,
+    ) == ["172.18.0.5"]
+    assert await check_egress_destination(
+        "api.openai.com",
+        443,
+        allowlist=allowlist,
+        internal_hosts=internal_hosts,
+        resolver=_fake_resolver,
+    ) == ["93.184.216.34"]
+    for blocked_host, blocked_port in (
+        ("api", 5432),
+        ("litellm", 6379),
+        ("api.openai.com", 5432),
+    ):
+        with pytest.raises(EgressDeniedError):
+            await check_egress_destination(
+                blocked_host,
+                blocked_port,
+                allowlist=allowlist,
+                internal_hosts=internal_hosts,
+                resolver=_fake_resolver,
+            )
+
+    # Untrusted .gitseed/run.json cannot force arbitrary external registry pulls
+    assert sanitize_run_json_image("evil.attacker.io/crypto/miner:latest") == "python:3.12-slim"
+    assert sanitize_run_json_image("node:22-bookworm-slim") == "node:22-bookworm-slim"
+    assert (
+        sanitize_run_json_image(
+            "registry.internal/team/dev:1.0",
+            project_sandbox_config={"image": "registry.internal/team/dev:1.0"},
+        )
+        == "registry.internal/team/dev:1.0"
+    )
+
+    # Interactive session push governance allows .env.example, blocks .env and leaked tokens
+    _validate_session_push_governance(
+        [{"path": ".env.example", "status": "added"}],
+        {".env.example": b"API_URL=http://localhost:8420\n"},
+    )
+    with pytest.raises(Invalid, match="protected path"):
+        _validate_session_push_governance(
+            [{"path": ".env", "status": "added"}],
+            {".env": b"SECRET=1\n"},
+        )
+    fake_gh_pat = "ghp_" + ("A" * 36)
+    with pytest.raises(Invalid, match="Secret scan blocked push"):
+        _validate_session_push_governance(
+            [{"path": "src/config.py", "status": "modified"}],
+            {"src/config.py": f'TOKEN = "{fake_gh_pat}"\n'.encode()},
+        )
+
+
+@pytest.mark.asyncio
+async def test_second_pass_xss_dotfiles_local_git_budget_and_network_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import tarfile
+    from decimal import Decimal
+
+    from gitseed_core.api.v1 import backends as backends_api
+    from gitseed_core.services import (
+        compute_runtime,
+        gateway,
+        local_git,
+        sandboxes,
+        session_workspace,
+    )
+
+    # 1. Reflected XSS blocked & BroadcastChannel emitted on GitHub App setup callback
+    mock_session = AsyncMock()
+    setup_mock = AsyncMock()
+    monkeypatch.setattr(backends_api.backends_service, "complete_github_app_setup", setup_mock)
+
+    resp_xss = await backends_api.github_app_setup_callback(
+        mock_session,
+        installation_id="</script><script>alert(1)</script>",
+        state="st1",
+    )
+    setup_mock.assert_not_awaited()
+    raw_xss = bytes(resp_xss.body).decode("utf-8")
+    assert "<script>alert(1)" not in raw_xss
+    assert "BroadcastChannel('gitseed:github-app')" in raw_xss
+    assert "window.close()" in raw_xss
+
+    fake_backend = MagicMock()
+    fake_backend.id = "bkd_123"
+    setup_mock.return_value = fake_backend
+    resp_ok = await backends_api.github_app_setup_callback(
+        mock_session,
+        installation_id="  987654  ",
+        state="st2",
+    )
+    setup_mock.assert_awaited_once_with(mock_session, installation_id="987654", state="st2")
+    raw_ok = bytes(resp_ok.body).decode("utf-8")
+    assert '"installationId": "987654"' in raw_ok
+
+    # 2. Dotfile preservation in tar manifests, archive unpack, and protected push paths
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name, data in (
+            ("./.env", b"A=1\n"),
+            ("workspace/.gitignore", b"dist/\n"),
+            (".vscode/tasks.json", b"{}"),
+        ):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    tar_bytes = buf.getvalue()
+    manifest = session_workspace.manifest_from_tar(tar_bytes)
+    assert ".env" in manifest and "env" not in manifest
+    assert ".gitignore" in manifest and "gitignore" not in manifest
+    extracted = session_workspace.files_from_archive(tar_bytes, "workspace")
+    assert ".env" in extracted and ".gitignore" in extracted and ".vscode/tasks.json" in extracted
+
+    assert session_workspace._is_protected_push_path(".env") is True
+    assert session_workspace._is_protected_push_path(".ENV") is True
+    assert session_workspace._is_protected_push_path(".env.local") is True
+    assert session_workspace._is_protected_push_path(".vscode/tasks.json") is True
+    assert session_workspace._is_protected_push_path(".gitmodules") is True
+    assert session_workspace._is_protected_push_path(".git/config") is True
+    assert (
+        session_workspace._is_protected_push_path(
+            ".github/workflows/ci.yml", [".github/workflows/*"]
+        )
+        is True
+    )
+    assert session_workspace._is_protected_push_path(".env.example") is False
+    assert session_workspace._is_protected_push_path(".env.example", [".env*"]) is True
+    assert (
+        sandboxes._first_matching_glob(".artifacts/out.zip", ["./.artifacts/*.zip"])
+        == "./.artifacts/*.zip"
+    )
+
+    # 3. Local Git workspace init rejects unsafe .git/config directives
+    ws = tmp_path / "ws"
+    (ws / ".git").mkdir(parents=True)
+    (ws / ".git" / "config").write_text("[core]\n\tfsmonitor = evil\n", encoding="utf-8")
+    bare = tmp_path / "bare.git"
+    bare.mkdir()
+    with pytest.raises(local_git.InvalidGitInputError, match="unsafe directives"):
+        local_git._ensure_git_repo_initialized(
+            ws, bare, project_name="Test", default_branch="main"
+        )
+
+    # 4. Remaining monthly budget & seed spend summing Runs + AgentSessions
+    proj = Project(id="prj_1", name="P", slug="p-slug", monthly_budget=Decimal("100.00"))
+    db_sess = AsyncMock()
+    db_sess.scalar = AsyncMock(return_value=Decimal("75.00"))
+    rem = await gateway.compute_project_remaining_monthly_budget(db_sess, proj)
+    assert rem == Decimal("25.00")
+    assert (
+        gateway._resolve_session_seed_max_budget(
+            project=proj, remaining_project_budget=rem
+        )
+        == 25.0
+    )
+
+    seed = Seed(id="sed_1", project_id="prj_1", number=1, title="T", spent=Decimal("0"))
+    db_sess.get = AsyncMock(return_value=None)
+    db_sess.scalar = AsyncMock(return_value=Decimal("42.50"))
+    await runs_svc._recompute_seed_spent(db_sess, seed, proj)
+    assert seed.spent == Decimal("42.50")
+
+    # 5. Dynamic LiteLLM port in K8s NetworkPolicy
+    monkeypatch.setattr(settings, "LITELLM_BASE_URL", "http://litellm:4567")
+    np = compute_runtime._build_k8s_default_egress_network_policy("ns-run", "ns-cp")
+    ports = [p["port"] for p in np["spec"]["egress"][1]["ports"]]
+    assert 4567 in ports and 4000 not in ports

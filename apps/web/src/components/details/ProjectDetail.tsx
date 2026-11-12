@@ -31,7 +31,7 @@ import { useData } from '../../context/DataContext'
 import { useTranslation } from '../../context/I18nContext'
 import { VIEWS } from '../../constants'
 import { formatUsd } from '../../utils/format'
-import { buildRepoWebUrl } from '../../utils/gitUrls'
+import { buildRepoWebUrl, safeExternalUrl } from '../../utils/gitUrls'
 import {
   canUserContributeToProject,
   canUserManageProject,
@@ -197,6 +197,19 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   const primaryBackend = summary.primaryRepo
     ? backends.find((b) => b.id === summary.primaryRepo?.backend_id)
     : null
+  const isPrimaryRepoLocal = Boolean(
+    summary.primaryRepo &&
+      (primaryBackend?.provider === 'local' ||
+        summary.primaryRepo.full_name.startsWith('local/'))
+  )
+  const primaryRepoExternalUrl =
+    summary.primaryRepo && !isPrimaryRepoLocal
+      ? safeExternalUrl(
+          buildRepoWebUrl(summary.primaryRepo, primaryBackend, {
+            ref: summary.primaryRepo.default_branch,
+          })
+        )
+      : null
 
   const overridesCount = useMemo(
     () =>
@@ -283,7 +296,10 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                     >
                       <ProviderIcon
                         type="git"
-                        provider={primaryBackend?.provider || 'github'}
+                        provider={
+                          primaryBackend?.provider ||
+                          (isPrimaryRepoLocal ? 'local' : 'github')
+                        }
                         size={13}
                       />
                       <span className="font-semibold">
@@ -294,19 +310,17 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                         {summary.primaryRepo.default_branch}
                       </span>
                     </button>
-                    <a
-                      href={buildRepoWebUrl(
-                        summary.primaryRepo,
-                        primaryBackend,
-                        { ref: summary.primaryRepo.default_branch }
-                      )}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Open repository on remote host"
-                      className="text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition"
-                    >
-                      <ExternalLink size={11} />
-                    </a>
+                    {primaryRepoExternalUrl && (
+                      <a
+                        href={primaryRepoExternalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open repository on remote host"
+                        className="text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 transition"
+                      >
+                        <ExternalLink size={11} />
+                      </a>
+                    )}
                   </span>
                 )}
 

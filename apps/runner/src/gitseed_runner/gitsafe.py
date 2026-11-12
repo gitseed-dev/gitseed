@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import fnmatch
 import logging
@@ -97,12 +98,31 @@ _DANGEROUS_GIT_CONFIG_KEYS_BY_SECTION: dict[str, frozenset[str]] = {
     "remote": frozenset({"uploadpack", "receivepack", "proxycommand", "vcs"}),
 }
 
+HARDCODED_BLOCKED_PATTERNS: tuple[str, ...] = (
+    ".vscode/**",
+    ".git/**",
+    "**/.git/**",
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    ".env.staging",
+    "*id_rsa*",
+    "*id_dsa*",
+    "*id_ecdsa*",
+    "*id_ed25519*",
+    "*.pem",
+    "*.p12",
+    "*.pfx",
+)
+
 SECRET_SCAN_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("aws_access_key_id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("aws_sts_key_id", re.compile(r"\bASIA[0-9A-Z]{16}\b")),
     (
         "github_token",
         re.compile(
-            r"\b(?:ghp|gho|ghs)_[A-Za-z0-9_]{20,255}\b"
+            r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9_]{20,255}\b"
             r"|\bgithub_pat_[A-Za-z0-9_]{20,255}\b"
         ),
     ),
@@ -112,9 +132,15 @@ SECRET_SCAN_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "private_key_pem",
         re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED |)?PRIVATE KEY-----"),
     ),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("google_oauth_token", re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}\b")),
+    ("xai_api_key", re.compile(r"\bxai-[A-Za-z0-9]{20,}\b")),
+    ("gitseed_token", re.compile(r"(?<![A-Za-z0-9_])gs(?:p|sse|r)_[A-Za-z0-9_.-]{16,}")),
     ("anthropic_api_key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{16,255}\b")),
     ("openai_api_key", re.compile(r"\bsk-(?:proj-|live-|svcacct-)?[A-Za-z0-9_\-]{20,255}\b")),
 )
+
+SECRET_SCAN_PATTERNS = SECRET_SCAN_RULES
 
 
 def strip_url_credentials(url: str) -> str:
@@ -598,19 +624,104 @@ def _exclude_internal_paths(
     return to_exclude
 
 
+def _copy_workspace_into_staging(
+    workspace_repo_dir: Path,
+    staging_dir: Path,
+    *,
+    allowed_gitlinks: set[str] | None = None,
+) -> list[str]:
+    """Copy workspace files into an isolated staging directory without dereferencing symlinks.
+
+    Returns a sorted list of repo-relative paths for any symlinks that escape `workspace_repo_dir`.
+    """
+    ws_root = workspace_repo_dir.resolve()
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    gitlinks = allowed_gitlinks or set()
+    escaped_symlinks: list[str] = []
+
+    def _is_safe_in_repo_symlink(link_path: Path) -> bool:
+        try:
+            raw_target = os.readlink(link_path)
+        except OSError:
+            return False
+        if not raw_target or "\x00" in raw_target:
+            return False
+        target_p = Path(raw_target)
+        if target_p.is_absolute() or (os.name == "nt" and target_p.drive):
+            return False
+        try:
+            resolved_target = (link_path.parent / target_p).resolve()
+        except OSError:
+            return False
+        return resolved_target == ws_root or resolved_target.is_relative_to(ws_root)
+
+    for dirpath, dirnames, filenames in os.walk(ws_root, followlinks=False):
+        rel_dir = os.path.relpath(dirpath, ws_root)
+        rel_dir_posix = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
+
+        if rel_dir_posix == "":
+            for skip in (".git", ".gitseed-worktrees"):
+                if skip in dirnames:
+                    dirnames.remove(skip)
+        elif rel_dir_posix in gitlinks:
+            # Authorized submodule gitlink directory: keep placeholder directory without staging nested .git
+            (staging_dir / rel_dir_posix).mkdir(parents=True, exist_ok=True)
+            dirnames.clear()
+            continue
+
+        # Handle directory symlinks without descending into them or dereferencing targets
+        for dname in list(dirnames):
+            src_dir = Path(dirpath) / dname
+            rel_d_posix = f"{rel_dir_posix}/{dname}" if rel_dir_posix else dname
+            if src_dir.is_symlink():
+                dirnames.remove(dname)
+                if not _is_safe_in_repo_symlink(src_dir):
+                    escaped_symlinks.append(rel_d_posix)
+                    continue
+                dst_dir = staging_dir / rel_d_posix
+                dst_dir.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(src_dir, dst_dir, follow_symlinks=False)
+                except OSError as exc:
+                    logger.warning("Skipping workspace directory symlink %s: %s", rel_d_posix, exc)
+
+        if rel_dir_posix:
+            (staging_dir / rel_dir_posix).mkdir(parents=True, exist_ok=True)
+
+        for fname in filenames:
+            if rel_dir_posix == "" and fname == ".git":
+                continue
+            rel_f_posix = f"{rel_dir_posix}/{fname}" if rel_dir_posix else fname
+            src_file = Path(dirpath) / fname
+            if src_file.is_symlink() and not _is_safe_in_repo_symlink(src_file):
+                escaped_symlinks.append(rel_f_posix)
+                continue
+            dst_file = staging_dir / rel_f_posix
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(src_file, dst_file, follow_symlinks=False)
+                if dst_file.is_symlink() and not _is_safe_in_repo_symlink(src_file):
+                    dst_file.unlink(missing_ok=True)
+                    escaped_symlinks.append(rel_f_posix)
+            except OSError as exc:
+                logger.warning("Skipping unreadable/swapped workspace entry %s: %s", rel_f_posix, exc)
+
+    return sorted(set(escaped_symlinks))
+
+
 def matches_blocked_pattern(rel_path: str, pattern: str) -> bool:
-    """Return True if a normalized repo-relative POSIX path matches a blocked_paths pattern."""
-    norm_path = rel_path.strip().lstrip("/")
-    norm_pat = pattern.strip().lstrip("/")
+    """Return True if a normalized repo-relative POSIX path matches a blocked_paths pattern (case-insensitive)."""
+    norm_path = rel_path.strip().replace("\\", "/").removeprefix("./").lstrip("/").lower()
+    norm_pat = pattern.strip().replace("\\", "/").removeprefix("./").lstrip("/").lower()
     if not norm_path or not norm_pat:
         return False
     if norm_pat.endswith("/"):
         prefix = norm_pat.rstrip("/")
         if norm_path == prefix or norm_path.startswith(f"{prefix}/"):
             return True
-    if fnmatch.fnmatch(norm_path, norm_pat):
+    if fnmatch.fnmatchcase(norm_path, norm_pat):
         return True
-    if "/" not in norm_pat and fnmatch.fnmatch(PurePosixPath(norm_path).name, norm_pat):
+    if "/" not in norm_pat and fnmatch.fnmatchcase(PurePosixPath(norm_path).name, norm_pat):
         return True
     if "**" not in norm_pat:
         return False
@@ -627,10 +738,20 @@ def matches_blocked_pattern(rel_path: str, pattern: str) -> bool:
 
 
 def find_blocked_path_violations(
-    changed_paths: list[str], blocked_paths: list[str]
+    changed_paths: list[str],
+    blocked_paths: list[str] | None = None,
+    *,
+    include_hardcoded: bool = True,
 ) -> list[str]:
-    """Return sorted list of changed paths that match any pattern in blocked_paths."""
-    if not changed_paths or not blocked_paths:
+    """Return sorted list of changed paths matching HARDCODED_BLOCKED_PATTERNS or blocked_paths."""
+    if not changed_paths:
+        return []
+    effective_patterns: list[str] = []
+    if include_hardcoded:
+        effective_patterns.extend(HARDCODED_BLOCKED_PATTERNS)
+    if blocked_paths:
+        effective_patterns.extend(blocked_paths)
+    if not effective_patterns:
         return []
     violations: list[str] = []
     for path in changed_paths:
@@ -639,7 +760,7 @@ def find_blocked_path_violations(
             continue
         if any(
             matches_blocked_pattern(norm, pat)
-            for pat in blocked_paths
+            for pat in effective_patterns
             if pat and pat.strip()
         ):
             violations.append(norm)
@@ -850,6 +971,32 @@ def apply_git_path_policy(
     )
 
 
+def _expand_secret_needles(
+    extra_secrets: list[str] | set[str] | tuple[str, ...] | None,
+) -> list[str]:
+    """Build literal + Base64-encoded needles for issued run credentials."""
+    needles: list[str] = []
+    seen: set[str] = set()
+    for raw in extra_secrets or ():
+        if not raw:
+            continue
+        cleaned = raw.strip()
+        if len(cleaned) >= 8 and cleaned not in seen:
+            seen.add(cleaned)
+            needles.append(cleaned)
+        if len(cleaned) >= 16:
+            raw_bytes = cleaned.encode("utf-8")
+            for b64_variant in (
+                base64.b64encode(raw_bytes).decode("ascii"),
+                base64.urlsafe_b64encode(raw_bytes).decode("ascii"),
+            ):
+                for candidate in (b64_variant, b64_variant.rstrip("=")):
+                    if len(candidate) >= 16 and candidate not in seen:
+                        seen.add(candidate)
+                        needles.append(candidate)
+    return needles
+
+
 def scan_diff_for_secrets(
     diff_text: str,
     *,
@@ -863,11 +1010,7 @@ def scan_diff_for_secrets(
     if not diff_text:
         return findings
 
-    literal_secrets = [
-        s.strip()
-        for s in (extra_secrets or ())
-        if s and len(s.strip()) >= 8
-    ]
+    secret_needles = _expand_secret_needles(extra_secrets)
 
     in_hunk = False
     current_file = "<unknown>"
@@ -899,7 +1042,7 @@ def scan_diff_for_secrets(
             current_new_line += 1
             added_content = raw_line[1:]
             matched_rule: str | None = None
-            for secret_val in literal_secrets:
+            for secret_val in secret_needles:
                 if secret_val in added_content:
                     matched_rule = "issued_run_credential"
                     break
@@ -922,6 +1065,9 @@ def scan_diff_for_secrets(
             current_new_line += 1
 
     return findings
+
+
+scan_added_lines_for_secrets = scan_diff_for_secrets
 
 
 def scan_staged_diff_for_secrets(
@@ -952,23 +1098,33 @@ def scan_staged_diff_for_secrets(
     return scan_diff_for_secrets(target, extra_secrets=extra_secrets)
 
 
-def _list_base_gitlinks(clean_repo_dir: Path, base_sha: str) -> set[str]:
-    """Return the set of submodule/gitlink paths (mode 160000) present in base_sha."""
+def _map_base_gitlinks(clean_repo_dir: Path, base_sha: str) -> dict[str, str]:
+    """Return `{path: commit_sha}` for submodule/gitlink entries (mode 160000) in `base_sha`."""
     rc, out, _ = run_safe_git(["ls-tree", "-r", base_sha], clean_repo_dir)
     if rc != 0 or not out:
-        return set()
-    gitlinks: set[str] = set()
+        return {}
+    gitlinks: dict[str, str] = {}
     for line in out.splitlines():
         parts = line.split("\t", 1)
         if len(parts) == 2 and parts[0].startswith("160000 "):
-            gitlinks.add(parts[1].strip())
+            meta_tokens = parts[0].split()
+            sha = meta_tokens[2] if len(meta_tokens) >= 3 else ""
+            gitlinks[parts[1].strip()] = sha.strip()
     return gitlinks
 
 
+def _list_base_gitlinks(clean_repo_dir: Path, base_sha: str) -> set[str]:
+    """Return the set of submodule/gitlink paths (mode 160000) present in base_sha."""
+    return set(_map_base_gitlinks(clean_repo_dir, base_sha).keys())
+
+
 def detect_unauthorized_nested_git(
-    workspace_repo_dir: Path, allowed_gitlinks: set[str]
+    workspace_repo_dir: Path,
+    allowed_gitlinks: set[str],
+    *,
+    base_gitlink_shas: dict[str, str] | None = None,
 ) -> list[str]:
-    """Scan workspace_repo_dir for any nested .git dir/file not present as a gitlink in base."""
+    """Scan workspace_repo_dir for unauthorized nested .git dirs/files or repointed gitlinks."""
     unauthorized: list[str] = []
     root = workspace_repo_dir.resolve()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -983,6 +1139,10 @@ def detect_unauthorized_nested_git(
             if ".git" in dirnames or ".git" in filenames:
                 if rel_dir_posix not in allowed_gitlinks:
                     unauthorized.append(rel_dir_posix)
+                elif base_gitlink_shas is not None and rel_dir_posix in base_gitlink_shas:
+                    rc_sub, sub_sha, _ = run_safe_git(["rev-parse", "HEAD"], Path(dirpath))
+                    if rc_sub != 0 or sub_sha.strip() != base_gitlink_shas[rel_dir_posix]:
+                        unauthorized.append(rel_dir_posix)
                 if ".git" in dirnames:
                     dirnames.remove(".git")
     return sorted(set(unauthorized))
@@ -1018,6 +1178,7 @@ def construct_clean_commit_and_verify_policy(
     extra_secrets: list[str] | set[str] | tuple[str, ...] | None = None,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     max_diff_bytes: int = DEFAULT_MAX_DIFF_BYTES,
+    allow_submodules: bool = False,
 ) -> CleanCommitResult:
     """Build one clean commit on base_sha from workspace_repo_dir and verify policy."""
     result = CleanCommitResult(ok=False, branch=seed_branch)
@@ -1043,97 +1204,87 @@ def construct_clean_commit_and_verify_policy(
         result.error = f"Failed to checkout base SHA {base_sha} in clean repo: {err}"
         return result
 
-    # 2. Reject nested .git directories or gitlinks not present in base_sha
-    base_gitlinks = _list_base_gitlinks(clean_repo_dir, base_sha)
-    unauthorized_nested = detect_unauthorized_nested_git(
-        workspace_repo_dir, base_gitlinks
-    )
-    if unauthorized_nested:
-        result.error = (
-            "Governance violation: unauthorized nested .git directory or gitlink detected at: "
-            + ", ".join(unauthorized_nested)
+    # 2. Reject nested .git directories, new gitlinks, or repointed submodules
+    base_gitlink_map = _map_base_gitlinks(clean_repo_dir, base_sha)
+    base_gitlinks = set(base_gitlink_map.keys())
+    if not allow_submodules:
+        unauthorized_nested = detect_unauthorized_nested_git(
+            workspace_repo_dir,
+            base_gitlinks,
+            base_gitlink_shas=base_gitlink_map,
         )
-        return result
+        if unauthorized_nested:
+            result.error = (
+                "Governance violation: unauthorized nested .git directory or submodule repointing detected at: "
+                + ", ".join(unauthorized_nested)
+            )
+            return result
 
-    # 3. Stage the agent working tree using clean_repo_dir's .git and workspace_repo_dir
-    rc, _, err = run_safe_git(
-        [
-            f"--git-dir={clean_git_dir}",
-            f"--work-tree={workspace_repo_dir}",
-            "add",
-            "-A",
-        ],
-        clean_repo_dir,
-    )
-    if rc != 0:
-        result.error = f"Failed to stage working tree from {workspace_repo_dir}: {err}"
-        return result
+    # 3. Copy workspace into an isolated staging directory without dereferencing symlinks
+    stage_parent: str | None = None
+    if clean_repo_dir.parent.is_dir() and os.access(clean_repo_dir.parent, os.W_OK):
+        stage_parent = str(clean_repo_dir.parent)
+    staging_dir = Path(tempfile.mkdtemp(prefix=".gitseed-stage-", dir=stage_parent))
+    try:
+        escaped_symlinks = _copy_workspace_into_staging(
+            workspace_repo_dir,
+            staging_dir,
+            allowed_gitlinks=base_gitlinks,
+        )
+        if escaped_symlinks:
+            result.error = (
+                "Governance violation: workspace symlink escapes repository root: "
+                + ", ".join(escaped_symlinks)
+            )
+            return result
 
-    # Unstage internal GitSeed scratch paths while preserving .gitseed/run.json
-    _exclude_internal_paths(
-        clean_repo_dir,
-        base_sha=base_sha,
-        git_dir=clean_git_dir,
-        remove_worktree_files=False,
-    )
+        rc, _, err = run_safe_git(
+            [
+                f"--git-dir={clean_git_dir}",
+                f"--work-tree={staging_dir}",
+                "add",
+                "-A",
+            ],
+            clean_repo_dir,
+        )
+        if rc != 0:
+            result.error = f"Failed to stage working tree from {workspace_repo_dir}: {err}"
+            return result
 
-    # Ensure no new 160000 gitlink entries were staged
-    rc_idx, idx_out, _ = run_safe_git(
-        [f"--git-dir={clean_git_dir}", "ls-files", "--stage"],
-        clean_repo_dir,
-    )
-    if rc_idx == 0 and idx_out:
-        for line in idx_out.splitlines():
-            parts = line.split("\t", 1)
-            if len(parts) == 2 and parts[0].startswith("160000 "):
-                gitlink_path = parts[1].strip()
-                if gitlink_path not in base_gitlinks:
-                    result.error = (
-                        f"Governance violation: unauthorized gitlink staged at {gitlink_path}"
-                    )
-                    return result
+        # Unstage internal GitSeed scratch paths while preserving .gitseed/run.json
+        _exclude_internal_paths(
+            clean_repo_dir,
+            base_sha=base_sha,
+            git_dir=clean_git_dir,
+            remove_worktree_files=False,
+        )
 
-    # 4. Determine changed files between base_sha and staged index
-    rc, names_out, err = run_safe_git(
-        [
-            "-c",
-            "core.quotePath=false",
-            f"--git-dir={clean_git_dir}",
-            "diff",
-            "--cached",
-            "--name-only",
-            base_sha,
-        ],
-        clean_repo_dir,
-    )
-    if rc != 0:
-        result.error = f"Failed to inspect staged diff names: {err}"
-        return result
+        # Ensure no unauthorized 160000 gitlink entries or gitlink SHA repointings were staged
+        if not allow_submodules:
+            rc_idx, idx_out, _ = run_safe_git(
+                [f"--git-dir={clean_git_dir}", "ls-files", "--stage"],
+                clean_repo_dir,
+            )
+            if rc_idx == 0 and idx_out:
+                for line in idx_out.splitlines():
+                    parts = line.split("\t", 1)
+                    if len(parts) == 2 and parts[0].startswith("160000 "):
+                        gitlink_path = parts[1].strip()
+                        meta_cols = parts[0].split()
+                        staged_sha = meta_cols[1].strip() if len(meta_cols) >= 2 else ""
+                        if gitlink_path not in base_gitlink_map:
+                            result.error = (
+                                f"Governance violation: unauthorized gitlink staged at {gitlink_path}"
+                            )
+                            return result
+                        if base_gitlink_map[gitlink_path] and staged_sha != base_gitlink_map[gitlink_path]:
+                            result.error = (
+                                f"Governance violation: unauthorized submodule gitlink repointing at {gitlink_path}"
+                            )
+                            return result
 
-    changed_paths = [p.strip() for p in names_out.splitlines() if p.strip()]
-    if not changed_paths:
-        result.ok = True
-        result.has_changes = False
-        return result
-
-    # 5. Enforce blocked_paths policy
-    policy_res = apply_git_path_policy(
-        clean_repo_dir,
-        base_sha=base_sha,
-        blocked_paths=blocked_paths,
-        blocked_paths_action=blocked_paths_action,
-        changed_paths=changed_paths,
-        git_dir=clean_git_dir,
-        work_tree_dir=workspace_repo_dir,
-        update_worktree=False,
-    )
-    if policy_res.violations:
-        result.blocked_paths_violations = policy_res.violations
-    if not policy_res.ok:
-        result.error = policy_res.error
-        return result
-    if policy_res.reverted:
-        _, names_out2, _ = run_safe_git(
+        # 4. Determine changed files between base_sha and staged index
+        rc, names_out, err = run_safe_git(
             [
                 "-c",
                 "core.quotePath=false",
@@ -1145,143 +1296,201 @@ def construct_clean_commit_and_verify_policy(
             ],
             clean_repo_dir,
         )
-        changed_paths = [p.strip() for p in names_out2.splitlines() if p.strip()]
+        if rc != 0:
+            result.error = f"Failed to inspect staged diff names: {err}"
+            return result
+
+        changed_paths = [p.strip() for p in names_out.splitlines() if p.strip()]
         if not changed_paths:
             result.ok = True
             result.has_changes = False
             return result
 
-    # 6. Enforce per-file size cap on staged blobs
-    if max_file_bytes > 0:
-        for rel_path in changed_paths:
-            rc_sz, sz_out, _ = run_safe_git(
-                [f"--git-dir={clean_git_dir}", "cat-file", "-s", f":{rel_path}"],
-                clean_repo_dir,
-            )
-            blob_size: int | None = None
-            if rc_sz == 0 and sz_out.isdigit():
-                blob_size = int(sz_out)
-            else:
-                ws_file = workspace_repo_dir / rel_path
-                if ws_file.exists() and ws_file.is_file():
-                    with contextlib.suppress(OSError):
-                        blob_size = ws_file.stat().st_size
-            if blob_size is not None and blob_size > max_file_bytes:
+        if not allow_submodules:
+            gitmodules_mods = [
+                p
+                for p in changed_paths
+                if p.lower() == ".gitmodules" or p.lower().endswith("/.gitmodules")
+            ]
+            if gitmodules_mods:
                 result.error = (
-                    f"Governance policy violation: file '{rel_path}' ({blob_size} bytes) "
-                    f"exceeds max_file_bytes cap ({max_file_bytes} bytes)"
+                    "Governance violation: unauthorized .gitmodules modification detected at: "
+                    + ", ".join(gitmodules_mods)
                 )
                 return result
 
-    # 7. Inspect full staged diff for total size cap and secret scanning
-    rc_diff, diff_text, err_diff = run_safe_git(
-        [
-            "-c",
-            "core.quotePath=false",
-            f"--git-dir={clean_git_dir}",
-            "diff",
-            "--cached",
-            "--text",
-            "--no-color",
-            "-U0",
-            base_sha,
-        ],
-        clean_repo_dir,
-    )
-    if rc_diff != 0:
-        result.error = f"Failed to generate staged diff: {err_diff}"
-        return result
-
-    diff_byte_len = len(diff_text.encode("utf-8"))
-    if max_diff_bytes > 0 and diff_byte_len > max_diff_bytes:
-        result.error = (
-            f"Governance policy violation: total diff size ({diff_byte_len} bytes) "
-            f"exceeds max_diff_bytes cap ({max_diff_bytes} bytes)"
+        # 5. Enforce blocked_paths policy
+        policy_res = apply_git_path_policy(
+            clean_repo_dir,
+            base_sha=base_sha,
+            blocked_paths=blocked_paths,
+            blocked_paths_action=blocked_paths_action,
+            changed_paths=changed_paths,
+            git_dir=clean_git_dir,
+            work_tree_dir=staging_dir,
+            update_worktree=False,
         )
-        return result
+        if policy_res.violations:
+            result.blocked_paths_violations = policy_res.violations
+        if not policy_res.ok:
+            result.error = policy_res.error
+            return result
+        if policy_res.reverted:
+            _, names_out2, _ = run_safe_git(
+                [
+                    "-c",
+                    "core.quotePath=false",
+                    f"--git-dir={clean_git_dir}",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    base_sha,
+                ],
+                clean_repo_dir,
+            )
+            changed_paths = [p.strip() for p in names_out2.splitlines() if p.strip()]
+            if not changed_paths:
+                result.ok = True
+                result.has_changes = False
+                return result
 
-    secret_findings = scan_diff_for_secrets(diff_text, extra_secrets=extra_secrets)
-    if secret_findings:
-        result.secret_scan_findings = secret_findings
-        summary = ", ".join(
-            f"{item['path']}:{item['line']} ({item['rule']})"
-            for item in secret_findings[:10]
+        # 6. Enforce per-file size cap on staged blobs
+        if max_file_bytes > 0:
+            for rel_path in changed_paths:
+                rc_sz, sz_out, _ = run_safe_git(
+                    [f"--git-dir={clean_git_dir}", "cat-file", "-s", f":{rel_path}"],
+                    clean_repo_dir,
+                )
+                blob_size: int | None = None
+                if rc_sz == 0 and sz_out.isdigit():
+                    blob_size = int(sz_out)
+                else:
+                    staged_file = staging_dir / rel_path
+                    if (
+                        not staged_file.is_symlink()
+                        and staged_file.exists()
+                        and staged_file.is_file()
+                    ):
+                        with contextlib.suppress(OSError):
+                            blob_size = staged_file.stat().st_size
+                if blob_size is not None and blob_size > max_file_bytes:
+                    result.error = (
+                        f"Governance policy violation: file '{rel_path}' ({blob_size} bytes) "
+                        f"exceeds max_file_bytes cap ({max_file_bytes} bytes)"
+                    )
+                    return result
+
+        # 7. Inspect full staged diff for total size cap and secret scanning
+        rc_diff, diff_text, err_diff = run_safe_git(
+            [
+                "-c",
+                "core.quotePath=false",
+                f"--git-dir={clean_git_dir}",
+                "diff",
+                "--cached",
+                "--text",
+                "--no-color",
+                "-U0",
+                base_sha,
+            ],
+            clean_repo_dir,
         )
-        result.error = (
-            f"Secret scan failed: detected {len(secret_findings)} potential secret(s) "
-            f"in added lines: {summary}"
+        if rc_diff != 0:
+            result.error = f"Failed to generate staged diff: {err_diff}"
+            return result
+
+        diff_byte_len = len(diff_text.encode("utf-8"))
+        if max_diff_bytes > 0 and diff_byte_len > max_diff_bytes:
+            result.error = (
+                f"Governance policy violation: total diff size ({diff_byte_len} bytes) "
+                f"exceeds max_diff_bytes cap ({max_diff_bytes} bytes)"
+            )
+            return result
+
+        secret_findings = scan_diff_for_secrets(diff_text, extra_secrets=extra_secrets)
+        if secret_findings:
+            result.secret_scan_findings = secret_findings
+            summary = ", ".join(
+                f"{item['path']}:{item['line']} ({item['rule']})"
+                for item in secret_findings[:10]
+            )
+            result.error = (
+                f"Secret scan failed: detected {len(secret_findings)} potential secret(s) "
+                f"in added lines: {summary}"
+            )
+            return result
+
+        # 8. Compute diff_stats (--numstat)
+        rc_stat, numstat_out, _ = run_safe_git(
+            [
+                f"--git-dir={clean_git_dir}",
+                "diff",
+                "--cached",
+                "--numstat",
+                base_sha,
+            ],
+            clean_repo_dir,
         )
+        files_count = len(changed_paths)
+        insertions = 0
+        deletions = 0
+        if rc_stat == 0 and numstat_out:
+            for line in numstat_out.splitlines():
+                cols = line.split("\t")
+                if len(cols) >= 3:
+                    if cols[0].isdigit():
+                        insertions += int(cols[0])
+                    if cols[1].isdigit():
+                        deletions += int(cols[1])
+        result.diff_stats = {
+            "files": files_count,
+            "insertions": insertions,
+            "deletions": deletions,
+        }
+
+        # 9. Construct commit message with trailers and commit using GitSeed identity
+        full_message = commit_message.strip() or "feat(gitseed): automated seed implementation"
+        if trailers:
+            trailer_lines = [
+                f"{k}: {v}" for k, v in trailers.items() if k and str(v).strip()
+            ]
+            if trailer_lines:
+                full_message = f"{full_message}\n\n" + "\n".join(trailer_lines)
+
+        commit_env = {
+            "GIT_AUTHOR_NAME": "GitSeed",
+            "GIT_AUTHOR_EMAIL": "gitseed@gitseed.local",
+            "GIT_COMMITTER_NAME": "GitSeed",
+            "GIT_COMMITTER_EMAIL": "gitseed@gitseed.local",
+        }
+        rc_commit, _, err_commit = run_safe_git(
+            [
+                f"--git-dir={clean_git_dir}",
+                "commit",
+                "-m",
+                full_message,
+            ],
+            clean_repo_dir,
+            extra_env=commit_env,
+        )
+        if rc_commit != 0:
+            result.error = f"git commit failed in clean repository: {err_commit}"
+            return result
+
+        rc_sha, commit_sha, err_sha = run_safe_git(
+            [f"--git-dir={clean_git_dir}", "rev-parse", "HEAD"],
+            clean_repo_dir,
+        )
+        if rc_sha != 0 or not commit_sha:
+            result.error = f"Failed to resolve committed SHA: {err_sha}"
+            return result
+
+        result.ok = True
+        result.has_changes = True
+        result.commit_sha = commit_sha.strip()
         return result
-
-    # 8. Compute diff_stats (--numstat)
-    rc_stat, numstat_out, _ = run_safe_git(
-        [
-            f"--git-dir={clean_git_dir}",
-            "diff",
-            "--cached",
-            "--numstat",
-            base_sha,
-        ],
-        clean_repo_dir,
-    )
-    files_count = len(changed_paths)
-    insertions = 0
-    deletions = 0
-    if rc_stat == 0 and numstat_out:
-        for line in numstat_out.splitlines():
-            cols = line.split("\t")
-            if len(cols) >= 3:
-                if cols[0].isdigit():
-                    insertions += int(cols[0])
-                if cols[1].isdigit():
-                    deletions += int(cols[1])
-    result.diff_stats = {
-        "files": files_count,
-        "insertions": insertions,
-        "deletions": deletions,
-    }
-
-    # 9. Construct commit message with trailers and commit using GitSeed identity
-    full_message = commit_message.strip() or "feat(gitseed): automated seed implementation"
-    if trailers:
-        trailer_lines = [
-            f"{k}: {v}" for k, v in trailers.items() if k and str(v).strip()
-        ]
-        if trailer_lines:
-            full_message = f"{full_message}\n\n" + "\n".join(trailer_lines)
-
-    commit_env = {
-        "GIT_AUTHOR_NAME": "GitSeed",
-        "GIT_AUTHOR_EMAIL": "gitseed@gitseed.local",
-        "GIT_COMMITTER_NAME": "GitSeed",
-        "GIT_COMMITTER_EMAIL": "gitseed@gitseed.local",
-    }
-    rc_commit, _, err_commit = run_safe_git(
-        [
-            f"--git-dir={clean_git_dir}",
-            "commit",
-            "-m",
-            full_message,
-        ],
-        clean_repo_dir,
-        extra_env=commit_env,
-    )
-    if rc_commit != 0:
-        result.error = f"git commit failed in clean repository: {err_commit}"
-        return result
-
-    rc_sha, commit_sha, err_sha = run_safe_git(
-        [f"--git-dir={clean_git_dir}", "rev-parse", "HEAD"],
-        clean_repo_dir,
-    )
-    if rc_sha != 0 or not commit_sha:
-        result.error = f"Failed to resolve committed SHA: {err_sha}"
-        return result
-
-    result.ok = True
-    result.has_changes = True
-    result.commit_sha = commit_sha.strip()
-    return result
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 enforce_clean_room_git_policy = construct_clean_commit_and_verify_policy

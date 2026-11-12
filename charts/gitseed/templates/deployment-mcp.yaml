@@ -20,11 +20,13 @@ spec:
         {{- include "gitseed.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: mcp
     spec:
-      serviceAccountName: {{ include "gitseed.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -41,13 +43,15 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ $fullname }}-config
-            - secretRef:
-                name: {{ include "gitseed.secretName" . }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
             runAsGroup: 1000
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           readinessProbe:
             httpGet:
               path: /health

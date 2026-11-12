@@ -13,6 +13,7 @@ import { SessionTerminal } from '../details/project/SessionTerminal'
 import { SessionResumePrompt } from './SessionDetail'
 import { SessionEditorPane } from './SessionEditorPane'
 import { canStartSessions } from './SessionStartControl'
+import { resolveVsCodeIframeProps, safeExternalUrl } from '../../utils/gitUrls'
 import type { SessionListItem } from '../../types'
 
 const HEIGHT_KEY = 'gitseed.sessionDock.height'
@@ -55,6 +56,7 @@ export const SessionDock: React.FC = () => {
   // Sleeping agent sessions the user explicitly chose to wake (never woken just by expanding)
   const [resumed, setResumed] = useState<Set<string>>(() => new Set())
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
+  const dragCleanupRef = useRef<(() => void) | null>(null)
 
   // The session whose own page is open is shown there, not duplicated in the dock
   const pageKey =
@@ -130,6 +132,7 @@ export const SessionDock: React.FC = () => {
   const onDragStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
+      dragCleanupRef.current?.()
       dragRef.current = { startY: e.clientY, startH: height }
       const onMove = (ev: MouseEvent) => {
         if (!dragRef.current) return
@@ -137,12 +140,17 @@ export const SessionDock: React.FC = () => {
         const next = Math.min(max, Math.max(MIN_HEIGHT, dragRef.current.startH + (dragRef.current.startY - ev.clientY)))
         setHeight(next)
       }
-      const onUp = () => {
+      const cleanup = () => {
         dragRef.current = null
+        dragCleanupRef.current = null
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
         document.body.style.userSelect = ''
       }
+      const onUp = () => {
+        cleanup()
+      }
+      dragCleanupRef.current = cleanup
       document.body.style.userSelect = 'none'
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
@@ -151,13 +159,30 @@ export const SessionDock: React.FC = () => {
   )
 
   useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.()
+    }
+  }, [])
+
+  useEffect(() => {
     window.localStorage.setItem(HEIGHT_KEY, String(height))
   }, [height])
 
   const visible = items.filter((i) => dockKey(i.kind, i.id) !== pageKey)
+  const expanded = visible.find((i) => dockKey(i.kind, i.id) === expandedKey) || null
+
+  useEffect(() => {
+    if (!expanded) {
+      dragCleanupRef.current?.()
+    }
+  }, [expanded])
+
   if (visible.length === 0 && !notice) return null
 
-  const expanded = visible.find((i) => dockKey(i.kind, i.id) === expandedKey) || null
+  const resolvedExpandedVsCode = expanded?.vscodeUrl
+    ? resolveVsCodeIframeProps(expanded.vscodeUrl)
+    : null
+  const safeExpandedVsCodeHref = safeExternalUrl(resolvedExpandedVsCode?.url)
   const statusFor = (it: DockedSession) => statuses[items.indexOf(it)]?.data as SessionListItem | undefined
   const resolvePane = (it: DockedSession): 'terminal' | 'code' | 'vscode' =>
     it.pane || (it.title.startsWith('Editor ·') ? 'code' : 'terminal')
@@ -257,9 +282,9 @@ export const SessionDock: React.FC = () => {
                   })}
                 </div>
               )}
-              {canContributeExpanded && expandedPane === 'vscode' && expanded.vscodeUrl && (
+              {canContributeExpanded && expandedPane === 'vscode' && safeExpandedVsCodeHref && (
                 <a
-                  href={expanded.vscodeUrl}
+                  href={safeExpandedVsCodeHref}
                   target="_blank"
                   rel="noopener noreferrer"
                   title="Open VS Code in a separate browser tab"
@@ -298,15 +323,34 @@ export const SessionDock: React.FC = () => {
               onResume={() => setResumed((s) => new Set(s).add(dockKey(expanded.kind, expanded.id)))}
               className="flex-1 min-h-0"
             />
-          ) : statusFor(expanded)?.is_running && expandedPane === 'vscode' && expanded.vscodeUrl ? (
-            <iframe
-              key={`vscode-${dockKey(expanded.kind, expanded.id)}`}
-              src={expanded.vscodeUrl}
-              title={`VS Code · ${expanded.title}`}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
-              allow="clipboard-read; clipboard-write;"
-              className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
-            />
+          ) : statusFor(expanded)?.is_running && expandedPane === 'vscode' && resolvedExpandedVsCode ? (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-zinc-950">
+              {!resolvedExpandedVsCode.sandbox.includes('allow-same-origin') && (
+                <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
+                  <span>
+                    Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
+                  </span>
+                  {safeExpandedVsCodeHref && (
+                    <a
+                      href={safeExpandedVsCodeHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold underline shrink-0"
+                    >
+                      Open in new tab
+                    </a>
+                  )}
+                </div>
+              )}
+              <iframe
+                key={`vscode-${dockKey(expanded.kind, expanded.id)}`}
+                src={resolvedExpandedVsCode.url}
+                title={`VS Code · ${expanded.title}`}
+                sandbox={resolvedExpandedVsCode.sandbox}
+                allow="clipboard-read; clipboard-write;"
+                className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
+              />
+            </div>
           ) : statusFor(expanded)?.is_running && expandedPane === 'code' ? (
             <SessionEditorPane
               key={`editor-${dockKey(expanded.kind, expanded.id)}`}

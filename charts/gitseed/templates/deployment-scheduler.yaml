@@ -26,6 +26,8 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -51,6 +53,10 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           readinessProbe:
             exec:
               command: ["pgrep", "-f", "gitseed_core.main"]

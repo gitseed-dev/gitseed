@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import stat
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -108,6 +109,24 @@ def _write_restricted_file(path: Path, content: str) -> None:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
         pass
+    if os.name == "nt":
+        username = os.environ.get("USERNAME", "").strip()
+        if username:
+            try:
+                subprocess.run(
+                    [
+                        "icacls",
+                        str(path),
+                        "/inheritance:r",
+                        "/grant:r",
+                        f"{username}:(R,W)",
+                    ],
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+            except Exception:
+                pass
 
 
 def _load_file_credentials() -> dict[str, str]:

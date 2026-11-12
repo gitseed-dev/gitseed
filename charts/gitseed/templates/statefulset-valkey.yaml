@@ -21,10 +21,18 @@ spec:
         {{- include "gitseed.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: valkey
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: valkey
           image: "{{ .Values.valkey.image.repository }}:{{ .Values.valkey.image.tag }}"
           imagePullPolicy: {{ .Values.valkey.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
           args:
             - "valkey-server"
             - "--requirepass"

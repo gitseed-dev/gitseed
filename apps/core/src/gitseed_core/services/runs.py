@@ -1,3 +1,4 @@
+import inspect
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
 from gitseed_core.models.agent import Agent, AgentBackend
+from gitseed_core.models.agent_session import AgentSession
 from gitseed_core.models.approval import Approval
 from gitseed_core.models.backend import Backend
 from gitseed_core.models.project import Project, ProjectMember
@@ -571,9 +573,20 @@ async def create_run(
 async def _recompute_seed_spent(
     session: AsyncSession, seed: Seed, project: Project
 ) -> None:
+    run_subq = (
+        select(func.coalesce(func.sum(col(Run.cost)), Decimal("0")))
+        .where(Run.seed_id == seed.id)
+        .scalar_subquery()
+    )
+    sess_subq = (
+        select(func.coalesce(func.sum(col(AgentSession.total_cost)), Decimal("0")))
+        .where(AgentSession.seed_id == seed.id)
+        .scalar_subquery()
+    )
     total = await session.scalar(
-        select(func.coalesce(func.sum(col(Run.cost)), Decimal("0"))).where(
-            Run.seed_id == seed.id
+        select(
+            func.coalesce(run_subq, Decimal("0"))
+            + func.coalesce(sess_subq, Decimal("0"))
         )
     )
     seed.spent = Decimal(str(total or 0))
@@ -707,6 +720,8 @@ async def update_run(
             "models_backend_id",
             "gateway_model",
             "webhook_triggered",
+            "second_opinion",
+            "multi_opinion",
         )
         sanitized_output = {k: v for k, v in output.items() if k not in protected_keys}
         if isinstance(run.output, dict):
@@ -795,41 +810,49 @@ async def update_run(
             await advance_seed_after_succeeded_run(
                 session, seed, run, pol_for_succeeded, now
             )
-        elif status == RunStatus.FAILED:
-            seed.status = SeedStatus.FAILED
-            seed.blocked_reason = None
-            seed.updated_at = now
-            record(
-                session,
-                type=ActivityType.RUN_FAILED,
-                actor_type=ActorType.AGENT,
-                actor_id=run.agent_id,
-                project_id=seed.project_id,
-                seed_id=seed.id,
-                data={
-                    "run_id": run.id,
-                    "stage": str(run.stage),
-                    "attempt": run.attempt,
-                    "error": run.error,
-                },
+        elif status in (RunStatus.FAILED, RunStatus.TIMED_OUT):
+            is_parallel_opinion = bool(
+                isinstance(run.output, dict)
+                and (run.output.get("second_opinion") or run.output.get("multi_opinion"))
+                and run.stage in MULTI_OPINION_STAGES
             )
-        elif status == RunStatus.TIMED_OUT:
-            seed.status = SeedStatus.FAILED
-            seed.blocked_reason = None
-            seed.updated_at = now
-            record(
-                session,
-                type=ActivityType.RUN_TIMED_OUT,
-                actor_type=ActorType.SYSTEM,
-                actor_id=None,
-                project_id=seed.project_id,
-                seed_id=seed.id,
-                data={
-                    "run_id": run.id,
-                    "stage": str(run.stage),
-                    "attempt": run.attempt,
-                },
-            )
+            if status == RunStatus.FAILED:
+                record(
+                    session,
+                    type=ActivityType.RUN_FAILED,
+                    actor_type=ActorType.AGENT,
+                    actor_id=run.agent_id,
+                    project_id=seed.project_id,
+                    seed_id=seed.id,
+                    data={
+                        "run_id": run.id,
+                        "stage": str(run.stage),
+                        "attempt": run.attempt,
+                        "error": run.error,
+                    },
+                )
+            else:
+                record(
+                    session,
+                    type=ActivityType.RUN_TIMED_OUT,
+                    actor_type=ActorType.SYSTEM,
+                    actor_id=None,
+                    project_id=seed.project_id,
+                    seed_id=seed.id,
+                    data={
+                        "run_id": run.id,
+                        "stage": str(run.stage),
+                        "attempt": run.attempt,
+                    },
+                )
+            if is_parallel_opinion and seed.status == SeedStatus.RUNNING:
+                await _reconcile_seed_after_non_succeeded_run(
+                    session, seed, run, now, fallback_status=SeedStatus.FAILED
+                )
+            else:
+                seed.status = SeedStatus.FAILED
+                seed.blocked_reason = None
+                seed.updated_at = now
 
     run.updated_at = now
     await session.flush()
@@ -840,6 +863,85 @@ async def update_run(
     await session.commit()
     await session.refresh(run)
     return run
+
+
+async def _reconcile_seed_after_non_succeeded_run(
+    session: AsyncSession,
+    seed: Seed,
+    run: Run,
+    now: datetime,
+    *,
+    fallback_status: SeedStatus,
+) -> None:
+    """Reconcile `seed.status` when an active run is cancelled or fails alongside sibling runs."""
+
+    def _as_utc(dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+    sibling_runs: list[Run] = []
+    exec_fn = getattr(session, "execute", None)
+    if callable(exec_fn):
+        try:
+            sib_res = await session.execute(
+                select(Run)
+                .where(
+                    Run.seed_id == seed.id,
+                    Run.stage == run.stage,
+                    Run.id != run.id,
+                )
+                .order_by(col(Run.created_at).asc())
+            )
+            scalars_fn = getattr(sib_res, "scalars", None)
+            if callable(scalars_fn):
+                scalars_obj = scalars_fn()
+                if inspect.iscoroutine(scalars_obj):
+                    scalars_obj.close()
+                else:
+                    all_fn = getattr(scalars_obj, "all", None)
+                    raw_rows = all_fn() if callable(all_fn) else []
+                    if inspect.iscoroutine(raw_rows):
+                        raw_rows.close()
+                    elif isinstance(raw_rows, (list, tuple)):
+                        sibling_runs = [
+                            r
+                            for r in raw_rows
+                            if isinstance(r, Run) and r.id != run.id
+                        ]
+        except Exception:
+            sibling_runs = []
+
+    if any(r.status in RUN_ACTIVE_STATUSES for r in sibling_runs):
+        seed.status = SeedStatus.RUNNING
+        seed.updated_at = now
+        return
+
+    stage_cutoff = _as_utc(seed.stage_entered_at)
+    succeeded_siblings: list[Run] = []
+    for r in sibling_runs:
+        if r.status != RunStatus.SUCCEEDED:
+            continue
+        r_ts = _as_utc(r.created_at)
+        if stage_cutoff is not None and r_ts is not None and r_ts < stage_cutoff:
+            continue
+        succeeded_siblings.append(r)
+
+    if succeeded_siblings:
+        try:
+            await advance_seed_after_succeeded_run(
+                session, seed, succeeded_siblings[-1], now=now
+            )
+        except Exception:
+            seed.status = SeedStatus.AWAITING_APPROVAL
+            seed.blocked_reason = None
+            seed.updated_at = now
+        return
+
+    seed.status = fallback_status
+    if fallback_status == SeedStatus.FAILED:
+        seed.blocked_reason = None
+    seed.updated_at = now
 
 
 async def cancel_run(
@@ -885,8 +987,9 @@ async def cancel_run(
         )
 
     if seed.status == SeedStatus.RUNNING:
-        seed.status = SeedStatus.QUEUED
-        seed.updated_at = now
+        await _reconcile_seed_after_non_succeeded_run(
+            session, seed, run, now, fallback_status=SeedStatus.QUEUED
+        )
 
     record(
         session,

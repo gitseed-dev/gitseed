@@ -11,16 +11,29 @@ import { I18nProvider } from '../context/I18nContext'
 import { StatusProvider } from '../context/StatusContext'
 import { ThemeProvider } from '../context/ThemeContext'
 import { SessionDockProvider } from '../context/SessionDockContext'
-import { parseUnifiedDiffLines } from '../components/common/MonacoCodeEditor'
+import {
+  computeSimpleDiff,
+  parseUnifiedDiffLines,
+} from '../components/common/MonacoCodeEditor'
 import { GettingStartedCard } from '../components/common/GettingStartedCard'
 import { SeedMetadataSidebar } from '../components/details/seed/SeedMetadataSidebar'
 import { ErrorBoundary } from '../components/ErrorBoundary'
+import {
+  resolveVsCodeIframeProps,
+  safeExternalUrl,
+} from '../utils/gitUrls'
+import { verifyGovernanceReceiptClientSide } from '../utils/receiptVerification'
 import {
   mockStorage,
   mockUser,
   setupTestDom,
 } from './setup'
-import type { Backend, Seed } from '../types'
+import type {
+  Backend,
+  GovernanceReceiptEnvelope,
+  GovernanceReceiptPayload,
+  Seed,
+} from '../types'
 
 setupTestDom()
 
@@ -99,17 +112,51 @@ describe('Unified Diff Real File Line Numbers (parseUnifiedDiffLines)', () => {
 })
 
 describe('DataContext Seed Pagination Limit & Local Workspaces Client', () => {
-  it('fetches seeds with limit <= 200 so backend validation never returns HTTP 422', async () => {
+  it('fetches seeds with limit = 1000 (<= 1000 API max) and supplements open_only when full', async () => {
+    assert.equal(SEEDS_LIST_LIMIT, 1000)
     assert.ok(
-      SEEDS_LIST_LIMIT >= 1 && SEEDS_LIST_LIMIT <= 200,
-      `Expected SEEDS_LIST_LIMIT (${SEEDS_LIST_LIMIT}) to be within 1..200`
+      SEEDS_LIST_LIMIT >= 1 && SEEDS_LIST_LIMIT <= 1000,
+      `Expected SEEDS_LIST_LIMIT (${SEEDS_LIST_LIMIT}) to be within 1..1000`
     )
 
     const requestedUrls: string[] = []
+    let simulateFullPage = false
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString()
       requestedUrls.push(url)
+      if (simulateFullPage && url.startsWith('/api/v1/seeds?')) {
+        const parsed = new URL(url, 'http://localhost:8421')
+        if (parsed.searchParams.get('open_only') === 'true') {
+          return new Response(
+            JSON.stringify([
+              {
+                id: 'open-seed-1001',
+                project_id: 'p1',
+                number: 1,
+                title: 'Older Open Seed',
+                status: 'running',
+                stage: 'execute',
+                created_at: '2026-01-01T00:00:00Z',
+              },
+            ]),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+        const closedBatch = Array.from({ length: SEEDS_LIST_LIMIT }, (_, idx) => ({
+          id: `closed-${idx}`,
+          project_id: 'p1',
+          number: idx + 2,
+          title: `Closed ${idx}`,
+          status: 'merged',
+          stage: 'merge',
+          created_at: '2026-02-01T00:00:00Z',
+        }))
+        return new Response(JSON.stringify(closedBatch), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       return new Response(JSON.stringify([]), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -152,7 +199,7 @@ describe('DataContext Seed Pagination Limit & Local Workspaces Client', () => {
 
       const seedsQuery = qc.getQueryCache().find({ queryKey: queryKeys.seeds })
       assert.ok(seedsQuery, 'Expected DataContext to register seeds query')
-      const queryFn = seedsQuery.options.queryFn as (() => Promise<unknown>) | undefined
+      const queryFn = seedsQuery.options.queryFn as (() => Promise<Seed[]>) | undefined
       assert.equal(typeof queryFn, 'function')
       await queryFn!()
 
@@ -160,8 +207,19 @@ describe('DataContext Seed Pagination Limit & Local Workspaces Client', () => {
       assert.ok(seedCall, 'Expected GET /api/v1/seeds request')
       const parsedUrl = new URL(seedCall, 'http://localhost:8421')
       const limitParam = Number(parsedUrl.searchParams.get('limit'))
-      assert.equal(limitParam, 200)
-      assert.ok(limitParam <= 200)
+      assert.equal(limitParam, 1000)
+      assert.ok(limitParam <= 1000)
+
+      // Verify crowd-out protection when global page hits SEEDS_LIST_LIMIT
+      requestedUrls.length = 0
+      simulateFullPage = true
+      const mergedResult = await queryFn!()
+      assert.equal(mergedResult.length, 1001)
+      assert.ok(mergedResult.some((s) => s.id === 'open-seed-1001'))
+      assert.ok(
+        requestedUrls.some((u) => u.includes('open_only=true')),
+        'Expected supplemental open_only=true query when global list reaches limit'
+      )
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -435,5 +493,222 @@ describe('ErrorBoundary & Unpriced Spend Badge', () => {
 
     assert.ok(html.includes('Unpriced'))
     assert.ok(html.includes('View Signed Receipt'))
+  })
+})
+
+describe('External URL Sanitization, VS Code Iframe Sandbox, LCS Diff & Ed25519 Receipt Verification', () => {
+  it('sanitizes external URLs via safeExternalUrl (allows http/https, rejects javascript/data/vbscript)', () => {
+    assert.equal(
+      safeExternalUrl('https://github.com/org/repo/pull/42'),
+      'https://github.com/org/repo/pull/42'
+    )
+    assert.equal(
+      safeExternalUrl('  http://192.168.1.10:3000/org/repo/pulls/7  '),
+      'http://192.168.1.10:3000/org/repo/pulls/7'
+    )
+    assert.equal(safeExternalUrl('javascript:alert(1)'), null)
+    assert.equal(safeExternalUrl('  JAVASCRIPT:alert(document.cookie)  '), null)
+    assert.equal(safeExternalUrl('data:text/html,<script>alert(1)</script>'), null)
+    assert.equal(safeExternalUrl('vbscript:msgbox(1)'), null)
+    assert.equal(safeExternalUrl('file:///etc/passwd'), null)
+    assert.equal(safeExternalUrl('local://my-repo'), null)
+    assert.equal(safeExternalUrl('/relative/path'), null)
+    assert.equal(safeExternalUrl(''), null)
+    assert.equal(safeExternalUrl(null), null)
+    assert.equal(safeExternalUrl(undefined), null)
+  })
+
+  it('rewrites loopback VS Code URLs on LAN/Tailscale hosts and strips allow-same-origin when same-origin', () => {
+    // 1. LAN / Tailscale host rewrites 127.0.0.1:8423 -> <lan-host>:8423 (cross-origin)
+    const lanResolved = resolveVsCodeIframeProps(
+      'http://127.0.0.1:8423/api/v1/vscode/tok123/?folder=/workspace',
+      'http://192.168.1.50:8421'
+    )
+    assert.equal(
+      lanResolved.url,
+      'http://192.168.1.50:8423/api/v1/vscode/tok123/?folder=/workspace'
+    )
+    assert.ok(lanResolved.sandbox.includes('allow-scripts'))
+    assert.ok(lanResolved.sandbox.includes('allow-same-origin'))
+
+    // 2. HTTPS Tailscale host upgrades protocol + hostname while preserving dedicated port 8423
+    const httpsTailscale = resolveVsCodeIframeProps(
+      'http://localhost:8423/api/v1/vscode/tok456/',
+      'https://devbox.tailnet.ts.net:8443'
+    )
+    assert.equal(
+      httpsTailscale.url,
+      'https://devbox.tailnet.ts.net:8423/api/v1/vscode/tok456/'
+    )
+    assert.ok(httpsTailscale.sandbox.includes('allow-same-origin'))
+
+    // 3. Localhost browser preserves 127.0.0.1:8423 cross-origin isolation
+    const localResolved = resolveVsCodeIframeProps(
+      'http://127.0.0.1:8423/api/v1/vscode/tok789/',
+      'http://localhost:8421'
+    )
+    assert.equal(
+      localResolved.url,
+      'http://127.0.0.1:8423/api/v1/vscode/tok789/'
+    )
+    assert.ok(localResolved.sandbox.includes('allow-same-origin'))
+
+    // 4. Same-origin fallback omits allow-same-origin to prevent parent DOM/cookie escape
+    const sameOriginResolved = resolveVsCodeIframeProps(
+      '/api/v1/vscode/tok-same/',
+      'http://192.168.1.50:8421'
+    )
+    assert.equal(
+      sameOriginResolved.url,
+      'http://192.168.1.50:8421/api/v1/vscode/tok-same/'
+    )
+    assert.ok(sameOriginResolved.sandbox.includes('allow-scripts'))
+    assert.ok(!sameOriginResolved.sandbox.includes('allow-same-origin'))
+  })
+
+  it('aligns unchanged lines properly on single-line insertions and deletions in computeSimpleDiff', () => {
+    const original = ['line 1', 'line 2', 'line 3', 'line 4'].join('\n')
+    const insertedTop = ['inserted header', 'line 1', 'line 2', 'line 3', 'line 4'].join('\n')
+
+    const topDiff = computeSimpleDiff(original, insertedTop)
+    assert.equal(topDiff.length, 5)
+    assert.deepEqual(topDiff[0], {
+      type: 'add',
+      oldLine: null,
+      newLine: 1,
+      text: 'inserted header',
+    })
+    assert.equal(topDiff.filter((d) => d.type === 'equal').length, 4)
+    assert.deepEqual(topDiff[1], {
+      type: 'equal',
+      oldLine: 1,
+      newLine: 2,
+      text: 'line 1',
+    })
+    assert.deepEqual(topDiff[4], {
+      type: 'equal',
+      oldLine: 4,
+      newLine: 5,
+      text: 'line 4',
+    })
+
+    // Single-line deletion in middle
+    const deletedMiddle = ['line 1', 'line 3', 'line 4'].join('\n')
+    const delDiff = computeSimpleDiff(original, deletedMiddle)
+    assert.equal(delDiff.length, 4)
+    assert.equal(delDiff.filter((d) => d.type === 'del').length, 1)
+    assert.deepEqual(delDiff[1], {
+      type: 'del',
+      oldLine: 2,
+      newLine: null,
+      text: 'line 2',
+    })
+    assert.deepEqual(delDiff[2], {
+      type: 'equal',
+      oldLine: 3,
+      newLine: 2,
+      text: 'line 3',
+    })
+
+    // Multi-edit alignment (edit at top and bottom with shared middle)
+    const multiOld = ['alpha', 'shared A', 'shared B', 'omega'].join('\n')
+    const multiNew = ['alpha-v2', 'shared A', 'shared B', 'omega-v2'].join('\n')
+    const multiDiff = computeSimpleDiff(multiOld, multiNew)
+    const equalTexts = multiDiff.filter((d) => d.type === 'equal').map((d) => d.text)
+    assert.deepEqual(equalTexts, ['shared A', 'shared B'])
+  })
+
+  it('verifies Ed25519 governance receipts via WebCrypto and rejects tampered payloads', async () => {
+    const keyPair = (await globalThis.crypto.subtle.generateKey(
+      { name: 'Ed25519' },
+      true,
+      ['sign', 'verify']
+    )) as CryptoKeyPair
+    const spkiBuffer = await globalThis.crypto.subtle.exportKey(
+      'spki',
+      keyPair.publicKey
+    )
+    const b64Spki = Buffer.from(spkiBuffer).toString('base64')
+    const pem = `-----BEGIN PUBLIC KEY-----\n${b64Spki}\n-----END PUBLIC KEY-----\n`
+
+    const receiptPayload: GovernanceReceiptPayload = {
+      schema_version: 'gitseed.receipt.v1',
+      seed: {
+        id: 'seed-1',
+        number: 1,
+        title: 'Test Receipt',
+        project_id: 'proj-1',
+        project_slug: 'demo',
+        status: 'merged',
+        stage: 'merge',
+        branch_name: 'gitseed/demo/seed-1',
+        pr_url: 'https://github.com/org/repo/pull/1',
+      },
+      policy: {
+        autonomy: 'supervised',
+        min_approver_role: 'maintainer',
+        prevent_self_approval: true,
+        blocked_paths: [],
+      },
+      artifacts: null,
+      runs: [],
+      approvals: [],
+      generated_at: '2026-11-11T00:00:00Z',
+    }
+    const canonicalJson = JSON.stringify(receiptPayload)
+    const sigBuffer = await globalThis.crypto.subtle.sign(
+      { name: 'Ed25519' },
+      keyPair.privateKey,
+      new TextEncoder().encode(canonicalJson)
+    )
+    const signature = Buffer.from(sigBuffer)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '')
+
+    const envelope: GovernanceReceiptEnvelope = {
+      receipt: receiptPayload,
+      canonical_json: canonicalJson,
+      signature,
+      algorithm: 'Ed25519',
+      key_id: 'abcd1234ef567890',
+      public_key_pem: pem,
+    }
+
+    const okResult = await verifyGovernanceReceiptClientSide(envelope, {
+      key_id: 'abcd1234ef567890',
+      algorithm: 'Ed25519',
+      public_key_pem: pem,
+    })
+    assert.equal(okResult.status, 'verified')
+    assert.equal(okResult.label, 'Verified (Ed25519)')
+
+    // Tampering with receipt field while keeping canonical_json/signature fails verification
+    const tamperedReceipt: GovernanceReceiptEnvelope = {
+      ...envelope,
+      receipt: {
+        ...receiptPayload,
+        seed: { ...receiptPayload.seed, status: 'open' },
+      },
+    }
+    const tamperedResult = await verifyGovernanceReceiptClientSide(
+      tamperedReceipt,
+      {
+        key_id: 'abcd1234ef567890',
+        algorithm: 'Ed25519',
+        public_key_pem: pem,
+      }
+    )
+    assert.equal(tamperedResult.status, 'invalid')
+    assert.equal(tamperedResult.label, 'Signature Invalid / Tampered')
+
+    // Untrusted key_id fails verification even if envelope carries its own PEM
+    const untrustedKeyResult = await verifyGovernanceReceiptClientSide(envelope, {
+      key_id: '9999999999999999',
+      algorithm: 'Ed25519',
+      public_key_pem: pem,
+    })
+    assert.equal(untrustedKeyResult.status, 'invalid')
   })
 })

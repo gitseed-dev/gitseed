@@ -17,6 +17,7 @@ from gitseed_common.enums import (
     SeedStage,
     SeedStatus,
     TaskStatus,
+    UserStatus,
 )
 from gitseed_core.models.agent import Agent
 from gitseed_core.models.project import Project, ProjectMember
@@ -140,6 +141,7 @@ class TestPollRunnerSteering:
             name="Alice Admin",
             preferred_name="Alice",
             org_role=OrgRole.ADMIN,
+            status=UserStatus.ACTIVE,
         )
         c1 = SeedComment(
             id="cmt_1",
@@ -207,24 +209,28 @@ class TestPollRunnerSteering:
             email="dev@example.com",
             name="Bob Dev",
             org_role=OrgRole.MEMBER,
+            status=UserStatus.ACTIVE,
         )
         maint_user = User(
             id="usr_maint",
             email="maint@example.com",
             name="Carol Maintainer",
             org_role=OrgRole.MEMBER,
+            status=UserStatus.ACTIVE,
         )
         viewer_user = User(
             id="usr_viewer",
             email="viewer@example.com",
             name="Dave Viewer",
             org_role=OrgRole.MEMBER,
+            status=UserStatus.ACTIVE,
         )
         outsider_user = User(
             id="usr_outsider",
             email="outsider@example.com",
             name="Eve Outsider",
             org_role=OrgRole.MEMBER,
+            status=UserStatus.ACTIVE,
         )
 
         users_by_id = {

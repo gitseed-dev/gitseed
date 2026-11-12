@@ -20,11 +20,13 @@ spec:
         {{- include "gitseed.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: egress-proxy
     spec:
-      serviceAccountName: {{ include "gitseed.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -46,6 +48,10 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           readinessProbe:
             tcpSocket:
               port: proxy

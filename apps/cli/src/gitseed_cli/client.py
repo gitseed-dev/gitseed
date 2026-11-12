@@ -237,6 +237,7 @@ class GitSeedClient:
                 base_url=self.base_url,
                 timeout=self.timeout,
                 transport=self._transport,
+                headers={"X-GitSeed-CSRF": "1"},
             ) as session_client:
                 login_resp = session_client.post(
                     "/api/v1/auth/login",

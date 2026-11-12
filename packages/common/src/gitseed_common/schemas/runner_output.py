@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -117,6 +118,19 @@ class ExecuteStageOutput(BaseModel):
     commit_sha: str | None = None
     pull_request_url: str | None = None
     completed_task_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("pull_request_url")
+    @classmethod
+    def _validate_pull_request_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        if not cleaned:
+            return None
+        parsed = urlsplit(cleaned)
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            raise ValueError("pull_request_url must be a valid http:// or https:// URL")
+        return cleaned
 
 
 class ReviewStageOutput(BaseModel):

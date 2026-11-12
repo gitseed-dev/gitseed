@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
 
 /** A session minimized to the bottom dock, so it stays at hand across pages. */
@@ -37,19 +37,32 @@ const EMPTY: DockState = { items: [], expandedKey: null }
 
 const SessionDockContext = createContext<SessionDockContextValue | null>(null)
 
+function stripVsCodeUrl(item: DockedSession): DockedSession {
+  if (!('vscodeUrl' in item)) return item
+  const copy: DockedSession = { ...item }
+  delete copy.vscodeUrl
+  return copy
+}
+
 function load(storageKey: string): DockState {
   try {
     const raw = window.localStorage.getItem(storageKey)
     if (!raw) return EMPTY
     const parsed = JSON.parse(raw) as Partial<DockState>
     const items = Array.isArray(parsed.items)
-      ? parsed.items.filter((i): i is DockedSession => !!i && typeof i.id === 'string' && (i.kind === 'chat' || i.kind === 'terminal'))
+      ? parsed.items
+          .filter(
+            (i): i is DockedSession =>
+              !!i && typeof i.id === 'string' && (i.kind === 'chat' || i.kind === 'terminal')
+          )
+          .map(stripVsCodeUrl)
+          .slice(-MAX_DOCKED_SESSIONS)
       : []
     const expandedKey =
       typeof parsed.expandedKey === 'string' && items.some((i) => dockKey(i.kind, i.id) === parsed.expandedKey)
         ? parsed.expandedKey
         : null
-    return { items: items.slice(-MAX_DOCKED_SESSIONS), expandedKey }
+    return { items, expandedKey }
   } catch {
     return EMPTY
   }
@@ -58,16 +71,23 @@ function load(storageKey: string): DockState {
 export const SessionDockProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth()
   const storageKey = `gitseed.sessionDock.${user?.id || 'anon'}`
+  const loadedKeyRef = useRef(storageKey)
   const [state, setState] = useState<DockState>(() => load(storageKey))
 
-  // Different user (or first auth load): read their dock
+  // Load new user's dock on user switch without leaking previous user's state across keys,
+  // and strip ephemeral vscodeUrl capability tokens before persisting to localStorage.
   useEffect(() => {
-    setState(load(storageKey))
-  }, [storageKey])
-
-  useEffect(() => {
+    if (loadedKeyRef.current !== storageKey) {
+      loadedKeyRef.current = storageKey
+      setState(load(storageKey))
+      return
+    }
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(state))
+      const persisted: DockState = {
+        items: state.items.map(stripVsCodeUrl),
+        expandedKey: state.expandedKey,
+      }
+      window.localStorage.setItem(storageKey, JSON.stringify(persisted))
     } catch {
       /* storage full / disabled */
     }
@@ -77,8 +97,13 @@ export const SessionDockProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const key = dockKey(item.kind, item.id)
     setState((prev) => {
       const rest = prev.items.filter((i) => dockKey(i.kind, i.id) !== key)
-      const items = [...rest, item].slice(-MAX_DOCKED_SESSIONS)
-      return { items, expandedKey: opts?.expand === false ? prev.expandedKey : key }
+      const nextItems = [...rest, item].slice(-MAX_DOCKED_SESSIONS)
+      const candidateExpandedKey = opts?.expand === false ? prev.expandedKey : key
+      const expandedKey =
+        candidateExpandedKey && nextItems.some((i) => dockKey(i.kind, i.id) === candidateExpandedKey)
+          ? candidateExpandedKey
+          : null
+      return { items: nextItems, expandedKey }
     })
   }, [])
 

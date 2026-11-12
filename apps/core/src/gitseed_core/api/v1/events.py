@@ -28,6 +28,15 @@ from gitseed_core.services.events import format_sse_message, subscribe_events
 
 router = APIRouter(prefix="/events", tags=["Realtime Events (SSE)"])
 
+_ORIG_SESSION_FACTORY = AsyncSessionLocal
+async_session_factory = AsyncSessionLocal
+
+
+def _get_session_factory() -> Any:
+    if async_session_factory is not _ORIG_SESSION_FACTORY:
+        return async_session_factory
+    return AsyncSessionLocal
+
 SSE_STREAM_TOKEN_PREFIX = "gssse_"
 SSE_STREAM_TOKEN_TTL_SECONDS = 60
 
@@ -94,6 +103,7 @@ _ORG_ADMIN_ONLY_EVENT_TYPES = {
 }
 _VISIBILITY_MUTATING_EVENT_TYPES = {
     str(ActivityType.PROJECT_CREATED),
+    str(getattr(ActivityType, "PROJECT_UPDATED", "project.updated")),
     str(ActivityType.PROJECT_ARCHIVED),
     str(ActivityType.PROJECT_RESTORED),
     str(ActivityType.MEMBER_ADDED),
@@ -101,6 +111,34 @@ _VISIBILITY_MUTATING_EVENT_TYPES = {
     str(ActivityType.MEMBER_REMOVED),
     str(ActivityType.SETTINGS_UPDATED),
 }
+
+
+def _event_target_user_id(event: dict[str, Any]) -> str:
+    data = event.get("data")
+    data_dict = data if isinstance(data, dict) else {}
+    return str(
+        data_dict.get("user_id")
+        or data_dict.get("id")
+        or event.get("user_id")
+        or event.get("target_user_id")
+        or ""
+    ).strip()
+
+
+def _is_user_suspension_event(event: dict[str, Any], user_id: str) -> bool:
+    ev_type = str(event.get("type") or "").strip()
+    data = event.get("data")
+    data_dict = data if isinstance(data, dict) else {}
+    target_uid = _event_target_user_id(event)
+    if target_uid != user_id:
+        return False
+    if ev_type == str(ActivityType.USER_SUSPENDED):
+        return True
+    if ev_type in ("user.updated", str(getattr(ActivityType, "USER_UPDATED", "user.updated"))):
+        status_val = str(data_dict.get("status") or "").strip().lower()
+        if status_val == str(UserStatus.SUSPENDED).lower():
+            return True
+    return False
 
 
 async def _authenticate_sse_request(
@@ -115,6 +153,8 @@ async def _authenticate_sse_request(
 ) -> User:
     if bearer is not None and bearer.credentials:
         user = await auth_service.authenticate_token(session, bearer.credentials)
+        if user.status != UserStatus.ACTIVE:
+            raise Forbidden("User account is not active")
         request.state.user = user
         return user
 
@@ -131,12 +171,16 @@ async def _authenticate_sse_request(
             raise Unauthorized("User not found for SSE stream token")
         if user.status == UserStatus.SUSPENDED:
             raise Forbidden("Account is suspended")
+        if user.status != UserStatus.ACTIVE:
+            raise Forbidden("User account is not active")
         request.state.user = user
         return user
 
     if session_cookie:
         session_user = await auth_service.authenticate_session_cookie(session, session_cookie)
         if session_user is not None:
+            if session_user.status != UserStatus.ACTIVE:
+                raise Forbidden("User account is not active")
             request.state.user = session_user
             return session_user
 
@@ -154,7 +198,7 @@ async def issue_stream_token(current_user: CurrentUser) -> StreamTokenResponse:
     )
 
 
-async def _load_visible_project_ids(session: DBSession, user: User) -> set[str]:
+async def _load_visible_project_ids(session: Any, user: User) -> set[str]:
     stmt = (
         select(Project.id)
         .outerjoin(
@@ -171,6 +215,10 @@ async def _load_visible_project_ids(session: DBSession, user: User) -> set[str]:
     )
     rows = (await session.execute(stmt)).scalars().all()
     return set(rows)
+
+
+async def _resolve_user_visible_project_ids(session: Any, user: User) -> set[str]:
+    return await _load_visible_project_ids(session, user)
 
 
 @router.get("/stream")
@@ -194,14 +242,18 @@ async def stream_events(
         token=token,
     )
     is_admin = user.org_role == OrgRole.ADMIN
-    visible_projects = set() if is_admin else await _load_visible_project_ids(session, user)
+    visible_projects = (
+        set()
+        if is_admin
+        else await _resolve_user_visible_project_ids(session, user)
+    )
     try:
         await session.close()
     except Exception:
         pass
 
     async def _event_generator() -> AsyncIterator[str]:
-        nonlocal visible_projects
+        nonlocal is_admin, visible_projects
         # Emit initial handshake event so client knows stream is live
         yield format_sse_message(
             {
@@ -234,12 +286,35 @@ async def stream_events(
                 ev_proj = event.get("project_id")
                 ev_seed = event.get("seed_id")
 
+                if _is_user_suspension_event(event, user.id):
+                    break
+
+                if ev_type in (
+                    "user.updated",
+                    str(getattr(ActivityType, "USER_UPDATED", "user.updated")),
+                ) and _event_target_user_id(event) == user.id:
+                    try:
+                        async with _get_session_factory()() as check_db:
+                            db_user = await check_db.get(User, user.id)
+                            if db_user is None or db_user.status != UserStatus.ACTIVE:
+                                break
+                            is_admin = db_user.org_role == OrgRole.ADMIN
+                            visible_projects = (
+                                set()
+                                if is_admin
+                                else await _resolve_user_visible_project_ids(
+                                    check_db, db_user
+                                )
+                            )
+                    except Exception:
+                        break
+
                 # Enforce RBAC visibility (dynamically refresh membership on project/member changes)
                 if not is_admin:
                     if ev_type in _VISIBILITY_MUTATING_EVENT_TYPES:
                         try:
-                            async with AsyncSessionLocal() as refresh_session:
-                                visible_projects = await _load_visible_project_ids(
+                            async with _get_session_factory()() as refresh_session:
+                                visible_projects = await _resolve_user_visible_project_ids(
                                     refresh_session, user
                                 )
                         except Exception:

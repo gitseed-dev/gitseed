@@ -1,4 +1,6 @@
+import html
 import json
+import re
 from typing import Any
 
 from fastapi import APIRouter, Request, status
@@ -152,6 +154,16 @@ async def github_app_manifest_callback(
     return RedirectResponse(url=install_url, status_code=status.HTTP_302_FOUND)
 
 
+def _safe_inline_json(value: Any) -> str:
+    return (
+        json.dumps(value)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("/", "\\/")
+    )
+
+
 @public_router.get("/github-app/setup", response_class=HTMLResponse)
 async def github_app_setup_callback(
     session: DBSession,
@@ -159,13 +171,20 @@ async def github_app_setup_callback(
     state: str | None = None,
 ) -> HTMLResponse:
     """Bind `installation_id` after the user installs the newly created GitHub App."""
+    clean_installation_id: str | None = None
+    if installation_id is not None:
+        stripped_id = installation_id.strip()
+        if re.fullmatch(r"\d{1,32}", stripped_id):
+            clean_installation_id = stripped_id
+    installation_id = clean_installation_id
+
     backend = None
     if installation_id:
         backend = await backends_service.complete_github_app_setup(
             session, installation_id=installation_id, state=state
         )
     backend_id = backend.id if backend else ""
-    payload_json = json.dumps(
+    payload_json = _safe_inline_json(
         {
             "type": "gitseed:github-app-connected",
             "backendId": backend_id,
@@ -173,7 +192,9 @@ async def github_app_setup_callback(
         }
     )
     return_url = f"/backends?open={backend_id}" if backend_id else "/backends"
-    html = f"""<!doctype html>
+    return_href = html.escape(return_url, quote=True)
+    return_url_json = _safe_inline_json(return_url)
+    page_html = f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -215,21 +236,29 @@ async def github_app_setup_callback(
   <div class="card">
     <h1>GitHub App Connected</h1>
     <p>Credentials and repository installation have been saved to GitSeed. You can close this window.</p>
-    <a href="{return_url}">Return to GitSeed</a>
+    <a href="{return_href}">Return to GitSeed</a>
   </div>
   <script>
     try {{
+      const payload = {payload_json};
+      const returnUrl = {return_url_json};
+      if (typeof BroadcastChannel !== 'undefined') {{
+        const bc = new BroadcastChannel('gitseed:github-app');
+        bc.postMessage(payload);
+        bc.close();
+      }}
       if (window.opener) {{
-        window.opener.postMessage({payload_json}, window.location.origin);
+        window.opener.postMessage(payload, window.location.origin);
         setTimeout(() => window.close(), 600);
       }} else {{
-        setTimeout(() => {{ window.location.href = {json.dumps(return_url)}; }}, 800);
+        try {{ window.close(); }} catch (e) {{}}
+        setTimeout(() => {{ window.location.href = returnUrl; }}, 800);
       }}
     }} catch (e) {{}}
   </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=page_html)
 
 
 @router.get("/{backend_id}", response_model=BackendResponse)

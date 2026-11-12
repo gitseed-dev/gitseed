@@ -21,10 +21,11 @@ from gitseed_common.enums import (
     SeedStage,
     SeedStatus,
     TaskStatus,
+    UserStatus,
 )
 from gitseed_common.schemas.runner_output import check_stage_policy_bounds
 from pydantic import ValidationError
-from sqlalchemy import delete, update
+from sqlalchemy import delete, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
@@ -32,6 +33,7 @@ from gitseed_core.config import settings
 from gitseed_core.models.activity import Activity
 from gitseed_core.models.agent import Agent
 from gitseed_core.models.approval import Approval
+from gitseed_core.models.backend import Backend
 from gitseed_core.models.project import (
     Project,
     ProjectMember,
@@ -75,6 +77,7 @@ from gitseed_core.services.cli_auth import (
     _NON_JSON_CLI_AUTH_PATHS,
     validate_and_filter_cli_auth_bundle,
 )
+from gitseed_core.services.compute_runtime import stop_runner_agent_phase
 from gitseed_core.services.errors import Conflict, Forbidden, Invalid, NotFound, Unauthorized
 from gitseed_core.services.gateway import (
     _compute_remaining_budget,
@@ -617,20 +620,42 @@ def _enforce_endpoint_token_scope(
 async def _try_lock_run_and_seed(
     session: AsyncSession, run_id: str, seed_id: str
 ) -> None:
-    """Acquire SELECT ... FOR UPDATE row locks on Run and Seed when backed by a relational session."""
+    """Acquire SELECT ... FOR UPDATE row locks on Run and Seed and verify Run is still active."""
+    locked_run: Run | None = None
     try:
         res_run = await session.execute(
-            select(Run).where(Run.id == run_id).with_for_update()
+            select(Run)
+            .where(Run.id == run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if inspect.iscoroutine(res_run):
             res_run.close()
+        else:
+            cand_fn = getattr(res_run, "scalar_one_or_none", None)
+            if callable(cand_fn) and not inspect.iscoroutinefunction(cand_fn):
+                cand = cand_fn()
+                if inspect.iscoroutine(cand):
+                    cand.close()
+                elif isinstance(cand, Run):
+                    locked_run = cand
         res_seed = await session.execute(
-            select(Seed).where(Seed.id == seed_id).with_for_update()
+            select(Seed)
+            .where(Seed.id == seed_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if inspect.iscoroutine(res_seed):
             res_seed.close()
     except Exception:
-        pass
+        return
+    if locked_run is not None and locked_run.status not in (
+        RunStatus.STARTING,
+        RunStatus.RUNNING,
+    ):
+        raise Conflict(
+            f"Run '{run_id}' is no longer active after lock acquisition (status={locked_run.status})"
+        )
 
 
 def _extract_task_target_files(description: str) -> list[str]:
@@ -731,8 +756,6 @@ async def get_runner_context(
     broker_state = _get_broker_state(run)
     if broker_state.get("prepare_context_used"):
         raise Forbidden("Runner execution context has already been fetched for this run")
-    broker_state["prepare_context_used"] = True
-    _set_broker_state(run, broker_state)
     now = datetime.now(UTC)
 
     if run.status == RunStatus.STARTING:
@@ -928,6 +951,27 @@ async def get_runner_context(
         await session.refresh(run)
 
     remaining_budget, _, _ = await _compute_remaining_budget(session, seed, project)
+    if remaining_budget is not None and remaining_budget > Decimal("0"):
+        try:
+            active_sibling_raw = await session.scalar(
+                select(func.count())
+                .select_from(Run)
+                .where(
+                    Run.seed_id == seed.id,
+                    col(Run.status).in_([s.value for s in RUN_ACTIVE_STATUSES]),
+                )
+            )
+            active_siblings = (
+                int(active_sibling_raw)
+                if isinstance(active_sibling_raw, int) and active_sibling_raw > 1
+                else 1
+            )
+            if active_siblings > 1:
+                remaining_budget = (remaining_budget / Decimal(active_siblings)).quantize(
+                    Decimal("0.0001")
+                )
+        except Exception:
+            pass
     ttl_seconds = max(3600, pol.timeout_minutes * 60 + 600)
 
     models_secrets = decrypt_secrets(models_backend.secrets_encrypted)
@@ -967,7 +1011,19 @@ async def get_runner_context(
     for bundle_secret in _extract_cli_auth_secrets(cli_auth_bundle):
         if bundle_secret not in issued_secrets_list:
             issued_secrets_list.append(bundle_secret)
+    for mcp_srv in mcp_items:
+        for hdr_val in (mcp_srv.headers or {}).values():
+            cleaned_hdr = str(hdr_val or "").strip()
+            if cleaned_hdr.lower().startswith("bearer "):
+                cleaned_hdr = cleaned_hdr[7:].strip()
+            if len(cleaned_hdr) >= 8 and cleaned_hdr not in issued_secrets_list:
+                issued_secrets_list.append(cleaned_hdr)
+        for env_val in (mcp_srv.env or {}).values():
+            cleaned_env = str(env_val or "").strip()
+            if len(cleaned_env) >= 8 and cleaned_env not in issued_secrets_list:
+                issued_secrets_list.append(cleaned_env)
     broker_state = _get_broker_state(run)
+    broker_state["prepare_context_used"] = True
     broker_state["issued_secrets"] = issued_secrets_list
     _set_broker_state(run, broker_state)
     await session.commit()
@@ -1181,6 +1237,13 @@ async def get_runner_finalize_context(
     """Return trusted finalize context (base SHAs from Core, blocked_paths, repositories) for the finalize container."""
     _enforce_endpoint_token_scope(raw_token, {"finalize"})
     run, seed, project, _ = await _authenticate_active_run(session, raw_token)
+    if run.compute_backend_id:
+        comp_backend = await session.get(Backend, run.compute_backend_id)
+        if isinstance(comp_backend, Backend):
+            try:
+                await stop_runner_agent_phase(comp_backend, run.id, run.container_id)
+            except RuntimeError as exc:
+                raise Conflict(str(exc)) from exc
     broker_state = _get_broker_state(run)
     pol = await get_effective_stage_policy(session, project.id, run.stage)
     ideate_pol = (
@@ -1306,11 +1369,26 @@ async def refresh_runner_cli_auth(
     if not updated_keys:
         return RunnerCliAuthRefreshResponse(ok=True, updated_paths=[])
 
+    refreshed_secrets = _extract_cli_auth_secrets(merged_bundle)
+    if refreshed_secrets:
+        broker_state = _get_broker_state(run)
+        cur_issued = [
+            str(s)
+            for s in (broker_state.get("issued_secrets") or [])
+            if isinstance(s, str) and s
+        ]
+        for rs in refreshed_secrets:
+            if len(rs) >= 8 and rs not in cur_issued:
+                cur_issued.append(rs)
+        broker_state["issued_secrets"] = cur_issued
+        _set_broker_state(run, broker_state)
+        run.updated_at = datetime.now(UTC)
+
     if models_backend is not None:
         m_secrets["cli_auth_bundle"] = json.dumps(merged_bundle)
         models_backend.secrets_encrypted = encrypt_secrets(m_secrets)
         models_backend.updated_at = datetime.now(UTC)
-        await session.commit()
+    await session.commit()
 
     return RunnerCliAuthRefreshResponse(
         ok=True,
@@ -1439,9 +1517,9 @@ async def poll_runner_steering(
         ):
             continue
 
-        # Verify author is an Org Admin or Project Developer / Maintainer (never Viewer)
+        # Verify author is an active Org Admin or Project Developer / Maintainer (never Viewer)
         user = await session.get(User, c.author_id)
-        if user is None:
+        if user is None or user.status != UserStatus.ACTIVE:
             continue
         is_allowed = user.org_role == OrgRole.ADMIN
         if not is_allowed:

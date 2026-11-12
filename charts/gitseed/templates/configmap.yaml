@@ -36,8 +36,9 @@ data:
   RUNNER_API_URL: {{ printf "http://%s-api.%s.svc.cluster.local:%v" $fullname .Release.Namespace .Values.api.port | quote }}
   RUNNER_GATEWAY_URL: {{ printf "http://%s-litellm.%s.svc.cluster.local:%v/v1" $fullname .Release.Namespace .Values.litellm.port | quote }}
   {{- if .Values.egressProxy.enabled }}
+  EGRESS_PROXY_PORT: {{ .Values.egressProxy.port | quote }}
   RUNNER_EGRESS_PROXY_URL: {{ printf "http://%s-egress-proxy.%s.svc.cluster.local:%v" $fullname .Release.Namespace .Values.egressProxy.port | quote }}
-  EGRESS_INTERNAL_HOSTS: {{ printf "%s-litellm,%s-api,%s-litellm.%s.svc.cluster.local,%s-api.%s.svc.cluster.local,litellm,api" $fullname $fullname $fullname .Release.Namespace $fullname .Release.Namespace | quote }}
+  EGRESS_INTERNAL_HOSTS: {{ printf "%s-litellm:%v,%s-api:%v,%s-litellm.%s.svc.cluster.local:%v,%s-api.%s.svc.cluster.local:%v,litellm:%v,api:%v" $fullname .Values.litellm.port $fullname .Values.api.port $fullname .Release.Namespace .Values.litellm.port $fullname .Release.Namespace .Values.api.port .Values.litellm.port .Values.api.port | quote }}
   {{- end }}
   RUNNER_IMAGE: {{ include "gitseed.runnerImage" . | quote }}
 

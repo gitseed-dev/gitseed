@@ -14,7 +14,7 @@ export interface MonacoRuntimeProps {
   originalValue?: string
   originalLineNumbers?: Record<number, string>
   modifiedLineNumbers?: Record<number, string>
-  onLineSelect?: (lineNumber: number) => void
+  onLineSelect?: (lineNumber: number, side?: 'original' | 'modified') => void
   readOnly?: boolean
   sideBySide?: boolean
   theme: 'light' | 'dark'
@@ -24,6 +24,14 @@ export interface MonacoRuntimeProps {
   maxHeight?: number
   autoHeight?: boolean
   className?: string
+}
+
+function isGutterMouseTarget(type: monaco.editor.MouseTargetType): boolean {
+  return (
+    type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN ||
+    type === monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS ||
+    type === monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS
+  )
 }
 
 let monacoConfigured = false
@@ -285,24 +293,26 @@ export const MonacoRuntime: React.FC<MonacoRuntimeProps> = ({
       }
 
       modMouseSub = modEd.onMouseDown((e) => {
+        if (!isGutterMouseTarget(e.target.type)) return
         const modelLine = e.target.position?.lineNumber
         if (!modelLine || !onLineSelectRef.current) return
         const mapped = modifiedLineNumbersRef.current
           ? Number(modifiedLineNumbersRef.current[modelLine])
           : modelLine
         if (Number.isInteger(mapped) && mapped > 0) {
-          onLineSelectRef.current(mapped)
+          onLineSelectRef.current(mapped, 'modified')
         }
       })
 
       origMouseSub = origEd.onMouseDown((e) => {
+        if (!isGutterMouseTarget(e.target.type)) return
         const modelLine = e.target.position?.lineNumber
         if (!modelLine || !onLineSelectRef.current) return
         const mapped = originalLineNumbersRef.current
           ? Number(originalLineNumbersRef.current[modelLine])
           : modelLine
         if (Number.isInteger(mapped) && mapped > 0) {
-          onLineSelectRef.current(mapped)
+          onLineSelectRef.current(mapped, 'original')
         }
       })
 
@@ -354,13 +364,14 @@ export const MonacoRuntime: React.FC<MonacoRuntimeProps> = ({
       editorRef.current = editor
 
       modMouseSub = editor.onMouseDown((e) => {
+        if (!isGutterMouseTarget(e.target.type)) return
         const modelLine = e.target.position?.lineNumber
         if (!modelLine || !onLineSelectRef.current) return
         const mapped = modifiedLineNumbersRef.current
           ? Number(modifiedLineNumbersRef.current[modelLine])
           : modelLine
         if (Number.isInteger(mapped) && mapped > 0) {
-          onLineSelectRef.current(mapped)
+          onLineSelectRef.current(mapped, 'modified')
         }
       })
 

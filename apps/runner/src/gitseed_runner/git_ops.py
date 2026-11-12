@@ -34,6 +34,7 @@ from gitseed_runner.gitsafe import (
     is_local_repo_path,
     neutralize_git_repo,
     sanitize_git_dir,
+    strip_url_credentials,
 )
 
 fcntl: Any = None
@@ -65,18 +66,22 @@ def cleanup_git_locks(repo_dirs: dict[str, Path]) -> list[str]:
 
 def matches_blocked_path(rel_posix_path: str, blocked_globs: list[str]) -> bool:
     """Return True if a repository-relative POSIX path matches any configured blocked path glob."""
-    clean_rel = rel_posix_path.strip().removeprefix("./").lstrip("/")
+    clean_rel = (
+        rel_posix_path.strip().replace("\\", "/").removeprefix("./").lstrip("/").lower()
+    )
     if not clean_rel:
         return False
     p = PurePosixPath(clean_rel)
     basename = p.name
     for pattern in blocked_globs:
-        clean_pat = str(pattern or "").strip().removeprefix("./").lstrip("/")
+        clean_pat = (
+            str(pattern or "").strip().replace("\\", "/").removeprefix("./").lstrip("/").lower()
+        )
         if not clean_pat:
             continue
         if (
-            fnmatch.fnmatch(clean_rel, clean_pat)
-            or fnmatch.fnmatch(basename, clean_pat)
+            fnmatch.fnmatchcase(clean_rel, clean_pat)
+            or fnmatch.fnmatchcase(basename, clean_pat)
         ):
             return True
         if clean_pat.endswith("/**"):
@@ -106,6 +111,7 @@ def enforce_blocked_paths(
         if not (repo_dir / ".git").exists():
             continue
         sanitize_git_dir(repo_dir)
+        repo_resolved = repo_dir.resolve()
         base_sha = initial_heads.get(full_name) or "HEAD"
         # Gather modified/added/deleted paths relative to initial head + untracked files
         changed_paths: set[str] = set()
@@ -135,13 +141,24 @@ def enforce_blocked_paths(
                 chk = _run_git(["checkout", base_sha, "--", rel_p], repo_dir)
                 if chk.returncode != 0:
                     _run_git(["reset", "-q", "HEAD", "--", rel_p], repo_dir)
-                    target_path = (repo_dir / rel_p).resolve()
-                    repo_resolved = str(repo_dir.resolve())
-                    if str(target_path).startswith(repo_resolved) and target_path.exists():
-                        if target_path.is_dir():
-                            shutil.rmtree(target_path, ignore_errors=True)
-                        else:
-                            target_path.unlink(missing_ok=True)
+                    raw_target = repo_dir / rel_p
+                    if raw_target.is_symlink():
+                        parent_resolved = raw_target.parent.resolve()
+                        if parent_resolved == repo_resolved or parent_resolved.is_relative_to(
+                            repo_resolved
+                        ):
+                            raw_target.unlink(missing_ok=True)
+                    else:
+                        target_path = raw_target.resolve()
+                        if (
+                            target_path.is_relative_to(repo_resolved)
+                            and target_path != repo_resolved
+                            and target_path.exists()
+                        ):
+                            if target_path.is_dir():
+                                shutil.rmtree(target_path, ignore_errors=True)
+                            else:
+                                target_path.unlink(missing_ok=True)
                 label = f"{full_name}:{rel_p}" if len(repo_dirs) > 1 else rel_p
                 reverted.append(label)
                 logger.warning("Reverted modification to protected path: %s", label)
@@ -175,6 +192,24 @@ def format_seed_branch(project_slug: str | None, seed_number: int) -> str:
     return f"gitseed/seed-{seed_number}"
 
 
+_EMBEDDED_URL_CREDS_RE = re.compile(r"(https?://)[^@\s/'\"]+@", re.IGNORECASE)
+
+
+def _redact_url_credentials(text: str, *urls: str) -> str:
+    """Scrub embedded URL credentials and raw tokens from Git diagnostic strings."""
+    cleaned = text
+    for raw_url in urls:
+        if not raw_url:
+            continue
+        stripped = strip_url_credentials(raw_url)
+        if stripped and stripped != raw_url:
+            cleaned = cleaned.replace(raw_url, stripped)
+        m = re.search(r"https?://[^:/@\s]+:([^@\s]+)@", raw_url)
+        if m and len(m.group(1)) >= 4:
+            cleaned = cleaned.replace(m.group(1), "***")
+    return _EMBEDDED_URL_CREDS_RE.sub(r"\1***@", cleaned)
+
+
 def _configure_repo_after_checkout(
     target_dir: Path,
     *,
@@ -187,57 +222,58 @@ def _configure_repo_after_checkout(
 ) -> None:
     """Fetch seed/default branch refs, optionally rebase, and strip credentials."""
     local_proto = ["-c", "protocol.file.allow=always"] if is_local_repo_path(clean_url) else []
-    if stage in ("execute", "review", "merge"):
-        _run_git(
-            [
-                *local_proto,
-                "fetch",
-                *depth_args,
-                "origin",
-                f"refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
-            ],
-            target_dir,
-        )
-        fetch_res = _run_git(
-            [
-                *local_proto,
-                "fetch",
-                *depth_args,
-                "origin",
-                f"refs/heads/{seed_branch}:refs/remotes/origin/{seed_branch}",
-            ],
-            target_dir,
-        )
-        if fetch_res.returncode == 0:
+    try:
+        if stage in ("execute", "review", "merge"):
             _run_git(
-                ["checkout", "-B", seed_branch, f"refs/remotes/origin/{seed_branch}"],
+                [
+                    *local_proto,
+                    "fetch",
+                    *depth_args,
+                    "origin",
+                    f"refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
+                ],
                 target_dir,
             )
-            if stage == "execute" and auto_rebase:
-                rebase_res = _run_git(
-                    ["rebase", f"refs/remotes/origin/{default_branch}"],
+            fetch_res = _run_git(
+                [
+                    *local_proto,
+                    "fetch",
+                    *depth_args,
+                    "origin",
+                    f"refs/heads/{seed_branch}:refs/remotes/origin/{seed_branch}",
+                ],
+                target_dir,
+            )
+            if fetch_res.returncode == 0:
+                _run_git(
+                    ["checkout", "-B", seed_branch, f"refs/remotes/origin/{seed_branch}"],
                     target_dir,
                 )
-                if rebase_res.returncode != 0:
-                    _run_git(["rebase", "--abort"], target_dir)
-                    logger.info(
-                        "Skipped auto-rebase of '%s' onto 'origin/%s' due to conflict; keeping branch head.",
-                        seed_branch,
-                        default_branch,
+                if stage == "execute" and auto_rebase:
+                    rebase_res = _run_git(
+                        ["rebase", f"refs/remotes/origin/{default_branch}"],
+                        target_dir,
                     )
-        elif stage == "execute":
-            _run_git(["checkout", "-B", seed_branch], target_dir)
-
-    # Strip credentials and neutralize hooks/config immediately
-    neutralize_git_repo(
-        target_dir,
-        clean_remote_url=clean_url,
-        default_branch=default_branch,
-    )
-    _run_git(["remote", "set-url", "origin", clean_url], target_dir)
-    _run_git(["config", "user.name", "GitSeed Agent"], target_dir)
-    _run_git(["config", "user.email", "agent@gitseed.local"], target_dir)
-    _run_git(["config", "core.untrackedCache", "true"], target_dir)
+                    if rebase_res.returncode != 0:
+                        _run_git(["rebase", "--abort"], target_dir)
+                        logger.info(
+                            "Skipped auto-rebase of '%s' onto 'origin/%s' due to conflict; keeping branch head.",
+                            seed_branch,
+                            default_branch,
+                        )
+            elif stage == "execute":
+                _run_git(["checkout", "-B", seed_branch], target_dir)
+    finally:
+        # Strip credentials and neutralize hooks/config unconditionally
+        neutralize_git_repo(
+            target_dir,
+            clean_remote_url=clean_url,
+            default_branch=default_branch,
+        )
+        _run_git(["remote", "set-url", "origin", clean_url], target_dir)
+        _run_git(["config", "user.name", "GitSeed Agent"], target_dir)
+        _run_git(["config", "user.email", "agent@gitseed.local"], target_dir)
+        _run_git(["config", "core.untrackedCache", "true"], target_dir)
 
     # Exclude runner harness artifacts locally so they never pollute git status or commits
     exclude_file = target_dir / ".git" / "info" / "exclude"
@@ -310,17 +346,19 @@ def _prepare_shared_git_mirror(
                     with suppress(OSError):
                         stale_lock.unlink()
                 _run_git(["remote", "set-url", "origin", clone_url], mirror_dir)
-                _run_git(
-                    [
-                        *local_proto,
-                        "fetch",
-                        *fetch_depth_args,
-                        "origin",
-                        f"+refs/heads/{default_branch}:refs/heads/{default_branch}",
-                    ],
-                    mirror_dir,
-                )
-                _run_git(["remote", "set-url", "origin", clean_url], mirror_dir)
+                try:
+                    _run_git(
+                        [
+                            *local_proto,
+                            "fetch",
+                            *fetch_depth_args,
+                            "origin",
+                            f"+refs/heads/{default_branch}:refs/heads/{default_branch}",
+                        ],
+                        mirror_dir,
+                    )
+                finally:
+                    _run_git(["remote", "set-url", "origin", clean_url], mirror_dir)
                 return mirror_dir
 
             if mirror_dir.exists():
@@ -347,8 +385,14 @@ def _prepare_shared_git_mirror(
             if res.returncode == 0 and (mirror_dir / "HEAD").is_file():
                 _run_git(["remote", "set-url", "origin", clean_url], mirror_dir)
                 return mirror_dir
+            if mirror_dir.exists():
+                shutil.rmtree(mirror_dir, ignore_errors=True)
     except Exception as exc:
-        logger.debug("Shared git mirror preparation skipped for %s: %s", full_name, exc)
+        logger.debug(
+            "Shared git mirror preparation skipped for %s: %s",
+            full_name,
+            _redact_url_credentials(str(exc), clone_url),
+        )
     return None
 
 
@@ -407,7 +451,9 @@ def clone_project_repositories(
         if not full_name:
             continue
         clone_url = str(repo.get("clone_url") or "").strip()
-        clean_url = str(repo.get("clean_remote_url") or clone_url).strip()
+        clean_url = strip_url_credentials(
+            str(repo.get("clean_remote_url") or clone_url).strip()
+        )
         default_branch = str(repo.get("default_branch") or "main").strip()
         is_primary = bool(repo.get("is_primary", False))
 
@@ -432,51 +478,55 @@ def clone_project_repositories(
             ):
                 (target_dir / "opencode.json").unlink(missing_ok=True)
             _run_git(["remote", "set-url", "origin", clone_url], target_dir)
-            warm_fetch = _run_git(
-                [
-                    *local_proto,
-                    "fetch",
-                    *fetch_depth_args,
-                    "origin",
-                    f"refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
-                ],
-                target_dir,
-            )
-            if warm_fetch.returncode == 0:
-                _run_git(["reset", "--hard"], target_dir)
-                _run_git(
+            try:
+                warm_fetch = _run_git(
                     [
-                        "clean",
-                        "-fd",
-                        "-e",
-                        ".gitseed",
-                        "-e",
-                        "node_modules",
-                        "-e",
-                        ".venv",
-                        "-e",
-                        "venv",
+                        *local_proto,
+                        "fetch",
+                        *fetch_depth_args,
+                        "origin",
+                        f"refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
                     ],
                     target_dir,
                 )
-                _run_git(
-                    ["checkout", "-B", default_branch, f"refs/remotes/origin/{default_branch}"],
-                    target_dir,
-                )
-                _configure_repo_after_checkout(
-                    target_dir,
-                    clean_url=clean_url,
-                    default_branch=default_branch,
-                    seed_branch=seed_branch,
-                    stage=stage,
-                    depth_args=fetch_depth_args,
-                    auto_rebase=auto_rebase,
-                )
-                repo_dirs[full_name] = target_dir
-                if is_primary or primary_dir == workspace_dir:
-                    primary_dir = target_dir
-                logger.info("Reused warm workspace repository '%s' via incremental fetch.", full_name)
-                continue
+                if warm_fetch.returncode == 0:
+                    _run_git(["reset", "--hard"], target_dir)
+                    _run_git(
+                        [
+                            "clean",
+                            "-fd",
+                            "-e",
+                            ".gitseed",
+                            "-e",
+                            "node_modules",
+                            "-e",
+                            ".venv",
+                            "-e",
+                            "venv",
+                        ],
+                        target_dir,
+                    )
+                    _run_git(
+                        ["checkout", "-B", default_branch, f"refs/remotes/origin/{default_branch}"],
+                        target_dir,
+                    )
+                    _configure_repo_after_checkout(
+                        target_dir,
+                        clean_url=clean_url,
+                        default_branch=default_branch,
+                        seed_branch=seed_branch,
+                        stage=stage,
+                        depth_args=fetch_depth_args,
+                        auto_rebase=auto_rebase,
+                    )
+                    repo_dirs[full_name] = target_dir
+                    if is_primary or primary_dir == workspace_dir:
+                        primary_dir = target_dir
+                    logger.info("Reused warm workspace repository '%s' via incremental fetch.", full_name)
+                    continue
+            finally:
+                if (target_dir / ".git").is_dir():
+                    _run_git(["remote", "set-url", "origin", clean_url], target_dir)
 
         if target_dir == workspace_dir:
             # Ensure /workspace is completely empty before `git clone` so git does not fail
@@ -543,10 +593,19 @@ def clone_project_repositories(
             if is_primary or primary_dir == workspace_dir:
                 primary_dir = target_dir
         else:
+            # Remove any partial `.git` checkout so embedded `clone_url` tokens never remain in /workspace
+            if target_dir == workspace_dir:
+                shutil.rmtree(workspace_dir / ".git", ignore_errors=True)
+            elif target_dir.exists():
+                shutil.rmtree(target_dir, ignore_errors=True)
+            redacted_detail = _redact_url_credentials(
+                (res.stderr or res.stdout or "").strip(),
+                clone_url,
+            )[:200]
             logger.warning(
                 "Could not clone repository '%s' (continuing with workspace): %s",
                 full_name,
-                (res.stderr or res.stdout or "").strip()[:200],
+                redacted_detail,
             )
 
     return primary_dir, repo_dirs

@@ -205,40 +205,123 @@ def validate_workspace_path(workspace_path: str | Path) -> Path:
     return resolved
 
 
+_DANGEROUS_GIT_CONFIG_RE = re.compile(
+    r"(?im)(?:^\s*(?:fsmonitor|fsmonitorhookversion|sshcommand|askpass|hookspath|uploadpack|receivepack|proxycommand|gitproxy|pager|editor|external|textconv|difffilter)\s*=|^\s*\[(?:filter|credential|include|includeif)(?:[\s\"]|\]))"
+)
+
+
+def _workspace_git_config_is_safe(ws_dir: Path) -> bool:
+    git_entry = ws_dir / ".git"
+    if git_entry.is_symlink():
+        return False
+    if git_entry.exists() and not git_entry.is_dir():
+        return False
+    cfg_path = git_entry / "config"
+    if cfg_path.is_symlink():
+        return False
+    if not cfg_path.is_file():
+        return True
+    try:
+        raw = cfg_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return _DANGEROUS_GIT_CONFIG_RE.search(raw) is None
+
+
 _POST_RECEIVE_HOOK_SCRIPT = """#!/bin/sh
-# Auto-sync linked local GitSeed workspace folder when the configured default branch advances
-WS_PATH="$(git config --get gitseed.workspacePath 2>/dev/null || true)"
-DEF_BRANCH="$(git config --get gitseed.defaultBranch 2>/dev/null || printf 'main')"
+# Auto-sync linked local GitSeed workspace folder when the configured default branch advances.
+# Hardened per SECURITY.md: neutralizes system/global/workspace hooks & config execution
+# and serializes sync per bare repository with an atomic mkdir lock.
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_TERMINAL_PROMPT=0
+
+BARE_REPO="$(pwd -P)"
+WS_PATH="$(git config --file "$BARE_REPO/config" --get gitseed.workspacePath 2>/dev/null || true)"
+DEF_BRANCH="$(git config --file "$BARE_REPO/config" --get gitseed.defaultBranch 2>/dev/null || printf 'main')"
 if [ -z "$DEF_BRANCH" ]; then
   DEF_BRANCH="main"
 fi
 if [ -n "$WS_PATH" ] && [ -d "$WS_PATH/.git" ] && [ ! -L "$WS_PATH" ] && [ ! -L "$WS_PATH/.git" ]; then
+  WS_CFG="$WS_PATH/.git/config"
+  if [ -L "$WS_CFG" ]; then
+    exit 0
+  fi
+  if [ -f "$WS_CFG" ] && grep -Eiq '(^|[[:space:]])(fsmonitor|sshcommand|askpass|hookspath|uploadpack|receivepack|gitproxy|pager|editor)[[:space:]]*=|^[[:space:]]*\\[(filter|credential|include|includeif)([[:space:]"]|\\])' "$WS_CFG" 2>/dev/null; then
+    exit 0
+  fi
+
+  SHOULD_SYNC=0
   while read oldrev newrev refname; do
     if [ "$refname" = "refs/heads/$DEF_BRANCH" ]; then
-      (
-        cd "$WS_PATH" || exit 0
-        git fetch origin >/dev/null 2>&1 || true
-        CUR_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
-        if [ "$CUR_BRANCH" = "$DEF_BRANCH" ]; then
-          if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
-            git merge --ff-only "origin/$DEF_BRANCH" >/dev/null 2>&1 || true
-          else
-            PRE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
-            if git stash push -u -m "gitseed-auto-sync" >/dev/null 2>&1; then
-              if git merge --ff-only "origin/$DEF_BRANCH" >/dev/null 2>&1; then
-                if ! git stash pop >/dev/null 2>&1; then
-                  git reset --hard "$PRE_HEAD" >/dev/null 2>&1 || true
-                  git stash pop >/dev/null 2>&1 || true
-                fi
-              else
-                git stash pop >/dev/null 2>&1 || true
+      SHOULD_SYNC=1
+    fi
+  done
+
+  if [ "$SHOULD_SYNC" = "1" ]; then
+    (
+      LOCK_DIR="$BARE_REPO/gitseed-sync.lock"
+      ACQUIRED=0
+      ATTEMPT=0
+      while [ "$ATTEMPT" -lt 50 ]; do
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+          printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
+          ACQUIRED=1
+          break
+        fi
+        if [ -f "$LOCK_DIR/pid" ]; then
+          LOCK_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+          if [ -n "$LOCK_PID" ] && ! kill -0 "$LOCK_PID" 2>/dev/null; then
+            rm -f "$LOCK_DIR/pid" 2>/dev/null || true
+            rmdir "$LOCK_DIR" 2>/dev/null || true
+            continue
+          fi
+        fi
+        ATTEMPT=$((ATTEMPT + 1))
+        sleep 0.1 2>/dev/null || sleep 1
+      done
+      if [ "$ACQUIRED" != "1" ]; then
+        exit 0
+      fi
+      cleanup_lock() {
+        rm -f "$LOCK_DIR/pid" 2>/dev/null || true
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+      }
+      trap cleanup_lock EXIT INT TERM
+
+      ws_git() {
+        git \\
+          -c core.hooksPath=/dev/null \\
+          -c core.fsmonitor=false \\
+          -c core.symlinks=false \\
+          -c core.sshCommand=false \\
+          -c protocol.file.allow=local \\
+          --git-dir="$WS_PATH/.git" \\
+          --work-tree="$WS_PATH" \\
+          "$@"
+      }
+
+      ws_git fetch "$BARE_REPO" "refs/heads/$DEF_BRANCH:refs/remotes/origin/$DEF_BRANCH" >/dev/null 2>&1 || exit 0
+      CUR_BRANCH="$(ws_git symbolic-ref --short HEAD 2>/dev/null || true)"
+      if [ "$CUR_BRANCH" = "$DEF_BRANCH" ]; then
+        if [ -z "$(ws_git status --porcelain 2>/dev/null)" ]; then
+          ws_git merge --ff-only "refs/remotes/origin/$DEF_BRANCH" >/dev/null 2>&1 || true
+        else
+          PRE_HEAD="$(ws_git rev-parse HEAD 2>/dev/null || true)"
+          if ws_git stash push -u -m "gitseed-auto-sync" >/dev/null 2>&1; then
+            if ws_git merge --ff-only "refs/remotes/origin/$DEF_BRANCH" >/dev/null 2>&1; then
+              if ! ws_git stash pop >/dev/null 2>&1; then
+                ws_git reset --hard "$PRE_HEAD" >/dev/null 2>&1 || true
+                ws_git stash pop >/dev/null 2>&1 || true
               fi
+            else
+              ws_git stash pop >/dev/null 2>&1 || true
             fi
           fi
         fi
-      ) &
-    fi
-  done
+      fi
+    ) &
+  fi
 fi
 """
 
@@ -296,15 +379,37 @@ def build_local_git_http_url(full_name: str, *, for_container: bool = False) -> 
     return f"http://{host}:{port}/api/v1/local-git/{slug}.git"
 
 
-def _run_git(args: list[str], *, cwd: Path | None = None, timeout: int = 30) -> subprocess.CompletedProcess[str]:
-    env = {
+_SAFE_WS_GIT_ARGS: list[str] = [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.symlinks=false",
+    "-c",
+    "core.sshCommand=false",
+    "-c",
+    "protocol.ext.allow=never",
+]
+
+
+def _sanitized_git_env() -> dict[str, str]:
+    return {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_ASKPASS": "",
+        "SSH_ASKPASS": "",
         "GIT_AUTHOR_NAME": os.environ.get("GIT_AUTHOR_NAME", "GitSeed"),
         "GIT_AUTHOR_EMAIL": os.environ.get("GIT_AUTHOR_EMAIL", "gitseed@localhost"),
         "GIT_COMMITTER_NAME": os.environ.get("GIT_COMMITTER_NAME", "GitSeed"),
         "GIT_COMMITTER_EMAIL": os.environ.get("GIT_COMMITTER_EMAIL", "gitseed@localhost"),
     }
+
+
+def _run_git(args: list[str], *, cwd: Path | None = None, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    env = _sanitized_git_env()
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd) if cwd else None,
@@ -355,14 +460,22 @@ def sync_workspace_commits_to_bare_repo(
         ws_dir = validate_workspace_path(ws_raw)
     except InvalidGitInputError:
         return
-    if not (ws_dir / ".git").exists():
+    if (ws_dir / ".git").is_symlink() or not (ws_dir / ".git").exists() or not _workspace_git_config_is_safe(ws_dir):
         return
 
-    cur_branch = _run_git(["symbolic-ref", "--short", "HEAD"], cwd=ws_dir)
+    safe_ws_prefix = [
+        *_SAFE_WS_GIT_ARGS,
+        "-c",
+        "protocol.file.allow=local",
+        f"--git-dir={ws_dir / '.git'}",
+        f"--work-tree={ws_dir}",
+    ]
+
+    cur_branch = _run_git([*safe_ws_prefix, "symbolic-ref", "--short", "HEAD"])
     if cur_branch.returncode != 0 or cur_branch.stdout.strip() != clean_branch:
         return
 
-    ws_head = _run_git(["rev-parse", "--verify", "--end-of-options", "HEAD"], cwd=ws_dir)
+    ws_head = _run_git([*safe_ws_prefix, "rev-parse", "--verify", "--end-of-options", "HEAD"])
     if ws_head.returncode != 0:
         return
     ws_sha = ws_head.stdout.strip()
@@ -374,8 +487,7 @@ def sync_workspace_commits_to_bare_repo(
     if not bare_sha or ws_sha != bare_sha:
         # Push only if fast-forward (workspace commit descends from bare_sha)
         _run_git(
-            ["push", "--", str(bare_path), f"HEAD:refs/heads/{clean_branch}"],
-            cwd=ws_dir,
+            [*safe_ws_prefix, "push", "--", str(bare_path), f"HEAD:refs/heads/{clean_branch}"],
         )
 
 
@@ -405,43 +517,54 @@ def _ensure_git_repo_initialized(
                 f"Refusing to initialize Git repository in directory containing sensitive folder '{child.name}'"
             )
 
-    has_ws_git = (ws_resolved / ".git").exists()
+    git_entry = ws_resolved / ".git"
+    if git_entry.is_symlink():
+        raise InvalidGitInputError("Workspace .git cannot be a symbolic link")
+    if not _workspace_git_config_is_safe(ws_resolved):
+        raise InvalidGitInputError("Workspace .git/config contains unsafe directives")
+
+    has_ws_git = git_entry.exists()
     if not has_ws_git:
-        init_ws = _run_git(["init", f"--initial-branch={default_branch}"], cwd=ws_resolved)
+        init_ws = _run_git(
+            [*_SAFE_WS_GIT_ARGS, "init", f"--initial-branch={default_branch}"],
+            cwd=ws_resolved,
+        )
         if init_ws.returncode != 0:
-            _run_git(["init"], cwd=ws_resolved)
-            _run_git(["checkout", "-B", default_branch], cwd=ws_resolved)
+            _run_git([*_SAFE_WS_GIT_ARGS, "init"], cwd=ws_resolved)
+            _run_git([*_SAFE_WS_GIT_ARGS, "checkout", "-B", default_branch], cwd=ws_resolved)
 
     # Configure origin to point to the bare repo if not already configured
-    rem_res = _run_git(["remote", "get-url", "origin"], cwd=ws_resolved)
+    rem_res = _run_git([*_SAFE_WS_GIT_ARGS, "remote", "get-url", "origin"], cwd=ws_resolved)
     if rem_res.returncode != 0:
-        _run_git(["remote", "add", "origin", str(bare_path)], cwd=ws_resolved)
+        _run_git([*_SAFE_WS_GIT_ARGS, "remote", "add", "origin", str(bare_path)], cwd=ws_resolved)
     elif rem_res.stdout.strip() != str(bare_path):
         # Keep existing origin and add/update gitseed-local remote, or update origin if it was a local path
         if rem_res.stdout.strip().endswith(".git") and "local_repos" in rem_res.stdout.strip():
-            _run_git(["remote", "set-url", "origin", str(bare_path)], cwd=ws_resolved)
+            _run_git([*_SAFE_WS_GIT_ARGS, "remote", "set-url", "origin", str(bare_path)], cwd=ws_resolved)
 
     # Check if working directory has any commits or files
-    ws_head = _run_git(["rev-parse", "--verify", "HEAD"], cwd=ws_resolved)
+    ws_head = _run_git([*_SAFE_WS_GIT_ARGS, "rev-parse", "--verify", "HEAD"], cwd=ws_resolved)
     if ws_head.returncode != 0:
         # Check if there are existing untracked files in ws_resolved
         non_git_items = [p for p in ws_resolved.iterdir() if p.name != ".git"]
         if non_git_items:
-            _run_git(["add", "-A"], cwd=ws_resolved)
+            _run_git([*_SAFE_WS_GIT_ARGS, "add", "-A"], cwd=ws_resolved)
             _run_git(
                 [
+                    *_SAFE_WS_GIT_ARGS,
                     "-c",
                     "user.name=GitSeed Local",
                     "-c",
                     "user.email=local@gitseed.local",
                     "commit",
+                    "--no-verify",
                     "-m",
                     f"Initial commit for {project_name}",
                 ],
                 cwd=ws_resolved,
             )
             _run_git(
-                ["push", "-u", str(bare_path), f"HEAD:refs/heads/{default_branch}"],
+                [*_SAFE_WS_GIT_ARGS, "push", "--no-verify", "-u", "--", str(bare_path), f"HEAD:refs/heads/{default_branch}"],
                 cwd=ws_resolved,
             )
     else:
@@ -449,7 +572,7 @@ def _ensure_git_repo_initialized(
         bare_head = _run_git(["-C", str(bare_path), "rev-parse", "--verify", "HEAD"])
         if bare_head.returncode != 0:
             _run_git(
-                ["push", "-u", str(bare_path), f"HEAD:refs/heads/{default_branch}"],
+                [*_SAFE_WS_GIT_ARGS, "push", "--no-verify", "-u", "--", str(bare_path), f"HEAD:refs/heads/{default_branch}"],
                 cwd=ws_resolved,
             )
 
@@ -532,12 +655,16 @@ def ensure_local_bare_repo(
 
     # If workspace_path was accessible locally and had no commits before, pull the initial commit into it
     if ws_accessible_locally and resolved_ws:
-        ws_dir = Path(resolved_ws)
-        ws_head_after = _run_git(["rev-parse", "--verify", "HEAD"], cwd=ws_dir)
+        ws_dir = Path(resolved_ws).resolve()
+        if (ws_dir / ".git").is_symlink():
+            raise InvalidGitInputError("Workspace .git cannot be a symbolic link")
+        if not _workspace_git_config_is_safe(ws_dir):
+            raise InvalidGitInputError("Workspace .git/config contains unsafe directives")
+        ws_head_after = _run_git([*_SAFE_WS_GIT_ARGS, "rev-parse", "--verify", "HEAD"], cwd=ws_dir)
         if ws_head_after.returncode != 0:
-            _run_git(["fetch", str(bare_path), default_branch], cwd=ws_dir)
-            _run_git(["checkout", "-f", "-B", default_branch, "FETCH_HEAD"], cwd=ws_dir)
-            _run_git(["branch", f"--set-upstream-to=origin/{default_branch}", default_branch], cwd=ws_dir)
+            _run_git([*_SAFE_WS_GIT_ARGS, "fetch", "--", str(bare_path), default_branch], cwd=ws_dir)
+            _run_git([*_SAFE_WS_GIT_ARGS, "checkout", "-f", "-B", default_branch, "FETCH_HEAD"], cwd=ws_dir)
+            _run_git([*_SAFE_WS_GIT_ARGS, "branch", f"--set-upstream-to=origin/{default_branch}", default_branch], cwd=ws_dir)
 
     return bare_path, resolved_ws
 
@@ -987,6 +1114,12 @@ def get_local_repo_blob(
     proc = subprocess.run(
         [
             "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "protocol.ext.allow=never",
             "-C",
             str(bare_path),
             "show",
@@ -994,6 +1127,7 @@ def get_local_repo_blob(
             f"{effective_ref}:{clean_path}",
             "--",
         ],
+        env=_sanitized_git_env(),
         capture_output=True,
         check=False,
         timeout=20,

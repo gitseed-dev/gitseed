@@ -36,8 +36,6 @@ gitops:
 
 # Environment ("development" or "production")
 environment: "production"
-config:
-  environment: "production"
 debug: false
 autoMigrate: true
 
@@ -62,6 +60,8 @@ compute:
   # Create NetworkPolicies in runner and sandbox namespaces to restrict pod-to-control-plane traffic
   networkPolicy:
     enabled: true
+    # Set true only if custom workflows require direct outbound TCP/22 SSH outside the L7 egress proxy.
+    allowSsh: false
 
 rbac:
   create: true

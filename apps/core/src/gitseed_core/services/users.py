@@ -15,6 +15,7 @@ from gitseed_core.security import (
     hash_token,
     revoke_user_sessions,
 )
+from gitseed_core.services import events as events_service
 from gitseed_core.services.activity import record
 from gitseed_core.services.errors import Conflict, Forbidden, Invalid, NotFound
 
@@ -229,6 +230,7 @@ async def update_user(
     if not is_self and not is_admin:
         raise Forbidden("You can only update your own profile")
 
+    role_changed = False
     if org_role is not None and org_role != user.org_role:
         if not is_admin:
             raise Forbidden("Only organization admins can change organization roles")
@@ -244,6 +246,7 @@ async def update_user(
             if await _count_active_admins(session) <= 1:
                 raise Invalid("Cannot remove admin role from the last active admin")
         user.org_role = org_role
+        role_changed = True
 
     if name is not None:
         user.name = name.strip()
@@ -257,6 +260,17 @@ async def update_user(
     user.updated_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(user)
+    if role_changed:
+        events_service.emit_from_sync(
+            type="user.updated",
+            actor_type=str(ActorType.USER),
+            actor_id=actor.id,
+            data={
+                "user_id": user.id,
+                "org_role": str(user.org_role),
+                "status": str(user.status),
+            },
+        )
     return user
 
 

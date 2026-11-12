@@ -9,6 +9,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from typing import Any
 
 from rich.console import Console
 from rich.live import Live
@@ -21,6 +22,11 @@ try:
     from ctypes import wintypes
 except ImportError:
     wintypes = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
 
 try:
     import select
@@ -36,43 +42,105 @@ except ImportError:
 
 _SGR_MOUSE_RE = re.compile(r"^\[<(\d+);(\d+);(\d+)([Mm])$")
 
+_SS3_KEY_MAP: dict[str, str] = {
+    "A": "UP",
+    "B": "DOWN",
+    "C": "RIGHT",
+    "D": "LEFT",
+    "H": "HOME",
+    "F": "END",
+}
+
+_CSI_LETTER_KEY_MAP: dict[str, str] = {
+    "A": "UP",
+    "B": "DOWN",
+    "C": "RIGHT",
+    "D": "LEFT",
+    "H": "HOME",
+    "F": "END",
+    "Z": "SHIFT_TAB",
+}
+
+_CSI_TILDE_KEY_MAP: dict[str, str] = {
+    "1": "HOME",
+    "3": "DELETE",
+    "4": "END",
+    "5": "PGUP",
+    "6": "PGDN",
+    "7": "HOME",
+    "8": "END",
+}
+
+_MSVC_EXTENDED_KEY_MAP: dict[str, str] = {
+    "H": "UP",      # 0x48
+    "P": "DOWN",    # 0x50
+    "K": "LEFT",    # 0x4B
+    "M": "RIGHT",   # 0x4D
+    "I": "PGUP",    # 0x49
+    "Q": "PGDN",    # 0x51
+    "S": "DELETE",  # 0x53
+    "G": "HOME",    # 0x47
+    "O": "END",     # 0x4F
+}
+
+_STD_INPUT_HANDLE_DWORD = 0xFFFFFFF6  # (DWORD)-10 == STD_INPUT_HANDLE
+
+
+def _read_csi_sequence(read_next: Callable[[], str | None]) -> tuple[str, str]:
+    """Read CSI parameter/intermediate bytes (0x20..0x3F) up to final byte (0x40..0x7E)."""
+    params_chars: list[str] = []
+    final = ""
+    for _ in range(64):
+        ch = read_next()
+        if not ch:
+            return "", ""
+        code = ord(ch[0])
+        if 0x40 <= code <= 0x7E:
+            final = ch[0]
+            break
+        if 0x20 <= code <= 0x3F:
+            params_chars.append(ch[0])
+            continue
+        return "", ""
+    return "".join(params_chars), final
+
 
 def _parse_escape_tail(read_next: Callable[[], str | None]) -> str:
-    """Parse an ANSI / SGR escape sequence after reading the initial ESC (\x1b)."""
+    """Parse an ANSI / CSI / SS3 / SGR escape sequence after reading the initial ESC (\\x1b)."""
     first = read_next()
     if not first:
         return "Escape"
+    if first == "\x1b":
+        second = read_next()
+        if not second or second == "\x1b":
+            return "Escape"
+        if second == "[":
+            _read_csi_sequence(read_next)
+            return ""
+        if second == "O":
+            read_next()
+            return ""
+        return ""
+
+    # SS3 sequence: ESC O <final>
+    if first == "O":
+        ss3 = read_next()
+        if not ss3:
+            return ""
+        return _SS3_KEY_MAP.get(ss3[0], "")
+
+    # Non-CSI / non-SS3 (e.g. Alt+<key>): consume and treat as no-op rather than Escape
     if first != "[":
-        return "Escape"
+        return ""
 
-    second = read_next()
-    if not second:
-        return "Escape"
-
-    # Standard cursor keys
-    if second == "A":
-        return "UP"
-    if second == "B":
-        return "DOWN"
-    if second == "D":
-        return "LEFT"
-    if second == "C":
-        return "RIGHT"
-    if second in {"5", "6"}:
-        _ = read_next()
-        return "PGUP" if second == "5" else "PGDN"
+    # CSI sequence: ESC [ <parameter/intermediate 0x20..0x3F>* <final 0x40..0x7E>
+    params, final = _read_csi_sequence(read_next)
+    if not final:
+        return ""
 
     # SGR mouse sequence: ESC [ < btn ; col ; row M/m
-    if second == "<":
-        buf = "[<"
-        for _ in range(24):
-            ch = read_next()
-            if not ch:
-                break
-            buf += ch
-            if ch in {"M", "m"}:
-                break
-        m = _SGR_MOUSE_RE.match(buf)
+    if params.startswith("<"):
+        m = _SGR_MOUSE_RE.match(f"[{params}{final}")
         if m:
             btn = int(m.group(1))
             col = int(m.group(2))
@@ -86,17 +154,45 @@ def _parse_escape_tail(read_next: Callable[[], str | None]) -> str:
                 return f"MOUSE_CLICK:{col}:{row}"
         return ""
 
-    return "Escape"
+    if final == "~":
+        primary_code = params.split(";", 1)[0]
+        return _CSI_TILDE_KEY_MAP.get(primary_code, "")
+
+    return _CSI_LETTER_KEY_MAP.get(final, "")
+
+
+def _configure_kernel32_console_api(kernel32: Any) -> None:
+    """Set 64-bit safe argtypes/restype on kernel32 console HANDLE functions."""
+    if wintypes is None:
+        return
+    kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+    kernel32.GetStdHandle.restype = wintypes.HANDLE
+    kernel32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetConsoleMode.restype = wintypes.BOOL
+    kernel32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.SetConsoleMode.restype = wintypes.BOOL
+
+
+def _is_valid_win_handle(handle: int | None) -> bool:
+    if handle is None or handle == 0:
+        return False
+    invalid = ctypes.c_void_p(-1).value
+    return handle != invalid
 
 
 def _apply_windows_console_mouse_mode() -> tuple[int | None, int | None]:
     """Configure Windows Console input mode to deliver mouse events and disable QuickEdit."""
-    if os.name != "nt":
+    if os.name != "nt" or wintypes is None:
         return None, None
     try:
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        win_handle = int(kernel32.GetStdHandle(-10))  # STD_INPUT_HANDLE
-        mode = ctypes.c_uint32()
+        _configure_kernel32_console_api(kernel32)
+        raw_handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE_DWORD)
+        win_handle = int(raw_handle) if raw_handle is not None else None
+        if not _is_valid_win_handle(win_handle):
+            return None, None
+        assert win_handle is not None
+        mode = wintypes.DWORD(0)
         if kernel32.GetConsoleMode(win_handle, ctypes.byref(mode)):
             old_mode = int(mode.value)
             # ENABLE_WINDOW_INPUT (0x0008) | ENABLE_MOUSE_INPUT (0x0010)
@@ -111,28 +207,50 @@ def _apply_windows_console_mouse_mode() -> tuple[int | None, int | None]:
 
 
 @contextmanager
-def _enable_terminal_mouse() -> Iterator[None]:
+def _enable_terminal_mouse(stream: Any = None) -> Iterator[None]:
     """Enable SGR mouse reporting and Windows console mouse input during the TUI session."""
-    if not sys.stdout.isatty():
+    out = stream if stream is not None else sys.stdout
+    is_tty = getattr(out, "isatty", None)
+    if not callable(is_tty) or not is_tty():
         yield
         return
 
     win_handle, old_win_in_mode = _apply_windows_console_mouse_mode()
     try:
-        sys.stdout.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h")
-        sys.stdout.flush()
+        out.write("\x1b[?1000h\x1b[?1006h")
+        out.flush()
         yield
     finally:
         try:
-            sys.stdout.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l")
-            sys.stdout.flush()
+            out.write("\x1b[?1006l\x1b[?1000l")
+            out.flush()
         except Exception:
             pass
         if os.name == "nt" and old_win_in_mode is not None and win_handle is not None:
             try:
-                ctypes.windll.kernel32.SetConsoleMode(win_handle, old_win_in_mode)  # type: ignore[attr-defined]
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                _configure_kernel32_console_api(kernel32)
+                kernel32.SetConsoleMode(win_handle, old_win_in_mode)
             except Exception:
                 pass
+
+
+def _decode_msvcrt_char(first_ch: str, read_second: Callable[[], str | None]) -> str | None:
+    """Decode a Windows msvcrt.getwch() character, including \\x00/\\xe0 extended scan codes."""
+    if first_ch in {"\x00", "\xe0"}:
+        ext = read_second()
+        if not ext:
+            return None
+        return _MSVC_EXTENDED_KEY_MAP.get(ext[0])
+    if first_ch == "\x1b":
+        return "Escape"
+    if first_ch in {"\r", "\n"}:
+        return "Enter"
+    if first_ch == "\x08":
+        return "Backspace"
+    if first_ch == "\t":
+        return "TAB"
+    return first_ch
 
 
 def read_key(timeout: float = 0.1) -> str | None:
@@ -184,13 +302,31 @@ def _read_key_windows(timeout: float) -> str | None:
             ]
 
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        h_in = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        _configure_kernel32_console_api(kernel32)
+        kernel32.GetNumberOfConsoleInputEvents.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.GetNumberOfConsoleInputEvents.restype = wintypes.BOOL
+        kernel32.ReadConsoleInputW.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(INPUT_RECORD),
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.ReadConsoleInputW.restype = wintypes.BOOL
 
-        def _peek_count() -> int:
+        raw_h_in = kernel32.GetStdHandle(_STD_INPUT_HANDLE_DWORD)
+        h_in = int(raw_h_in) if raw_h_in is not None else None
+        if not _is_valid_win_handle(h_in):
+            time.sleep(timeout)
+            return None
+
+        def _peek_count() -> int | None:
             cnt = wintypes.DWORD(0)
             if kernel32.GetNumberOfConsoleInputEvents(h_in, ctypes.byref(cnt)):
                 return int(cnt.value)
-            return 0
+            return None
 
         def _read_one_record() -> INPUT_RECORD | None:
             rec = INPUT_RECORD()
@@ -203,7 +339,8 @@ def _read_key_windows(timeout: float) -> str | None:
         def _read_next_vt_char() -> str | None:
             t_end = time.monotonic() + 0.02
             while time.monotonic() < t_end:
-                if _peek_count() > 0:
+                pending = _peek_count()
+                if pending is not None and pending > 0:
                     r = _read_one_record()
                     if r is not None and r.EventType == 0x0001 and r.Event.KeyEvent.bKeyDown:
                         ch = r.Event.KeyEvent.UnicodeChar
@@ -215,7 +352,28 @@ def _read_key_windows(timeout: float) -> str | None:
 
         deadline = time.monotonic() + max(0.0, timeout)
         while True:
-            if _peek_count() > 0:
+            pending_events = _peek_count()
+            if pending_events is None:
+                if msvcrt is not None and msvcrt.kbhit():  # type: ignore[attr-defined]
+                    first_wch = str(msvcrt.getwch())  # type: ignore[attr-defined]
+                    if first_wch == "\x1b":
+                        def _next_msvc_vt() -> str | None:
+                            if msvcrt is not None and msvcrt.kbhit():  # type: ignore[attr-defined]
+                                return str(msvcrt.getwch())  # type: ignore[attr-defined]
+                            return None
+
+                        tok = _parse_escape_tail(_next_msvc_vt)
+                        return tok if tok else None
+                    return _decode_msvcrt_char(
+                        first_wch,
+                        lambda: str(msvcrt.getwch()) if msvcrt is not None else None,  # type: ignore[attr-defined]
+                    )
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(0.01)
+                continue
+
+            if pending_events > 0:
                 rec = _read_one_record()
                 if rec is None:
                     continue
@@ -226,6 +384,7 @@ def _read_key_windows(timeout: float) -> str | None:
                     if not ke.bKeyDown:
                         continue
                     vk = int(ke.wVirtualKeyCode)
+                    ctrl_state = int(ke.dwControlKeyState)
                     ch = str(ke.UnicodeChar) if ke.UnicodeChar else ""
 
                     if ch == "\x1b":
@@ -234,6 +393,14 @@ def _read_key_windows(timeout: float) -> str | None:
                             return token
                         continue
 
+                    if ch in {"\x00", "\xe0"} and msvcrt is not None and msvcrt.kbhit():  # type: ignore[attr-defined]
+                        ext_mapped = _decode_msvcrt_char(
+                            ch,
+                            lambda: str(msvcrt.getwch()) if msvcrt is not None else None,  # type: ignore[attr-defined]
+                        )
+                        if ext_mapped:
+                            return ext_mapped
+
                     vk_map = {
                         0x26: "UP",      # VK_UP
                         0x28: "DOWN",    # VK_DOWN
@@ -241,10 +408,13 @@ def _read_key_windows(timeout: float) -> str | None:
                         0x27: "RIGHT",   # VK_RIGHT
                         0x21: "PGUP",    # VK_PRIOR
                         0x22: "PGDN",    # VK_NEXT
+                        0x2E: "DELETE",  # VK_DELETE
+                        0x24: "HOME",    # VK_HOME
+                        0x23: "END",     # VK_END
                         0x1B: "Escape",  # VK_ESCAPE
                         0x0D: "Enter",   # VK_RETURN
                         0x08: "Backspace",  # VK_BACK
-                        0x09: "TAB",     # VK_TAB
+                        0x09: "SHIFT_TAB" if (ctrl_state & 0x0010) else "TAB",  # VK_TAB
                     }
                     special_chars = {"\x00", "\r", "\n", "\x08", "\t", "\x1b"}
                     if vk in vk_map and (not ch or ch in special_chars):
@@ -254,7 +424,7 @@ def _read_key_windows(timeout: float) -> str | None:
                     if ch == "\x08":
                         return "Backspace"
                     if ch == "\t":
-                        return "TAB"
+                        return "SHIFT_TAB" if (ctrl_state & 0x0010) else "TAB"
                     if ch and ch != "\x00":
                         return ch
 
@@ -455,14 +625,14 @@ def run_tui(
 
     try:
         with (
+            _posix_cbreak_mode(),
+            _enable_terminal_mouse(live_console.file),
             Live(
                 first_frame,
                 console=live_console,
                 screen=True,
                 refresh_per_second=20,
             ) as live,
-            _enable_terminal_mouse(),
-            _posix_cbreak_mode(),
         ):
             while True:
                 with controller.lock:

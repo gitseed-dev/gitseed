@@ -23,6 +23,7 @@ from gitseed_cli.formatting import (
     describe_seed,
     dump_json,
     err_console,
+    extract_log_tail_delta,
     print_agents_table,
     print_backends_table,
     print_benchmarks_table,
@@ -92,6 +93,17 @@ create_app = typer.Typer(
     help="Create a new seed from flags or a Markdown manifest.",
     no_args_is_help=True,
 )
+
+
+def _split_editor_command(editor: str, *, is_windows: bool | None = None) -> list[str]:
+    win = (os.name == "nt") if is_windows is None else is_windows
+    parts = shlex.split(editor, posix=not win)
+    if win:
+        parts = [
+            tok[1:-1] if len(tok) >= 2 and tok[0] == '"' and tok[-1] == '"' else tok
+            for tok in parts
+        ]
+    return parts
 
 
 def normalize_resource(raw: str) -> str:
@@ -180,8 +192,8 @@ def apply_parsed_manifest(
     if manifest.ignored_readonly_sections:
         sections_str = ", ".join(manifest.ignored_readonly_sections)
         err_console.print(
-            f"[yellow]Note:[/yellow] {source}: ignored read-only "
-            f"workflow sections ({sections_str})."
+            f"[yellow]Note:[/yellow] {escape(str(source))}: ignored read-only "
+            f"workflow sections ({escape(sections_str)})."
         )
 
     fm = manifest.frontmatter
@@ -828,7 +840,7 @@ def register_resource_commands(app: typer.Typer) -> None:
         try:
             editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
             if editor:
-                subprocess.run(shlex.split(editor) + [str(tmp_path)], check=True)
+                subprocess.run(_split_editor_command(editor) + [str(tmp_path)], check=True)
             else:
                 edited_text = click.edit(original_md, extension=".md")
                 if edited_text is None:
@@ -1027,14 +1039,10 @@ def register_resource_commands(app: typer.Typer) -> None:
 
         while True:
             current_chunk = _fetch_run_log_output(client, run, tail=tail)
-            if current_chunk != printed_text:
-                new_part = (
-                    current_chunk[len(printed_text) :]
-                    if current_chunk.startswith(printed_text)
-                    else current_chunk
-                )
-                if new_part:
-                    console.print(new_part, end="", markup=False, highlight=False)
+            new_part = extract_log_tail_delta(printed_text, current_chunk)
+            if new_part:
+                console.print(new_part, end="", markup=False, highlight=False)
+            if current_chunk:
                 printed_text = current_chunk
 
             if not follow or run.status not in RUN_ACTIVE_STATUSES:

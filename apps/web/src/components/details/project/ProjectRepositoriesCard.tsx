@@ -23,7 +23,7 @@ import {
   getBackendRepositories,
   getEnabledBackendRepositories,
 } from '../../../utils/backends'
-import { buildNewRepoWebUrl } from '../../../utils/gitUrls'
+import { buildNewRepoWebUrl, safeExternalUrl } from '../../../utils/gitUrls'
 import type { Project, ProjectRepository } from '../../../types'
 
 export interface ProjectRepositoriesCardProps {
@@ -499,46 +499,54 @@ export const ProjectRepositoriesCard: React.FC<
                 </div>
                 <div className="flex items-center gap-3">
                   {selectedGitBackend &&
-                    (repoMode === 'existing' || repoMode === 'create') && (
-                    <>
-                      <a
-                        href={buildNewRepoWebUrl(
+                    selectedGitBackend.provider !== 'local' &&
+                    (repoMode === 'existing' || repoMode === 'create') && (() => {
+                      const safeNewRepoUrl = safeExternalUrl(
+                        buildNewRepoWebUrl(
                           selectedGitBackend.provider,
                           selectedGitBackend.endpoint
-                        )}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400 flex items-center gap-1 transition"
-                        title="Open provider in a new tab to create a repository manually"
-                      >
-                        <span>
-                          New on{' '}
-                          {selectedGitBackend.provider === 'gitlab'
-                            ? 'GitLab'
-                            : selectedGitBackend.provider === 'bitbucket'
-                              ? 'Bitbucket'
-                              : 'GitHub'}
-                        </span>
-                        <ExternalLink size={11} />
-                      </a>
-                      <button
-                        type="button"
-                        onClick={handleSyncBackendRepos}
-                        disabled={isSyncingBackendRepos}
-                        className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                      >
-                        <RefreshCw
-                          size={11}
-                          className={isSyncingBackendRepos ? 'animate-spin' : ''}
-                        />
-                        <span>
-                          {isSyncingBackendRepos
-                            ? 'Syncing...'
-                            : 'Sync repositories'}
-                        </span>
-                      </button>
-                    </>
-                  )}
+                        )
+                      )
+                      return (
+                        <>
+                          {safeNewRepoUrl && (
+                            <a
+                              href={safeNewRepoUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400 flex items-center gap-1 transition"
+                              title="Open provider in a new tab to create a repository manually"
+                            >
+                              <span>
+                                New on{' '}
+                                {selectedGitBackend.provider === 'gitlab'
+                                  ? 'GitLab'
+                                  : selectedGitBackend.provider === 'bitbucket'
+                                    ? 'Bitbucket'
+                                    : 'GitHub'}
+                              </span>
+                              <ExternalLink size={11} />
+                            </a>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleSyncBackendRepos}
+                            disabled={isSyncingBackendRepos}
+                            className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          >
+                            <RefreshCw
+                              size={11}
+                              className={isSyncingBackendRepos ? 'animate-spin' : ''}
+                            />
+                            <span>
+                              {isSyncingBackendRepos
+                                ? 'Syncing...'
+                                : 'Sync repositories'}
+                            </span>
+                          </button>
+                        </>
+                      )
+                    })()}
                   {repos.length > 0 && (
                     <button
                       type="button"

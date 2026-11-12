@@ -256,6 +256,11 @@ export const SeedModal: React.FC<SeedModalProps> = ({
   const [files, setFiles] = useState<File[]>([])
   const [draggingFiles, setDraggingFiles] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [createdSeedForRetry, setCreatedSeedForRetry] = useState<Seed | null>(
+    null
+  )
+  const [linkedParentForRetry, setLinkedParentForRetry] =
+    useState<boolean>(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const projectBtnRef = useRef<HTMLButtonElement | null>(null)
   const trackBtnRef = useRef<HTMLButtonElement | null>(null)
@@ -315,6 +320,8 @@ export const SeedModal: React.FC<SeedModalProps> = ({
     setFiles([])
     setDraggingFiles(false)
     setError(null)
+    setCreatedSeedForRetry(null)
+    setLinkedParentForRetry(false)
     setOpenMenu(null)
   }, [
     isOpen,
@@ -591,6 +598,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
     setError(null)
     try {
       let saved: Seed
+      const postSaveErrors: string[] = []
       if (isEditing && seed) {
         saved = await api.seeds.update(seed.id, {
           title: resolvedTitle,
@@ -606,13 +614,24 @@ export const SeedModal: React.FC<SeedModalProps> = ({
           budget_cap: parsedCap,
         })
         if (files.length > 0) {
+          const remainingFiles: File[] = []
           for (const f of files) {
             try {
               await api.seeds.uploadAttachment(saved.id, f)
             } catch (uploadErr) {
-              console.warn('Attachment upload failed:', uploadErr)
+              remainingFiles.push(f)
+              postSaveErrors.push(
+                `Attachment "${f.name}" failed: ${
+                  uploadErr instanceof ApiError
+                    ? uploadErr.detail
+                    : uploadErr instanceof Error
+                      ? uploadErr.message
+                      : 'upload failed'
+                }`
+              )
             }
           }
+          setFiles(remainingFiles)
           await queryClient.invalidateQueries({
             queryKey: ['seedAttachments', saved.id],
           })
@@ -626,27 +645,33 @@ export const SeedModal: React.FC<SeedModalProps> = ({
             : trimmedDesc
         const holdStart =
           effectiveStaged || files.length > 0 || Boolean(linkedParentSeed)
-        saved = await api.seeds.create({
-          project_id: projectId,
-          title: resolvedTitle,
-          description: effectiveDesc,
-          specification: trimmedSpec,
-          acceptance_criteria: finalCriteria,
-          tags: finalTags,
-          ...(fastTrack ? { stage: 'execute', fast_track: true } : {}),
-          autonomy,
-          budget_cap: parsedCap,
-          staged: holdStart,
-          ...(canPickExtraIdeateAgents && extraIdeateAgentIds.length > 0
-            ? { ideate_agent_ids: extraIdeateAgentIds }
-            : {}),
-        })
-        if (linkedParentSeed) {
+        if (createdSeedForRetry) {
+          saved = createdSeedForRetry
+        } else {
+          saved = await api.seeds.create({
+            project_id: projectId,
+            title: resolvedTitle,
+            description: effectiveDesc,
+            specification: trimmedSpec,
+            acceptance_criteria: finalCriteria,
+            tags: finalTags,
+            ...(fastTrack ? { stage: 'execute', fast_track: true } : {}),
+            autonomy,
+            budget_cap: parsedCap,
+            staged: holdStart,
+            ...(canPickExtraIdeateAgents && extraIdeateAgentIds.length > 0
+              ? { ideate_agent_ids: extraIdeateAgentIds }
+              : {}),
+          })
+          setCreatedSeedForRetry(saved)
+        }
+        if (linkedParentSeed && !linkedParentForRetry) {
           try {
             await api.seeds.addLink(saved.id, {
               target_seed_id: linkedParentSeed.id,
               kind: 'follow_up',
             })
+            setLinkedParentForRetry(true)
             await Promise.all([
               queryClient.invalidateQueries({
                 queryKey: ['seedLinks', saved.id],
@@ -656,29 +681,41 @@ export const SeedModal: React.FC<SeedModalProps> = ({
               }),
             ])
           } catch (linkErr) {
-            console.warn('Could not link related seed:', linkErr)
+            postSaveErrors.push(
+              `Linking follow-up seed #${linkedParentSeed.number} failed: ${
+                linkErr instanceof ApiError
+                  ? linkErr.detail
+                  : linkErr instanceof Error
+                    ? linkErr.message
+                    : 'could not link seed'
+              }`
+            )
           }
         }
         if (files.length > 0) {
-          const failed: string[] = []
+          const remainingFiles: File[] = []
           for (const f of files) {
             try {
               await api.seeds.uploadAttachment(saved.id, f)
             } catch (uploadErr) {
-              failed.push(
-                `${f.name}: ${
-                  uploadErr instanceof Error
-                    ? uploadErr.message
-                    : 'upload failed'
+              remainingFiles.push(f)
+              postSaveErrors.push(
+                `Attachment "${f.name}" failed: ${
+                  uploadErr instanceof ApiError
+                    ? uploadErr.detail
+                    : uploadErr instanceof Error
+                      ? uploadErr.message
+                      : 'upload failed'
                 }`
               )
             }
           }
-          if (failed.length > 0) {
-            console.warn('Some attachments failed to upload:', failed)
-          }
+          setFiles(remainingFiles)
+          await queryClient.invalidateQueries({
+            queryKey: ['seedAttachments', saved.id],
+          })
         }
-        if (holdStart && !effectiveStaged) {
+        if (postSaveErrors.length === 0 && holdStart && !effectiveStaged) {
           saved = await api.seeds.start(saved.id)
         }
       }
@@ -691,6 +728,11 @@ export const SeedModal: React.FC<SeedModalProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
         queryClient.invalidateQueries({ queryKey: queryKeys.activity }),
       ])
+
+      if (postSaveErrors.length > 0) {
+        setError(postSaveErrors.join(' · '))
+        return
+      }
 
       onSaved?.(saved)
       onClose()

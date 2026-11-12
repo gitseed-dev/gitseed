@@ -443,15 +443,24 @@ def test_opencode_adapter_cleans_up_config_and_parses_ndjson_telemetry(
     cmd = adapter.build_command("Implement task")
     assert cmd[:4] == ["opencode", "run", "--format", "json"]
 
+    captured_ext_cfgs: list[Path] = []
+
     async def _boom_exec(*_args: Any, **_kwargs: Any) -> Any:
         assert (ws / "opencode.json").is_file()
-        assert "sk-gitseed-ephemeral-secret" in (ws / "opencode.json").read_text(encoding="utf-8")
+        assert "sk-gitseed-ephemeral-secret" not in (ws / "opencode.json").read_text(
+            encoding="utf-8"
+        )
+        ext_cfg = Path(_kwargs["env"]["OPENCODE_CONFIG"])
+        assert ext_cfg.is_file()
+        assert "sk-gitseed-ephemeral-secret" in ext_cfg.read_text(encoding="utf-8")
+        captured_ext_cfgs.append(ext_cfg)
         raise TimeoutError("simulated CLI timeout")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _boom_exec)
     with pytest.raises(TimeoutError, match="simulated CLI timeout"):
         asyncio.run(adapter.run_command("Implement task", timeout=1.0))
     assert not (ws / "opencode.json").exists()
+    assert captured_ext_cfgs and not captured_ext_cfgs[0].exists()
 
     # Case 2: Pre-existing tracked opencode.json -> exact original bytes restored on exception
     original_bytes = b'{\n  "theme": "repo-default"\n}\n'
@@ -499,7 +508,8 @@ def test_opencode_adapter_cleans_up_config_and_parses_ndjson_telemetry(
     rendered = "".join(_format_cli_stream_line(ln, adapter3) for ln in ndjson_lines)
     assert "Inspecting files...\n" in rendered
     assert "plain fallback stdout line\n" in rendered
-    assert adapter3.input_tokens == 1750  # (1000 + 200 + 50) + 500
+    assert adapter3.input_tokens == 1570  # (1000 + (200 // 10) + 50) + 500
+    assert adapter3.cached_input_tokens == 200
     assert adapter3.output_tokens == 400  # 250 + 150
     assert adapter3.peak_context_tokens == 1500
     assert adapter3.turn_count == 2
@@ -557,3 +567,103 @@ def test_max_turns_broker_marker_and_ephemeral_paths(
     monkeypatch.delenv("GITSEED_WORKTREE_HOMES_DIR", raising=False)
     wt_homes = _get_worktree_homes_root()
     assert ".gitseed-worktrees" not in wt_homes.as_posix()
+
+
+def test_failed_clone_redacts_token_scrubs_partial_git_and_finalize_preserves_synthesized_via(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Ensure failed clones never leak embedded tokens or leave partial .git dirs in /workspace."""
+    from gitseed_runner import git_ops
+    from gitseed_runner.broker_modes import run_finalize_mode
+
+    ws_dir = tmp_path / "workspace"
+    ws_dir.mkdir()
+    secret_tok = "ghs_SuperSecretBrokerToken987654"
+    cred_url = f"https://x-access-token:{secret_tok}@github.com/acme/repo.git"
+
+    def _fake_failing_git(
+        args: list[str], cwd: Path, *, extra_env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        if "clone" in args:
+            # Simulate partial checkout leaving .git/config with credentialed URL
+            partial_git = ws_dir / ".git"
+            partial_git.mkdir(parents=True, exist_ok=True)
+            (partial_git / "config").write_text(
+                f'[remote "origin"]\n\turl = {cred_url}\n', encoding="utf-8"
+            )
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=128,
+                stdout="",
+                stderr=f"fatal: repository '{cred_url}' not found",
+            )
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_ops, "_run_git", _fake_failing_git)
+    with caplog.at_level("WARNING", logger="gitseed_runner"):
+        _, repo_dirs = git_ops.clone_project_repositories(
+            ws_dir,
+            [{"full_name": "acme/repo", "clone_url": cred_url, "default_branch": "main"}],
+            warm_workspace=False,
+        )
+    assert repo_dirs == {}
+    assert not (ws_dir / ".git").exists()
+    assert secret_tok not in caplog.text
+
+    # Verify finalize mode preserves synthesized_via and policy_limit_warning
+    from gitseed_runner import broker_modes
+
+    ctl_dir = tmp_path / "ctl_fin"
+    sec_dir = tmp_path / "sec_fin"
+    ctl_dir.mkdir()
+    sec_dir.mkdir()
+    monkeypatch.setenv("GITSEED_CTL_DIR", str(ctl_dir))
+    monkeypatch.setenv("GITSEED_SECRETS_DIR", str(sec_dir))
+    monkeypatch.setenv("GITSEED_WORKSPACE", str(ws_dir))
+    monkeypatch.setenv("GITSEED_RUN_ID", "run_fin_1")
+    monkeypatch.setenv("GITSEED_API_URL", "http://api.local")
+    monkeypatch.setenv("GITSEED_RUN_TOKEN", "fin_tok_123")
+
+    (ctl_dir / "run_fin_1.agent-done").write_text(
+        json.dumps({"exit_code": 0, "completed_at": "2026-11-12T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    (ctl_dir / "agent-result.json").write_text(
+        json.dumps(
+            {
+                "status": "succeeded",
+                "exit_code": 0,
+                "stage_output": {
+                    "specification": "Detailed locked specification for feature X.",
+                    "acceptance_criteria": ["Criterion 1", "Criterion 2", "Criterion 3"],
+                    "summary_comment": "Ready for planning.",
+                    "synthesized_via": "stdout_json_extraction",
+                    "policy_limit_warning": {"field": "acceptance_criteria", "count": 3},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured_complete: dict[str, Any] = {}
+
+    async def _fake_fetch_fin_ctx(api_url: str, token: str) -> dict[str, Any]:
+        return {
+            "run_id": "run_fin_1",
+            "stage": "ideate",
+            "seed_number": 7,
+            "project_slug": "acme",
+            "repositories": [],
+        }
+
+    async def _fake_report_complete(api_url: str, token: str, **kwargs: Any) -> None:
+        captured_complete.update(kwargs)
+
+    monkeypatch.setattr(broker_modes, "fetch_finalize_context", _fake_fetch_fin_ctx)
+    rc = asyncio.run(run_finalize_mode(report_complete_fn=_fake_report_complete))
+    assert rc == 0
+    assert captured_complete["stage_output"]["synthesized_via"] == "stdout_json_extraction"
+    assert captured_complete["stage_output"]["policy_limit_warning"] == {
+        "field": "acceptance_criteria",
+        "count": 3,
+    }

@@ -45,6 +45,7 @@ import { api, ApiError } from '../../../api/client'
 import { MarkdownContent } from '../../common/MarkdownContent'
 import { STAGE_LABELS } from '../../../utils/seeds'
 import { formatRelativeTime } from '../../../utils/format'
+import { safeExternalUrl } from '../../../utils/gitUrls'
 import {
   MonacoCodeEditor,
   parseUnifiedDiffLines,
@@ -165,10 +166,19 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [draftDiffNotes, setDraftDiffNotes] = useState<
-    Array<{ id: string; path: string; line: number | null; body: string }>
+    Array<{
+      id: string
+      path: string
+      line: number | null
+      side?: 'original' | 'modified'
+      body: string
+    }>
   >([])
   const [annotatingFilePath, setAnnotatingFilePath] = useState<string | null>(null)
   const [draftNoteLine, setDraftNoteLine] = useState('')
+  const [draftNoteSide, setDraftNoteSide] = useState<'original' | 'modified'>(
+    'modified'
+  )
   const [draftNoteBody, setDraftNoteBody] = useState('')
   const [reviewSummaryNote, setReviewSummaryNote] = useState('')
   const [postReviewToRemotePr, setPostReviewToRemotePr] = useState(false)
@@ -180,7 +190,10 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
   const prStatus = changes?.pull_request_status || null
   const prChecks = prStatus?.checks || []
   const prComments = prStatus?.comments || []
-  const resolvedPrUrl = prStatus?.pull_request_url || changes?.pull_request_url || null
+  const resolvedPrUrl =
+    safeExternalUrl(prStatus?.pull_request_url) ||
+    safeExternalUrl(changes?.pull_request_url) ||
+    null
 
   const inlineCommentsByPath = useMemo(() => {
     const map: Record<string, PullRequestCommentItem[]> = {}
@@ -196,7 +209,13 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
   const draftNotesByPath = useMemo(() => {
     const map: Record<
       string,
-      Array<{ id: string; path: string; line: number | null; body: string }>
+      Array<{
+        id: string
+        path: string
+        line: number | null
+        side?: 'original' | 'modified'
+        body: string
+      }>
     > = {}
     for (const note of draftDiffNotes) {
       if (!map[note.path]) map[note.path] = []
@@ -226,10 +245,12 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
         id: `${filePath}-${Date.now()}-${prev.length}`,
         path: filePath,
         line,
+        side: line ? draftNoteSide : 'modified',
         body,
       },
     ])
     setDraftNoteLine('')
+    setDraftNoteSide('modified')
     setDraftNoteBody('')
     setAnnotatingFilePath(null)
     setDiffReviewNotice(null)
@@ -250,7 +271,9 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
         : '@coder Please address the following inline diff review notes:'
       const bullets = draftDiffNotes.map((n) =>
         n.line
-          ? `- \`${n.path}:${n.line}\`: ${n.body}`
+          ? n.side === 'original'
+            ? `- \`${n.path}:${n.line}\` (deleted line): ${n.body}`
+            : `- \`${n.path}:${n.line}\`: ${n.body}`
           : `- \`${n.path}\`: ${n.body}`
       )
       const formattedMarkdown = `${header}\n\n### Inline Diff Review Notes (${draftDiffNotes.length})\n${bullets.join('\n')}`
@@ -459,11 +482,8 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
   const fullHeadRef = prStatus?.head_ref || changes?.head_ref || expectedBranchRef
   const shortHeadRef = fullHeadRef.replace(/^gitseed\/(?:[^/]+\/)?/, '')
   const baseBranchRef = prStatus?.base_ref || changes?.base_ref || 'main'
-  const rawExternalGitUrl = resolvedPrUrl || changes?.web_diff_url || null
-  const externalGitUrl =
-    isLocalProvider || (rawExternalGitUrl && rawExternalGitUrl.startsWith('local://'))
-      ? null
-      : rawExternalGitUrl
+  const rawExternalGitUrl = resolvedPrUrl || safeExternalUrl(changes?.web_diff_url) || null
+  const externalGitUrl = isLocalProvider ? null : rawExternalGitUrl
   const gitHostLabel =
     prStatus?.provider === 'gitlab'
       ? 'GitLab'
@@ -482,7 +502,8 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
       const blob = await api.projects.getRepoBlob(project.id, repoId, { path: file.path, ref: browseTargetRef })
       if (blob.is_binary || blob.truncated || blob.content == null) {
         // Too large or binary for the inline API: hand off to the Git host instead
-        if (file.web_url) window.open(file.web_url, '_blank', 'noreferrer')
+        const safeFileUrl = safeExternalUrl(file.web_url)
+        if (safeFileUrl) window.open(safeFileUrl, '_blank', 'noopener,noreferrer')
         else setDownloadError(`${file.path} is binary or too large to download here.`)
         return
       }
@@ -743,7 +764,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                 <a
                   href={externalGitUrl}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200/80 dark:hover:bg-zinc-700/80 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700/80 transition"
                 >
                   <span>Open on {gitHostLabel}</span>
@@ -977,17 +998,20 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                         >
                           {chk.conclusion || chk.status}
                         </span>
-                        {chk.details_url && (
-                          <a
-                            href={chk.details_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-zinc-400 hover:text-teal-500 transition"
-                            title="Open check logs on Git host"
-                          >
-                            <ExternalLink size={12} />
-                          </a>
-                        )}
+                        {(() => {
+                          const safeDetailsUrl = safeExternalUrl(chk.details_url)
+                          return safeDetailsUrl ? (
+                            <a
+                              href={safeDetailsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-zinc-400 hover:text-teal-500 transition"
+                              title="Open check logs on Git host"
+                            >
+                              <ExternalLink size={12} />
+                            </a>
+                          ) : null
+                        })()}
                       </div>
                     </div>
                     {chk.summary && chk.status === 'failed' && (
@@ -1040,7 +1064,8 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                             : normalizedKind
                               ? normalizedKind.replace(/_/g, ' ')
                               : null
-                  const commentUrl = cm.web_url ?? cm.html_url
+                  const commentUrl =
+                    safeExternalUrl(cm.web_url) ?? safeExternalUrl(cm.html_url)
 
                   return (
                     <div
@@ -1082,7 +1107,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                             <a
                               href={commentUrl}
                               target="_blank"
-                              rel="noreferrer"
+                              rel="noopener noreferrer"
                               className="hover:text-teal-500"
                             >
                               <ExternalLink size={11} />
@@ -1187,17 +1212,20 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                 {c.committed_at && (
                   <span>{formatRelativeTime(c.committed_at)}</span>
                 )}
-                {c.web_url && (
-                  <a
-                    href={c.web_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-zinc-400 hover:text-teal-500 transition"
-                    title="Open commit"
-                  >
-                    <ExternalLink size={12} />
-                  </a>
-                )}
+                {(() => {
+                  const safeCommitUrl = safeExternalUrl(c.web_url)
+                  return safeCommitUrl ? (
+                    <a
+                      href={safeCommitUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-zinc-400 hover:text-teal-500 transition"
+                      title="Open commit"
+                    >
+                      <ExternalLink size={12} />
+                    </a>
+                  ) : null
+                })()}
               </div>
             </div>
           ))}
@@ -1498,6 +1526,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                             } else {
                               setAnnotatingFilePath(file.path)
                               setDraftNoteLine('')
+                              setDraftNoteSide('modified')
                               setDraftNoteBody('')
                             }
                           }}
@@ -1534,17 +1563,20 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                           )}
                         </button>
                       )}
-                      {file.web_url && (
-                        <a
-                          href={file.web_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-1 rounded-lg text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60 transition"
-                          title="Open file on Git host"
-                        >
-                          <ExternalLink size={13} />
-                        </a>
-                      )}
+                      {(() => {
+                        const safeFileWebUrl = safeExternalUrl(file.web_url)
+                        return safeFileWebUrl ? (
+                          <a
+                            href={safeFileWebUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1 rounded-lg text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60 transition"
+                            title="Open file on Git host"
+                          >
+                            <ExternalLink size={13} />
+                          </a>
+                        ) : null
+                      })()}
                     </div>
                   </div>
 
@@ -1561,11 +1593,26 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                           modifiedLineNumbers={parsedDiff.modifiedLineMap}
                           onLineSelect={
                             canAnnotateDiff
-                              ? (realLineNumber) => {
+                              ? (realLineNumber, side = 'modified') => {
+                                  if (
+                                    annotatingFilePath &&
+                                    annotatingFilePath !== file.path &&
+                                    draftNoteBody.trim().length > 0
+                                  ) {
+                                    return
+                                  }
+                                  if (
+                                    annotatingFilePath === file.path &&
+                                    draftNoteBody.trim().length > 0 &&
+                                    draftNoteLine.trim().length > 0
+                                  ) {
+                                    return
+                                  }
                                   if (annotatingFilePath !== file.path) {
                                     setAnnotatingFilePath(file.path)
                                   }
                                   setDraftNoteLine(String(realLineNumber))
+                                  setDraftNoteSide(side)
                                 }
                               : undefined
                           }
@@ -1592,20 +1639,32 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                           onSubmit={(e) => handleAddDraftDiffNote(e, file.path)}
                           className="p-3 border-t border-teal-500/30 bg-teal-500/5 dark:bg-teal-500/10 flex flex-col sm:flex-row items-stretch sm:items-center gap-2"
                         >
-                          <input
-                            type="number"
-                            min={1}
-                            value={draftNoteLine}
-                            onChange={(e) => setDraftNoteLine(e.target.value)}
-                            placeholder="Line #"
-                            aria-label={`Line number in ${file.path}`}
-                            className="w-full sm:w-24 h-8 px-2.5 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
-                          />
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min={1}
+                              value={draftNoteLine}
+                              onChange={(e) => setDraftNoteLine(e.target.value)}
+                              placeholder="Line #"
+                              aria-label={`Line number in ${file.path}`}
+                              className="w-full sm:w-24 h-8 px-2.5 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
+                            />
+                            {draftNoteLine && draftNoteSide === 'original' && (
+                              <button
+                                type="button"
+                                onClick={() => setDraftNoteSide('modified')}
+                                title="Targeting deleted (original) line — click to switch to modified side"
+                                className="px-2 h-8 rounded-xl text-[11px] font-semibold bg-rose-500/12 text-rose-700 dark:text-rose-300 border border-rose-500/25 shrink-0 cursor-pointer"
+                              >
+                                Deleted line
+                              </button>
+                            )}
+                          </div>
                           <input
                             type="text"
                             value={draftNoteBody}
                             onChange={(e) => setDraftNoteBody(e.target.value)}
-                            placeholder={`Review note on ${file.path} for @coder...`}
+                            placeholder={`Review note on ${file.path}${draftNoteLine && draftNoteSide === 'original' ? ' (deleted line)' : ''} for @coder...`}
                             aria-label={`Review note on ${file.path}`}
                             autoFocus
                             className="flex-1 h-8 px-2.5 text-xs rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
@@ -1648,7 +1707,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                                   <div className="flex items-center gap-1.5 font-mono text-[11px] text-teal-700 dark:text-teal-300 font-semibold">
                                     <span>
                                       {note.line
-                                        ? `${note.path}:${note.line}`
+                                        ? `${note.path}:${note.line}${note.side === 'original' ? ' (deleted line)' : ''}`
                                         : note.path}
                                     </span>
                                   </div>

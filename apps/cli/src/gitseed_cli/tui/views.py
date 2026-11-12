@@ -14,6 +14,7 @@ from rich import box
 from rich.console import ConsoleRenderable, Group
 from rich.layout import Layout
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -451,7 +452,7 @@ def render_seed_inspector(state: TUIState) -> Panel:
     border = "bright_yellow" if seed.status == SeedStatus.AWAITING_APPROVAL else "bright_cyan"
     return Panel(
         Group(*parts),
-        title=f"Seed Inspector: {ref}",
+        title=f"Seed Inspector: {escape(ref)}",
         border_style=border,
         box=box.ROUNDED,
     )
@@ -523,7 +524,7 @@ def _render_inspector_tab_content(state: TUIState, seed: SeedResponse) -> Consol
             t_table.add_row(
                 str(t.position + 1),
                 Text(f"{icon} {st.upper()}", style=STATUS_STYLES.get(st, "bright_white")),
-                t.title,
+                escape(t.title),
             )
         return t_table
 
@@ -673,10 +674,11 @@ def _render_inspector_tab_content(state: TUIState, seed: SeedResponse) -> Consol
         end_line = min(total_diff_lines, start_line + viewport_height)
         visible_patch = "\n".join(combined_patch_lines[start_line:end_line])
 
+        safe_active_label = escape(active_label)
         panel_title = (
-            f"Diff: {active_label} · Lines {start_line + 1}–{end_line} of {total_diff_lines}"
+            f"Diff: {safe_active_label} · Lines {start_line + 1}–{end_line} of {total_diff_lines}"
             if total_diff_lines > 0
-            else f"Diff: {active_label}"
+            else f"Diff: {safe_active_label}"
         )
         diff_items.append(
             Panel(
@@ -759,7 +761,7 @@ def render_projects_view(state: TUIState) -> Layout:
             cursor,
             slug_txt,
             name_txt,
-            str(p.visibility),
+            escape(str(p.visibility)),
             str(p.seed_counter),
             f"{_fmt_money(p.monthly_budget)}/mo",
         )
@@ -824,16 +826,16 @@ def render_projects_view(state: TUIState) -> Layout:
         pol_table.add_row(
             _stage_badge(pol.stage),
             "yes" if pol.enabled else "no",
-            agent_label,
+            escape(agent_label),
             gate_badge,
-            str(pol.min_approver_role),
+            escape(str(pol.min_approver_role)),
             str(pol.max_attempts),
         )
 
     layout["project_details"].update(
         Panel(
             Group(meta, Text(""), pol_table),
-            title=f"Project Inspector: {proj.slug}",
+            title=f"Project Inspector: {escape(proj.slug)}",
             border_style="bright_cyan",
             box=box.ROUNDED,
         )
@@ -878,9 +880,9 @@ def render_runs_view(state: TUIState) -> Layout:
         table.add_row(
             cursor,
             run_id_txt,
-            r.seed_id,
+            escape(r.seed_id),
             _stage_badge(r.stage),
-            handles.get(r.agent_id, r.agent_id),
+            escape(handles.get(r.agent_id, r.agent_id)),
             _status_badge(r.status),
             tokens,
             _fmt_money(r.cost),
@@ -933,11 +935,11 @@ def render_runs_view(state: TUIState) -> Layout:
     sbx_table.add_column("COMMAND", style="white")
     for sbx in state.sandboxes[:6]:
         sbx_table.add_row(
-            sbx.id,
+            escape(sbx.id),
             _status_badge(sbx.status),
-            sbx.ref,
-            sbx.image,
-            sbx.command[:36],
+            escape(sbx.ref),
+            escape(sbx.image),
+            escape(sbx.command[:36]),
         )
     right_items.append(sbx_table)
 
@@ -994,8 +996,8 @@ def render_backends_view(state: TUIState) -> Layout:
         b_table.add_row(
             cursor,
             name_txt,
-            str(b.type).upper(),
-            b.provider,
+            escape(str(b.type).upper()),
+            escape(b.provider),
             Text(h_str.upper(), style=h_style),
             "yes" if b.enabled else "no",
         )
@@ -1028,11 +1030,11 @@ def render_backends_view(state: TUIState) -> Layout:
     for a in state.agents:
         fp_str = f"{a.first_pass_rate:.0f}%" if a.first_pass_rate is not None else "-"
         a_table.add_row(
-            f"@{a.handle}",
-            a.name,
-            str(a.kind),
-            str(a.runtime),
-            a.model,
+            f"@{escape(a.handle)}",
+            escape(a.name),
+            escape(str(a.kind)),
+            escape(str(a.runtime)),
+            escape(a.model),
             fp_str,
             _fmt_money(a.avg_cost_per_seed),
             f"{a.succeeded_runs}/{a.run_count}",

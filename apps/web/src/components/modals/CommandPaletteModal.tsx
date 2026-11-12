@@ -26,7 +26,7 @@ import {
   Workflow,
   X,
 } from 'lucide-react'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import { MarkdownContent } from '../common/MarkdownContent'
 import { ProviderIcon } from '../common/ProviderIcon'
 import { StageBadge } from '../common/StageBadge'
@@ -144,6 +144,7 @@ export const CommandPaletteModal: React.FC = () => {
   const [expandedProposalKeys, setExpandedProposalKeys] = useState<Record<string, boolean>>({})
   const [creatingProposalKeys, setCreatingProposalKeys] = useState<Record<string, boolean>>({})
   const [createdProposalSeeds, setCreatedProposalSeeds] = useState<Record<string, Seed>>({})
+  const [proposalError, setProposalError] = useState<string | null>(null)
 
   const searchInputRef = useRef<HTMLInputElement>(null)
   const chatInputRef = useRef<HTMLInputElement>(null)
@@ -163,7 +164,10 @@ export const CommandPaletteModal: React.FC = () => {
   )
 
   useEffect(() => {
-    if (!sidebarSearchOpen) return
+    if (!sidebarSearchOpen) {
+      setProposalError(null)
+      return
+    }
     setActiveTab(searchModalInitialTab || 'search')
     const defaultProjId =
       searchModalProjectId ||
@@ -319,11 +323,13 @@ export const CommandPaletteModal: React.FC = () => {
     proposalKey: string
   ) => {
     if (!targetProject) {
+      setProposalError('Select an active project before creating a seed.')
       return
     }
     if (creatingProposalKeys[proposalKey] || createdProposalSeeds[proposalKey]) {
       return
     }
+    setProposalError(null)
     setCreatingProposalKeys((prev) => ({ ...prev, [proposalKey]: true }))
     try {
       const created = await api.seeds.create({
@@ -339,7 +345,13 @@ export const CommandPaletteModal: React.FC = () => {
       setCreatedProposalSeeds((prev) => ({ ...prev, [proposalKey]: created }))
       await refreshData()
     } catch (err) {
-      console.error('Failed to create seed from proposal:', err)
+      setProposalError(
+        err instanceof ApiError
+          ? err.detail
+          : err instanceof Error
+            ? err.message
+            : 'Failed to create seed from proposal.'
+      )
     } finally {
       setCreatingProposalKeys((prev) => ({ ...prev, [proposalKey]: false }))
     }
@@ -1063,6 +1075,26 @@ export const CommandPaletteModal: React.FC = () => {
                                   )}
                                 </div>
                               </div>
+
+                              {proposalError && (
+                                <div
+                                  role="alert"
+                                  className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-start justify-between gap-2 text-xs text-rose-700 dark:text-rose-300"
+                                >
+                                  <div className="flex items-start gap-2 min-w-0">
+                                    <AlertTriangle size={14} className="shrink-0 mt-0.5 text-rose-500" />
+                                    <span className="break-words">{proposalError}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setProposalError(null)}
+                                    aria-label="Dismiss error"
+                                    className="text-rose-500 hover:text-rose-700 dark:hover:text-rose-200 cursor-pointer shrink-0"
+                                  >
+                                    <X size={13} />
+                                  </button>
+                                </div>
+                              )}
 
                               <div className="space-y-2">
                                 {msg.proposedSeeds.map((proposal, idx) => {

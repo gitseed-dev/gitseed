@@ -357,7 +357,6 @@ def api_client_factory(
         app.dependency_overrides[get_session] = _override_db
         app.dependency_overrides[deps_mod.get_current_user] = lambda: active_user
         app.dependency_overrides[deps_mod.get_session_user] = lambda: active_user
-        app.dependency_overrides[deps_mod.require_org_admin] = lambda: active_user
         try:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:

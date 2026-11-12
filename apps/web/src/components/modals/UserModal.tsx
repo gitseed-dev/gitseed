@@ -8,6 +8,7 @@ import { Modal } from '../common/Modal'
 import { SegmentedControl } from '../common/SegmentedControl'
 import { useData } from '../../context/DataContext'
 import { useTranslation } from '../../context/I18nContext'
+import { safeExternalUrl } from '../../utils/gitUrls'
 import { deriveProjectStageApprovals } from '../../utils/users'
 import type { OrgRole, ProjectRole, UserInviteCreated } from '../../types'
 
@@ -187,15 +188,33 @@ const UserModalForm: React.FC<{
         </div>
 
         <div className="flex items-center justify-between gap-3 pt-4 border-t border-zinc-200 dark:border-zinc-700/80 mt-1">
-          <a
-            href={createdInvite.invite_url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-teal-600 dark:text-teal-400 hover:underline"
-          >
-            <span>Open Invite Page</span>
-            <ExternalLink size={13} />
-          </a>
+          {(() => {
+            const rawInviteUrl = createdInvite.invite_url?.trim() || ''
+            const resolvedCandidate =
+              rawInviteUrl.startsWith('/') && !rawInviteUrl.startsWith('//')
+                ? (() => {
+                    try {
+                      return new URL(rawInviteUrl, window.location.origin).toString()
+                    } catch {
+                      return null
+                    }
+                  })()
+                : rawInviteUrl
+            const safeInviteUrl = safeExternalUrl(resolvedCandidate)
+            return safeInviteUrl ? (
+              <a
+                href={safeInviteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-teal-600 dark:text-teal-400 hover:underline"
+              >
+                <span>Open Invite Page</span>
+                <ExternalLink size={13} />
+              </a>
+            ) : (
+              <span />
+            )
+          })()}
           <Button variant="primary" size="md" type="button" onClick={onClose} className="rounded-xl text-xs font-semibold">
             Done
           </Button>

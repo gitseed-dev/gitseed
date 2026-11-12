@@ -26,6 +26,7 @@ import {
   type GitBackendRepoEntry,
   type ModelBackendEntry,
 } from '../../utils/backends'
+import { safeExternalUrl } from '../../utils/gitUrls'
 import type { Backend, BackendType } from '../../types'
 
 export interface BackendDrawerProps {
@@ -366,7 +367,13 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
 
     const origCfg = currentBackend.config || {}
     if (type === 'inference') {
-      const origAuthMode = origCfg.auth_mode === 'cli_oauth' ? 'cli_oauth' : 'api_key'
+      const origAuthMode =
+        origCfg.auth_mode === 'cli_oauth' ||
+        origCfg.auth_mode === 'device_oauth' ||
+        currentBackend.secret_keys?.includes('cli_auth_bundle') ||
+        currentBackend.secret_keys?.includes('oauth_token')
+          ? 'cli_oauth'
+          : 'api_key'
       if (authMode !== origAuthMode) return true
       if (
         authMode === 'cli_oauth' &&
@@ -679,11 +686,17 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       applySyncedGitAppBackend(res.backend)
       await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
 
+      const safeActionUrl = safeExternalUrl(res.action_url)
+      if (!safeActionUrl) {
+        throw new Error('Invalid GitHub App registration URL returned by server.')
+      }
+
       const popupName = 'gitseed_github_app_manifest'
-      window.open('about:blank', popupName, 'width=920,height=780,noopener=no')
+      const popup = window.open('about:blank', popupName, 'width=920,height=780')
+      if (popup) popup.opener = null
       const form = document.createElement('form')
       form.method = 'POST'
-      form.action = res.action_url
+      form.action = safeActionUrl
       form.target = popupName
       form.style.display = 'none'
       const input = document.createElement('input')
@@ -752,16 +765,33 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       }
     }
     const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return
       if (e.data && typeof e.data === 'object' && e.data.type === 'gitseed:github-app-connected') {
         void syncNow()
       }
     }
     window.addEventListener('message', onMessage)
+    let channel: BroadcastChannel | null = null
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        channel = new BroadcastChannel('gitseed:github-app')
+        channel.onmessage = (e: MessageEvent) => {
+          if (e.data && typeof e.data === 'object' && e.data.type === 'gitseed:github-app-connected') {
+            void syncNow()
+          }
+        }
+      } catch {
+        channel = null
+      }
+    }
     const timer = window.setInterval(() => {
       void syncNow()
     }, 2500)
     return () => {
       window.removeEventListener('message', onMessage)
+      if (channel) {
+        channel.close()
+      }
       window.clearInterval(timer)
     }
   }, [currentBackend, gitAppManifestStatus, isOpen, provider, queryClient, type])

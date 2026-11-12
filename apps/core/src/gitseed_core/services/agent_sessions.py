@@ -32,6 +32,7 @@ from gitseed_core.models.agent_session import AgentSession, AgentSessionMessage
 from gitseed_core.models.backend import Backend
 from gitseed_core.models.project import Project, ProjectBackend, ProjectRepository
 from gitseed_core.models.seed import Seed
+from gitseed_core.models.settings import OrgSettings
 from gitseed_core.models.skill import Skill
 from gitseed_core.models.user import User
 from gitseed_core.security import decrypt_secrets, encrypt_secrets
@@ -51,7 +52,6 @@ from gitseed_core.services.coordinator import (
     _build_fallback_brainstorm_proposals,
     _build_workspace_snapshot,
     _extract_seed_proposals,
-    _litellm_headers,
     _resolve_coordinator_model,
     docker_host_fallback_url,
     extract_enabled_model_ids,
@@ -59,6 +59,7 @@ from gitseed_core.services.coordinator import (
 )
 from gitseed_core.services.errors import Forbidden, Invalid, NotFound
 from gitseed_core.services.gateway import (
+    compute_project_remaining_monthly_budget,
     create_session_virtual_key,
     is_personal_mode_backend,
     resolve_session_context_window,
@@ -272,6 +273,13 @@ async def _resolve_session_models_backend(
     return backend, resolved_model
 
 
+def _strip_dot_slash(p: str) -> str:
+    cleaned = p.replace("\\", "/")
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    return cleaned.lstrip("/")
+
+
 async def _gateway_ctx(
     ag_session: AgentSession,
     models_backend: Backend,
@@ -279,6 +287,10 @@ async def _gateway_ctx(
     *,
     actor_user_id: str | None = None,
     seed: Seed | None = None,
+    project: Project | None = None,
+    org: Any | None = None,
+    session: AsyncSession | None = None,
+    remaining_project_budget: Decimal | None = None,
 ) -> dict[str, Any]:
     """Gateway/auth context consumed by the runner's CLI adapters inside the container.
 
@@ -286,20 +298,42 @@ async def _gateway_ctx(
     key; the provider's real API key is never placed in the container.
     """
     validate_personal_mode_backend_access(
-        None,
+        session,
         models_backend,
         seed,
         actor_user_id=actor_user_id or ag_session.created_by,
     )
+    if (
+        remaining_project_budget is None
+        and session is not None
+        and project is not None
+        and getattr(project, "monthly_budget", None) is not None
+    ):
+        remaining_project_budget = await compute_project_remaining_monthly_budget(
+            session, project
+        )
+    if remaining_project_budget is not None and remaining_project_budget <= Decimal("0"):
+        raise Invalid("Project monthly budget exhausted")
+
     models_secrets = decrypt_secrets(models_backend.secrets_encrypted)
     auth_mode = str((models_backend.config or {}).get("auth_mode") or "api_key").strip().lower()
     oauth_token = models_secrets.get("oauth_token")
+    runtime_str = (
+        ag_session.runtime.value
+        if hasattr(ag_session.runtime, "value")
+        else str(ag_session.runtime or "")
+    )
     cli_auth_bundle: dict[str, str] = {}
     if models_secrets.get("cli_auth_bundle"):
         try:
             parsed_b = json.loads(models_secrets["cli_auth_bundle"])
             if isinstance(parsed_b, dict):
-                cli_auth_bundle = {str(k): str(v) for k, v in parsed_b.items() if k and v}
+                cli_auth_bundle = validate_and_filter_cli_auth_bundle(
+                    parsed_b,
+                    runtime=runtime_str,
+                    provider=models_backend.provider,
+                    strict=False,
+                )
         except Exception:
             pass
     if auth_mode != "cli_oauth" and not models_secrets.get("api_key") and (oauth_token or cli_auth_bundle):
@@ -313,6 +347,10 @@ async def _gateway_ctx(
         model=model,
         ttl_seconds=int(settings.SESSION_MAX_HOURS * 3600) + 600,
         seed=seed,
+        project=project,
+        org=org,
+        remaining_project_budget=remaining_project_budget,
+        session=session,
     )
     return {
         "provider": models_backend.provider,
@@ -673,8 +711,11 @@ async def _ensure_warm_session_container(
                         fileobj=io.BytesIO(workspace_tar), mode="r"
                     ) as inner_tar:
                         for member in inner_tar.getmembers():
+                            rel_member = _strip_dot_slash(member.name)
+                            if not rel_member or rel_member == ".":
+                                continue
                             member_copy = member
-                            member_copy.name = f"workspace/{member.name.lstrip('./')}"
+                            member_copy.name = f"workspace/{rel_member}"
                             extracted = (
                                 inner_tar.extractfile(member)
                                 if member.isfile()
@@ -1240,14 +1281,21 @@ async def _execute_session_turn_background(
             in_tok = 0
             out_tok = 0
 
+            linked_seed = (
+                await session.get(Seed, ag_session.seed_id)
+                if ag_session.seed_id
+                else None
+            )
+            org_settings = await session.get(OrgSettings, 1)
+            remaining_proj_budget = await compute_project_remaining_monthly_budget(
+                session, project
+            )
+            if remaining_proj_budget is not None and remaining_proj_budget <= Decimal("0"):
+                raise Invalid("Project monthly budget exhausted")
+
             if compute_backend is not None and container_id is not None and models_backend is not None:
                 already_ran_turns = _CONTAINER_TURN_COUNT.get(container_id, 0) > 0
                 mcp_servers = await _resolve_session_mcp_servers(session, project, agent.id)
-                linked_seed = (
-                    await session.get(Seed, ag_session.seed_id)
-                    if ag_session.seed_id
-                    else None
-                )
                 turn_ctx = {
                     "runtime": str(ag_session.runtime),
                     "agent_handle": agent.handle,
@@ -1269,6 +1317,10 @@ async def _execute_session_turn_background(
                         ag_session.model,
                         actor_user_id=actor.id,
                         seed=linked_seed,
+                        project=project,
+                        org=org_settings,
+                        session=session,
+                        remaining_project_budget=remaining_proj_budget,
                     ),
                     "mcp_servers": mcp_servers,
                 }
@@ -1324,16 +1376,37 @@ async def _execute_session_turn_background(
                         "\n\nPlease synthesize our discussion and include a `<seed_proposals>[...]</seed_proposals>` JSON block with concrete Seed drafts."
                     )
 
+                synth_model = (
+                    ag_session.model
+                    if ag_session.model != "default"
+                    else (extract_enabled_model_ids(models_backend) or ["claude-sonnet-4-5"])[0]
+                )
+                session_vk = await create_session_virtual_key(
+                    session_id=ag_session.id,
+                    project_id=ag_session.project_id,
+                    agent_id=ag_session.agent_id,
+                    backend=models_backend,
+                    model=synth_model,
+                    ttl_seconds=int(settings.SESSION_MAX_HOURS * 3600) + 600,
+                    seed=linked_seed,
+                    project=project,
+                    org=org_settings,
+                    remaining_project_budget=remaining_proj_budget,
+                    session=session,
+                )
                 gw_url = f"{settings.LITELLM_URL.rstrip('/')}/v1/chat/completions"
+                litellm_unreachable = False
+                budget_blocked = False
                 try:
                     async with httpx.AsyncClient(timeout=45.0) as client:
                         resp = await client.post(
                             gw_url,
-                            headers=_litellm_headers(),
+                            headers={
+                                "Authorization": f"Bearer {session_vk}",
+                                "Content-Type": "application/json",
+                            },
                             json={
-                                "model": ag_session.model
-                                if ag_session.model != "default"
-                                else (extract_enabled_model_ids(models_backend) or ["claude-sonnet-4-5"])[0],
+                                "model": synth_model,
                                 "messages": llm_messages,
                                 "temperature": 0.3,
                             },
@@ -1349,25 +1422,24 @@ async def _execute_session_turn_background(
                             usage = body.get("usage") or {}
                             in_tok += int(usage.get("prompt_tokens") or 0)
                             out_tok += int(usage.get("completion_tokens") or 0)
+                        elif resp.status_code in (400, 402, 429) and "budget" in resp.text.lower():
+                            budget_blocked = True
+                            raise Invalid("Session budget cap reached on LiteLLM gateway")
+                except Invalid:
+                    raise
                 except Exception as exc:
+                    litellm_unreachable = True
                     logger.debug("Gateway synthesis fallback skipped: %s", exc)
 
-                # Direct provider endpoint fallback if LiteLLM proxy didn't return a reply
-                if not reply_text:
-                    secrets = decrypt_secrets(models_backend.secrets_encrypted)
-                    api_key = str(secrets.get("api_key") or "").strip()
-                    endpoint = docker_host_fallback_url(
-                        models_backend.endpoint
-                        or (
-                            "https://api.openai.com/v1"
-                            if models_backend.provider.lower() == "openai"
-                            else ""
-                        )
-                    )
-                    if endpoint and (
-                        api_key
-                        or models_backend.provider.lower() in ("ollama", "lmstudio")
-                    ):
+                # Direct local-provider fallback ONLY for unpriced local runtimes when LiteLLM is unreachable
+                if (
+                    not reply_text
+                    and litellm_unreachable
+                    and not budget_blocked
+                    and models_backend.provider.lower() in ("ollama", "lmstudio")
+                ):
+                    endpoint = docker_host_fallback_url(models_backend.endpoint or "")
+                    if endpoint:
                         chat_url = (
                             endpoint.rstrip("/")
                             if endpoint.rstrip("/").endswith("/chat/completions")
@@ -1375,16 +1447,13 @@ async def _execute_session_turn_background(
                             if not endpoint.rstrip("/").endswith("/v1")
                             else f"{endpoint.rstrip('/')}/chat/completions"
                         )
-                        headers = {"Content-Type": "application/json"}
-                        if api_key:
-                            headers["Authorization"] = f"Bearer {api_key}"
                         try:
                             async with httpx.AsyncClient(timeout=45.0) as client:
                                 resp = await client.post(
                                     chat_url,
-                                    headers=headers,
+                                    headers={"Content-Type": "application/json"},
                                     json={
-                                        "model": ag_session.model,
+                                        "model": synth_model,
                                         "messages": llm_messages,
                                         "temperature": 0.3,
                                     },
@@ -1468,6 +1537,9 @@ async def _execute_session_turn_background(
             ag_session.total_output_tokens = (ag_session.total_output_tokens or 0) + out_tok
             ag_session.total_cost = (ag_session.total_cost or Decimal("0")) + turn_cost
             ag_session.updated_at = datetime.now(UTC)
+            if linked_seed is not None and turn_cost > Decimal("0"):
+                linked_seed.spent = (linked_seed.spent or Decimal("0")) + turn_cost
+                linked_seed.updated_at = datetime.now(UTC)
             await session.commit()
 
     except Exception as exc:
@@ -1704,6 +1776,10 @@ async def create_agent_session(
     project = await _require_project_access(
         session, actor, project_id_or_slug, require_write=True
     )
+    if getattr(project, "monthly_budget", None) is not None:
+        rem_proj = await compute_project_remaining_monthly_budget(session, project)
+        if rem_proj is not None and rem_proj <= Decimal("0"):
+            raise Invalid("Project monthly budget exhausted")
     agent = await _resolve_session_agent(session, agent_id)
     models_backend, resolved_model = await _resolve_session_models_backend(
         session,
@@ -1851,6 +1927,11 @@ async def send_agent_session_message(
 
     if ag_session.status == AgentSessionStatus.RUNNING_TURN:
         raise Invalid("Agent is currently processing the previous message")
+
+    if getattr(project, "monthly_budget", None) is not None:
+        rem_proj = await compute_project_remaining_monthly_budget(session, project)
+        if rem_proj is not None and rem_proj <= Decimal("0"):
+            raise Invalid("Project monthly budget exhausted")
 
     clean_content = content.strip()
     if not clean_content:
@@ -2169,6 +2250,7 @@ async def prepare_agent_pty(
     linked_seed = (
         await session.get(Seed, ag_session.seed_id) if ag_session.seed_id else None
     )
+    org_settings = await session.get(OrgSettings, 1)
     ctx = {
         "runtime": str(ag_session.runtime),
         "agent_handle": agent.handle,
@@ -2179,6 +2261,9 @@ async def prepare_agent_pty(
             model,
             actor_user_id=actor.id,
             seed=linked_seed,
+            project=project,
+            org=org_settings,
+            session=session,
         ),
         "mcp_servers": mcp_servers,
     }

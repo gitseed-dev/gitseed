@@ -275,7 +275,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
       ) {
         merged.push({
           ...r,
-          output: { ...(r.output || {}), log_tail: globalTail },
+          output: { ...r.output, log_tail: globalTail },
         })
       } else {
         merged.push(r)

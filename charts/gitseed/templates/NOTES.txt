@@ -21,3 +21,7 @@ Access the GitSeed Web UI and isolated VS Code Sandbox Origin:
 
 Retrieve the bootstrap Admin credentials from the API pod logs:
   kubectl --namespace {{ .Release.Namespace }} logs deploy/{{ include "gitseed.fullname" . }}-api | grep -i -E "bootstrap|admin|password"
+
+Notes on Runner Runtimes & Interactive Workspaces:
+  - Published OSS runner images pre-install open-source CLIs (`opencode`, `codex`, `gemini`). To include proprietary CLIs (`claude-code`, `antigravity`, `grok-build`), build your own runner image from `apps/runner/Dockerfile` with `--build-arg INCLUDE_PROPRIETARY_CLIS=true` and set `runnerImage.repository` / `runnerImage.tag`.
+  - Embedded VS Code (`openvscode-server` bundle mount) is supported on Docker compute backends; Kubernetes sandboxes support interactive Web Terminal (PTY), file browser/diff editor, and Push-to-Seed workflows.

@@ -20,6 +20,7 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +35,7 @@ from gitseed_runner.adapters import (
     detect_fatal_agent_error,
     extract_json_object,
     synthesize_output_via_gateway,
+    terminate_process_tree,
 )
 from gitseed_runner.broker_modes import (
     get_ctl_dir,
@@ -59,7 +61,7 @@ from gitseed_runner.git_ops import (
     push_execute_changes_after_agent_exit,
     tasks_have_disjoint_targets,
 )
-from gitseed_runner.gitsafe import _exclude_internal_paths
+from gitseed_runner.gitsafe import _exclude_internal_paths, run_safe_git
 from gitseed_runner.prompts import (
     build_ideate_to_plan_continuation_prompt,
     build_next_task_continuation_prompt,
@@ -170,8 +172,11 @@ def _format_cli_stream_line(raw_line: str, adapter: RuntimeAdapter) -> str:
     if not isinstance(ev, dict):
         return raw_line
 
-    # Extract token usage if reported in stream event (top-level or nested under message/turn)
     msg_dict = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+    ev_type = str(ev.get("type") or ev.get("event") or "").lower()
+    role = str(ev.get("role") or (msg_dict.get("role") if isinstance(msg_dict, dict) else "") or "").lower()
+
+    # Extract token usage if reported in stream event (top-level or nested under message/turn)
     usage = (
         ev.get("usage")
         or ev.get("stats")
@@ -184,31 +189,47 @@ def _format_cli_stream_line(raw_line: str, adapter: RuntimeAdapter) -> str:
             or usage.get("inputTokens")
             or 0
         )
-        cache_tok = int(
-            usage.get("cache_read_input_tokens")
-            or usage.get("cache_creation_input_tokens")
-            or usage.get("cached_tokens")
-            or 0
-        )
         out_tok = int(
             usage.get("output_tokens")
             or usage.get("completion_tokens")
             or usage.get("outputTokens")
             or 0
         )
-        total_in = in_tok + cache_tok
-        if total_in > 0:
-            adapter.input_tokens = max(adapter.input_tokens, total_in)
-        if out_tok > 0:
-            adapter.output_tokens = max(adapter.output_tokens, out_tok)
-        turn_ctx = total_in + out_tok
-        if turn_ctx > 0:
-            adapter.context_tokens = turn_ctx
-            adapter.peak_context_tokens = max(adapter.peak_context_tokens, turn_ctx)
-            adapter.turn_count += 1
+        anth_cache_read = int(usage.get("cache_read_input_tokens") or 0)
+        anth_cache_write = int(usage.get("cache_creation_input_tokens") or 0)
+        openai_cached = int(
+            usage.get("cached_input_tokens")
+            or usage.get("cached_tokens")
+            or 0
+        )
+        if anth_cache_read or anth_cache_write:
+            cached_tok = max(0, anth_cache_read)
+            billed_in = max(0, in_tok + anth_cache_write + (cached_tok // 10))
+            ctx_in = max(0, in_tok + anth_cache_write + cached_tok)
+        elif openai_cached > 0:
+            cached_tok = (
+                min(max(0, openai_cached), max(0, in_tok))
+                if in_tok > 0
+                else max(0, openai_cached)
+            )
+            uncached_in = max(0, in_tok - cached_tok)
+            billed_in = uncached_in + (cached_tok // 10)
+            ctx_in = max(in_tok, uncached_in + cached_tok)
+        else:
+            cached_tok = 0
+            billed_in = max(0, in_tok)
+            ctx_in = billed_in
 
-    ev_type = str(ev.get("type") or ev.get("event") or "").lower()
-    role = str(ev.get("role") or (msg_dict.get("role") if isinstance(msg_dict, dict) else "") or "").lower()
+        turn_ctx = ctx_in + max(0, out_tok)
+        is_delta_event = ev_type in ("turn.completed", "step_finish", "step-finish")
+        if billed_in > 0 or out_tok > 0 or turn_ctx > 0:
+            adapter.record_stream_usage(
+                billed_in,
+                max(0, out_tok),
+                cached_input_tokens=cached_tok,
+                context_tokens=turn_ctx,
+                cumulative=not is_delta_event,
+            )
 
     if ev_type in (
         "ping",
@@ -360,18 +381,95 @@ def _get_worktree_homes_root() -> Path:
     return Path(tempfile.gettempdir()) / "gitseed-worktree-homes"
 
 
+def _classify_stream_turn_boundary(raw_line: str) -> str | None:
+    """Classify an NDJSON stream event as a turn `'start'` or `'finish'` boundary across CLIs."""
+    stripped = raw_line.strip()
+    if not stripped.startswith("{") or not stripped.endswith("}"):
+        return None
+    try:
+        ev = json.loads(stripped)
+    except Exception:
+        return None
+    if not isinstance(ev, dict):
+        return None
+
+    ev_type = str(ev.get("type") or ev.get("event") or "").strip().lower()
+    part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
+    part_type = str(part.get("type") or "").strip().lower()
+    msg_dict = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+    role = str(
+        ev.get("role")
+        or (msg_dict.get("role") if isinstance(msg_dict, dict) else "")
+        or ""
+    ).strip().lower()
+
+    if ev_type in ("step_finish", "step-finish", "turn.completed") or part_type in (
+        "step_finish",
+        "step-finish",
+    ):
+        return "finish"
+    if ev_type in ("step_start", "step-start", "turn.started") or part_type in (
+        "step_start",
+        "step-start",
+    ):
+        return "start"
+    if ev_type in ("tool_result", "function_response"):
+        return "finish"
+    if role == "user":
+        content = ev.get("content") or (msg_dict.get("content") if isinstance(msg_dict, dict) else None)
+        if isinstance(content, list) and any(
+            isinstance(b, dict) and str(b.get("type") or "").lower() == "tool_result"
+            for b in content
+        ):
+            return "finish"
+    if ev_type == "assistant" or (
+        ev_type == "message" and role == "assistant" and not ev.get("delta")
+    ):
+        return "start"
+    return None
+
+
 async def _stream_pipe(
     stream: asyncio.StreamReader,
     chunks: list[str],
     adapter: RuntimeAdapter | None = None,
     *,
     echo_stdout: bool = True,
+    max_turns: int | None = None,
+    on_turn_limit_exceeded: Callable[[], None] | None = None,
 ) -> None:
     """Read lines from `stream`, safely draining oversized lines so OS pipes never deadlock."""
     leftover = b""
     hit_eof = False
+    effective_max_turns = (
+        max_turns
+        if max_turns is not None
+        else (adapter.max_turns if adapter is not None else None)
+    )
+    started_turns = 0
+    completed_turns = 0
+    limit_triggered = False
 
     def _emit_decoded(decoded: str) -> None:
+        nonlocal started_turns, completed_turns, limit_triggered
+        if (
+            not limit_triggered
+            and effective_max_turns is not None
+            and effective_max_turns > 0
+            and on_turn_limit_exceeded is not None
+        ):
+            boundary = _classify_stream_turn_boundary(decoded)
+            if boundary == "start":
+                started_turns += 1
+                if completed_turns >= effective_max_turns or started_turns > effective_max_turns:
+                    limit_triggered = True
+                    on_turn_limit_exceeded()
+            elif boundary == "finish":
+                completed_turns += 1
+                if completed_turns > effective_max_turns:
+                    limit_triggered = True
+                    on_turn_limit_exceeded()
+
         formatted = (
             _format_cli_stream_line(decoded, adapter) if adapter is not None else decoded
         )
@@ -624,18 +722,12 @@ async def _report_complete(
         resp.raise_for_status()
 
 
-async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is not None:
-        return
-    with suppress(ProcessLookupError):
-        proc.terminate()
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=5.0)
-    except TimeoutError:
-        with suppress(ProcessLookupError):
-            proc.kill()
-        with suppress(Exception):
-            await proc.wait()
+async def _terminate_process_tree(proc: Any) -> None:
+    """Terminate an async subprocess and its entire POSIX process group."""
+    await terminate_process_tree(proc)
+
+
+_terminate_process = _terminate_process_tree
 
 
 def _is_gateway_fallback_allowed(
@@ -738,6 +830,10 @@ async def _run_cli_with_steering(
             adapter.binary_name,
             continue_session,
         )
+        adapter.begin_invocation()
+        spawn_kwargs: dict[str, Any] = (
+            {"start_new_session": True} if os.name != "nt" else {}
+        )
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(adapter.working_dir),
@@ -745,12 +841,34 @@ async def _run_cli_with_steering(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             limit=_SUBPROCESS_STREAM_LIMIT,
+            **spawn_kwargs,
         )
 
         stdout_chunks: list[str] = []
+        turn_limit_hit = False
+        turn_kill_task: asyncio.Task[None] | None = None
+
+        def _on_turn_limit(_proc: Any = proc) -> None:
+            nonlocal turn_limit_hit, turn_kill_task
+            if turn_limit_hit:
+                return
+            turn_limit_hit = True
+            logger.warning(
+                "Agent subprocess (%s) reached max_turns=%s; terminating process group.",
+                adapter.binary_name,
+                adapter.max_turns,
+            )
+            turn_kill_task = asyncio.create_task(_terminate_process_tree(_proc))
+
         assert proc.stdout is not None
         reader_task = asyncio.create_task(
-            _stream_pipe(proc.stdout, stdout_chunks, adapter)
+            _stream_pipe(
+                proc.stdout,
+                stdout_chunks,
+                adapter,
+                max_turns=adapter.max_turns,
+                on_turn_limit_exceeded=_on_turn_limit,
+            )
         )
         steered_comments: list[dict[str, Any]] = []
         abort_reason: str | None = None
@@ -762,6 +880,10 @@ async def _run_cli_with_steering(
                     break
                 except TimeoutError:
                     pass
+
+                if turn_limit_hit:
+                    await _terminate_process_tree(proc)
+                    break
 
                 # Poll Control Plane for abort or @agent steering comments + stream live stdout tail
                 try:
@@ -786,7 +908,7 @@ async def _run_cli_with_steering(
                         poll_data.get("abort_reason") or "Run aborted by control plane"
                     )
                     logger.warning("Aborting agent subprocess: %s", abort_reason)
-                    await _terminate_process(proc)
+                    await _terminate_process_tree(proc)
                     break
 
                 new_comments = poll_data.get("steering_comments") or []
@@ -823,12 +945,18 @@ async def _run_cli_with_steering(
                             len(steered_comments),
                         )
                         await _wait_for_workspace_quiescence(proc, adapter.working_dir)
-                        await _terminate_process(proc)
+                        await _terminate_process_tree(proc)
                         cleanup_git_locks({"workspace": adapter.working_dir})
                     break
         finally:
+            if getattr(proc, "returncode", None) is None:
+                await _terminate_process_tree(proc)
+            if turn_kill_task is not None:
+                with suppress(Exception):
+                    await turn_kill_task
             with suppress(Exception):
                 await reader_task
+            adapter.finish_invocation()
 
         collected_logs.extend(stdout_chunks)
 
@@ -843,28 +971,97 @@ async def _run_cli_with_steering(
             continue_session = True
             continue
 
+        if turn_limit_hit:
+            cleanup_git_locks({"workspace": adapter.working_dir})
+            return 0, "".join(collected_logs), None
+
         return int(proc.returncode or 0), "".join(collected_logs), None
+
+
+def _load_workspace_run_config(
+    primary_dir: Path,
+    *,
+    stage: str = "",
+    base_ref: str | None = None,
+) -> dict[str, Any]:
+    """Load `.gitseed/run.json` safely, refusing untrusted branch changes during review/merge."""
+    run_json_path = primary_dir / ".gitseed" / "run.json"
+    st = (stage or "").strip().lower()
+    has_git = (primary_dir / ".git").exists()
+
+    if has_git and (st in ("review", "merge") or base_ref):
+        candidate_refs: list[str] = []
+        if base_ref and str(base_ref).strip():
+            candidate_refs.append(str(base_ref).strip())
+        for fallback_ref in ("origin/main", "origin/master", "refs/remotes/origin/HEAD"):
+            if fallback_ref not in candidate_refs:
+                candidate_refs.append(fallback_ref)
+
+        for ref in candidate_refs:
+            rc_ver, _, _ = run_safe_git(
+                ["rev-parse", "--verify", f"{ref}^{{commit}}"], primary_dir
+            )
+            if rc_ver != 0:
+                continue
+            rc_show, show_out, _ = run_safe_git(
+                ["show", f"{ref}:.gitseed/run.json"], primary_dir
+            )
+            if rc_show == 0 and show_out.strip():
+                try:
+                    loaded_base = json.loads(show_out)
+                    if isinstance(loaded_base, dict):
+                        if run_json_path.is_file():
+                            with suppress(OSError):
+                                wt_text = run_json_path.read_text(encoding="utf-8")
+                                if wt_text.strip() != show_out.strip():
+                                    logger.warning(
+                                        "Ignoring untrusted modification to .gitseed/run.json on seed branch; using %s:.gitseed/run.json",
+                                        ref,
+                                    )
+                        return loaded_base
+                except Exception:
+                    return {}
+            if run_json_path.is_file():
+                logger.warning(
+                    "Refusing to execute untrusted .gitseed/run.json added on unmerged branch (not present in %s)",
+                    ref,
+                )
+            return {}
+
+        if st in ("review", "merge"):
+            logger.warning(
+                "Skipping working-tree .gitseed/run.json during %s because no trusted base ref could be verified",
+                st,
+            )
+            return {}
+
+    if run_json_path.is_file() and not run_json_path.is_symlink():
+        try:
+            loaded = json.loads(run_json_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                return loaded
+        except Exception:
+            pass
+    return {}
 
 
 def _resolve_verification_commands(
     primary_dir: Path,
     sandbox_cfg: dict[str, Any],
+    *,
+    stage: str = "",
+    base_ref: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Resolve optional setup_command and test_command from project sandbox_config or .gitseed/run.json."""
     setup_cmd = str(sandbox_cfg.get("setup_command") or "").strip() or None
     test_cmd = str(sandbox_cfg.get("test_command") or "").strip() or None
     if not test_cmd:
-        run_json_path = primary_dir / ".gitseed" / "run.json"
-        if run_json_path.is_file():
-            try:
-                loaded = json.loads(run_json_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    if not setup_cmd and loaded.get("setup_command"):
-                        setup_cmd = str(loaded["setup_command"]).strip() or None
-                    if loaded.get("test_command"):
-                        test_cmd = str(loaded["test_command"]).strip() or None
-            except Exception:
-                pass
+        loaded = _load_workspace_run_config(primary_dir, stage=stage, base_ref=base_ref)
+        if loaded:
+            if not setup_cmd and loaded.get("setup_command"):
+                setup_cmd = str(loaded["setup_command"]).strip() or None
+            if loaded.get("test_command"):
+                test_cmd = str(loaded["test_command"]).strip() or None
     return setup_cmd, test_cmd
 
 
@@ -940,24 +1137,31 @@ async def _run_deterministic_verification_gate(
         )
 
     async def _exec_shell(cmd_str: str) -> tuple[bool, int, str]:
+        shell_kwargs: dict[str, Any] = (
+            {"start_new_session": True} if os.name != "nt" else {}
+        )
         proc = await asyncio.create_subprocess_shell(
             cmd_str,
             cwd=str(primary_dir),
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            **shell_kwargs,
         )
         try:
             stdout_bytes, _ = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout_seconds
             )
         except TimeoutError:
-            await _terminate_process(proc)
+            await _terminate_process_tree(proc)
             return (
                 False,
                 124,
                 f"Deterministic verification gate timed out after {int(timeout_seconds)}s: {test_command}",
             )
+        except BaseException:
+            await _terminate_process_tree(proc)
+            raise
         out_text = (stdout_bytes or b"").decode("utf-8", errors="replace")
         code = int(proc.returncode or 0)
         return (code == 0), code, out_text
@@ -1471,6 +1675,11 @@ async def _run_prepared_stage_session(
             validated_output, val_err = _load_and_validate_output_file(
                 stage, output_file, **policy_bounds_kwargs, enforce_bounds=False
             )
+            if validated_output is not None and validated_output.get("policy_limit_warning"):
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                output_file.write_text(
+                    json.dumps(validated_output, indent=2), encoding="utf-8"
+                )
 
     # In execute stage, ensure the agent actually created or modified files in /workspace
     if (
@@ -1727,7 +1936,12 @@ async def _run_prepared_stage_session(
                                 dst_dot = wt_home / dot_name
                                 if src_dot.is_dir() and not dst_dot.exists():
                                     with suppress(OSError):
-                                        shutil.copytree(src_dot, dst_dot, dirs_exist_ok=True)
+                                        shutil.copytree(
+                                            src_dot,
+                                            dst_dot,
+                                            symlinks=True,
+                                            dirs_exist_ok=True,
+                                        )
                             wt_adapter = create_runtime_adapter(
                                 ctx=ctx,
                                 working_dir=wt_dir,
@@ -1815,8 +2029,11 @@ async def _run_prepared_stage_session(
                         ) in zip(wt_specs, wt_results, strict=False):
                             tid = str(t_item["id"])
                             logs += f"\n[Parallel Worktree `{wt_branch}`]\n" + c_logs
+                            adapter.finish_invocation()
                             adapter.input_tokens += wt_adapter.input_tokens
                             adapter.output_tokens += wt_adapter.output_tokens
+                            adapter.cached_input_tokens += wt_adapter.cached_input_tokens
+                            adapter.finish_invocation()
                             adapter.cost = round(adapter.cost + wt_adapter.cost, 10)
                             if c_abort is not None or c_code != 0:
                                 any_failed = True
@@ -1895,7 +2112,23 @@ async def _run_prepared_stage_session(
         else []
     )
     require_tests_pass = bool(sandbox_cfg.get("require_tests_pass", False))
-    setup_cmd, test_cmd = _resolve_verification_commands(primary_dir, sandbox_cfg)
+    primary_default_branch = "main"
+    for r_item in repo_list:
+        if isinstance(r_item, dict):
+            if r_item.get("is_primary") and r_item.get("default_branch"):
+                primary_default_branch = str(r_item["default_branch"]).strip() or "main"
+                break
+            if r_item.get("default_branch"):
+                primary_default_branch = str(r_item["default_branch"]).strip() or "main"
+    trusted_base_ref = (
+        f"origin/{primary_default_branch}" if stage in ("review", "merge") else None
+    )
+    setup_cmd, test_cmd = _resolve_verification_commands(
+        primary_dir,
+        sandbox_cfg,
+        stage=stage,
+        base_ref=trusted_base_ref,
+    )
     verification_info: dict[str, Any] = {"source": "agent_reported"}
 
     # Deterministic supervisor test verification gate for Execute & Review stages
