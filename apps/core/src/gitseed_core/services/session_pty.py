@@ -95,17 +95,21 @@ async def _open_raw_connection(backend: Backend) -> tuple[asyncio.StreamReader, 
             target.removeprefix("unix://")
         )
         return reader, writer, "docker"
+    secrets_map = decrypt_secrets(backend.secrets_encrypted)
     if target.startswith("tcp://"):
-        use_tls = bool(decrypt_secrets(backend.secrets_encrypted).get("tls_cert"))
+        use_tls = bool(secrets_map.get("tls_cert") or secrets_map.get("tls_ca"))
         target = ("https://" if use_tls else "http://") + target.removeprefix("tcp://")
     elif not target.startswith(("http://", "https://")):
         target = f"http://{target}"
     parts = urlsplit(target)
     is_tls = parts.scheme == "https"
     port = parts.port or (443 if is_tls else 2375)
-    reader, writer = await asyncio.open_connection(
-        parts.hostname, port, ssl=ssl.create_default_context() if is_tls else None
-    )
+    ssl_ctx: ssl.SSLContext | None = None
+    if is_tls:
+        from gitseed_core.services.compute_runtime import build_docker_ssl_context
+
+        ssl_ctx = build_docker_ssl_context(secrets_map) or ssl.create_default_context()
+    reader, writer = await asyncio.open_connection(parts.hostname, port, ssl=ssl_ctx)
     return reader, writer, parts.netloc
 
 

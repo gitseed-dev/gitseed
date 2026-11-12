@@ -825,10 +825,10 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
                 },
                 "approved_through": {
                     "type": "number",
-                    "description": "Optional cumulative USD threshold approved through.",
+                    "description": "Cumulative USD threshold approved through.",
                 },
             },
-            "required": ["seed_id"],
+            "required": ["seed_id", "approved_through"],
             "additionalProperties": False,
         },
     },

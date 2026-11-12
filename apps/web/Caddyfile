@@ -34,7 +34,8 @@
 	@vscode path /api/v1/vscode/*
 	handle @vscode {
 		reverse_proxy {$API_UPSTREAM:api:8420} {
-			header_up -Cookie
+			header_up Cookie "(^|;\s*)(gitseed_session|gitseed_csrf)=[^;]*" ""
+			header_up Cookie "^;\s*" ""
 		}
 	}
 

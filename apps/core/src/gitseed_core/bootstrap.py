@@ -97,35 +97,59 @@ def _resolve_alembic_head_revisions() -> tuple[str, ...]:
     return tuple(h for h in script_dir.get_heads() if h)
 
 
+_BOOTSTRAP_ADVISORY_LOCK_ID = 748291045
+
+
 async def bootstrap_database() -> None:
     """Idempotently seed OrgSettings, policies, initial Admin, Docker compute, and Agents."""
     if settings.GITSEED_AUTO_MIGRATE:
         head_revisions = _resolve_alembic_head_revisions()
         async with engine.begin() as conn:
+            if conn.dialect.name == "postgresql":
+                await conn.execute(
+                    text("SELECT pg_advisory_xact_lock(:lock_id)").bindparams(
+                        lock_id=_BOOTSTRAP_ADVISORY_LOCK_ID
+                    )
+                )
+
             def _create_if_unmigrated(sync_conn: object) -> None:
                 if not inspect(sync_conn).has_table("alembic_version"):  # type: ignore[arg-type]
                     SQLModel.metadata.create_all(sync_conn)  # type: ignore[arg-type]
                     try:
-                        sync_conn.execute(  # type: ignore[attr-defined]
-                            text(
-                                "CREATE TABLE IF NOT EXISTS alembic_version ("
-                                "version_num VARCHAR(64) NOT NULL, "
-                                "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
-                            )
-                        )
-                        for head_rev in head_revisions:
+                        with sync_conn.begin_nested():  # type: ignore[attr-defined]
                             sync_conn.execute(  # type: ignore[attr-defined]
                                 text(
-                                    "INSERT INTO alembic_version (version_num) "
-                                    "VALUES (:version_num)"
-                                ).bindparams(version_num=head_rev)
+                                    "CREATE TABLE IF NOT EXISTS alembic_version ("
+                                    "version_num VARCHAR(64) NOT NULL, "
+                                    "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+                                )
                             )
+                            for head_rev in head_revisions:
+                                sync_conn.execute(  # type: ignore[attr-defined]
+                                    text(
+                                        "INSERT INTO alembic_version (version_num) "
+                                        "VALUES (:version_num)"
+                                    ).bindparams(version_num=head_rev)
+                                )
                     except Exception:
                         pass
 
             await conn.run_sync(_create_if_unmigrated)
 
     async with AsyncSessionLocal() as session:
+        bind = getattr(session, "bind", None)
+        dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+        if dialect_name == "postgresql" or (
+            dialect_name is None and engine.dialect.name == "postgresql"
+        ):
+            try:
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:lock_id)").bindparams(
+                        lock_id=_BOOTSTRAP_ADVISORY_LOCK_ID
+                    )
+                )
+            except Exception:
+                pass
         # 1. Ensure singleton OrgSettings(id=1) exists
         org_settings = await session.get(OrgSettings, 1)
         if org_settings is None:

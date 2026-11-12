@@ -56,6 +56,7 @@ export interface SeedGovernanceBannerProps {
   pullRequestStatus?: PullRequestStatus | null
   canApprove: boolean
   canContribute: boolean
+  canRequestChanges?: boolean
   onRefresh: () => Promise<void>
   onOpenPullRequest?: () => void
 }
@@ -99,9 +100,13 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
   pullRequestStatus = null,
   canApprove,
   canContribute,
+  canRequestChanges,
   onRefresh,
   onOpenPullRequest,
 }) => {
+  const effectiveCanDecide =
+    canRequestChanges ??
+    (canApprove || (canContribute && currentPolicy?.min_approver_role !== 'maintainer'))
   const queryClient = useQueryClient()
   const { user } = useAuth()
   const { allSeeds, agents } = useData()
@@ -1108,7 +1113,7 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
               </div>
             )}
 
-            {isAwaitingApproval && (canApprove || canContribute) && (
+            {isAwaitingApproval && effectiveCanDecide && (
               <>
                 <Button
                   type="button"

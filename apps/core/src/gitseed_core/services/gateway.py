@@ -365,20 +365,70 @@ async def sync_backend_to_litellm(
     *,
     extra_models: list[str] | None = None,
 ) -> int:
-    """Replace a backend's models in LiteLLM via `/model/delete` and `/model/new`."""
+    """Upsert a backend's models in LiteLLM via `/model/update` / `/model/new` and prune stale entries."""
     if backend.type != BackendType.INFERENCE:
         return 0
 
-    await remove_backend_from_litellm(backend.id)
     payloads = build_litellm_model_payloads(backend, extra_models=extra_models)
     if not payloads:
+        await remove_backend_from_litellm(backend.id)
         return 0
 
     base_url = settings.LITELLM_URL.rstrip("/")
     pushed = 0
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            existing_ids: set[str] = set()
+            info_resp = await client.get(
+                f"{base_url}/model/info", headers=_litellm_headers()
+            )
+            if info_resp.status_code == 200 and isinstance(info_resp.json(), dict):
+                data = info_resp.json().get("data") or []
+                for entry in data:
+                    if not isinstance(entry, dict):
+                        continue
+                    model_info = entry.get("model_info") or {}
+                    if not isinstance(model_info, dict):
+                        continue
+                    mid = str(model_info.get("id") or "")
+                    meta = model_info.get("metadata") or {}
+                    meta_bid = (
+                        str(meta.get("backend_id") or "")
+                        if isinstance(meta, dict)
+                        else ""
+                    )
+                    if mid and (
+                        mid.startswith(f"{backend.id}:") or meta_bid == backend.id
+                    ):
+                        existing_ids.add(mid)
+
+            desired_ids: set[str] = set()
             for item in payloads:
+                m_info = item.get("model_info")
+                item_id = (
+                    str(m_info.get("id") or "")
+                    if isinstance(m_info, dict)
+                    else ""
+                )
+                if item_id:
+                    desired_ids.add(item_id)
+
+                if item_id and item_id in existing_ids:
+                    upd_resp = await client.post(
+                        f"{base_url}/model/update",
+                        headers=_litellm_headers(),
+                        json={"model_id": item_id, **item},
+                    )
+                    if 200 <= upd_resp.status_code < 300:
+                        pushed += 1
+                        continue
+                    # Fall back to replace if /model/update is unsupported by this LiteLLM version
+                    await client.post(
+                        f"{base_url}/model/delete",
+                        headers=_litellm_headers(),
+                        json={"id": item_id},
+                    )
+
                 resp = await client.post(
                     f"{base_url}/model/new",
                     headers=_litellm_headers(),
@@ -393,6 +443,14 @@ async def sync_backend_to_litellm(
                         resp.status_code,
                         resp.text[:200],
                     )
+
+            stale_ids = existing_ids - desired_ids
+            for stale_id in stale_ids:
+                await client.post(
+                    f"{base_url}/model/delete",
+                    headers=_litellm_headers(),
+                    json={"id": stale_id},
+                )
     except Exception as exc:
         logger.debug("LiteLLM sync_backend_to_litellm(%s) deferred: %s", backend.id, exc)
     return pushed
@@ -726,15 +784,16 @@ async def resolve_models_backend_for_run(
     project: Project,
     *,
     seed: Seed | None = None,
+    allow_disabled: bool = False,
 ) -> tuple[Backend, str]:
     """Select the Inference backend and model alias for a Run."""
+    conditions: list[Any] = [Backend.type == BackendType.INFERENCE]
+    if not allow_disabled:
+        conditions.append(col(Backend.enabled).is_(True))
     stmt = (
         select(Backend)
-        .where(
-            Backend.type == BackendType.INFERENCE,
-            col(Backend.enabled).is_(True),
-        )
-        .order_by(col(Backend.created_at).asc())
+        .where(*conditions)
+        .order_by(col(Backend.enabled).desc(), col(Backend.created_at).asc())
     )
     backends = list((await session.execute(stmt)).scalars().all())
     if not backends:
@@ -1296,6 +1355,20 @@ async def revoke_session_virtual_key(session_id: str) -> None:
         logger.debug("LiteLLM session key revoke skipped for %s: %s", session_id, exc)
 
 
+async def revoke_run_virtual_key(run_id: str) -> None:
+    """Best-effort delete of a run's LiteLLM virtual key after run state is finalized."""
+    virtual_key = derive_litellm_virtual_key(run_id)
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post(
+                f"{settings.LITELLM_URL.rstrip('/')}/key/delete",
+                headers=_litellm_headers(),
+                json={"keys": [virtual_key], "key_aliases": [f"run:{run_id}"]},
+            )
+    except Exception as exc:
+        logger.debug("LiteLLM run key revoke skipped for %s: %s", run_id, exc)
+
+
 def _extract_tokens_and_spend_from_logs(
     logs_payload: Any,
     *,
@@ -1641,7 +1714,15 @@ async def finalize_run_litellm_key(
         run.updated_at = datetime.now(UTC)
 
     if latest_ctx_tokens > 0:
-        models_backend, _ = await resolve_models_backend_for_run(session, run, project)
+        models_backend: Backend | None = None
+        try:
+            models_backend, _ = await resolve_models_backend_for_run(
+                session, run, project, allow_disabled=True
+            )
+        except TypeError:
+            models_backend, _ = await resolve_models_backend_for_run(session, run, project)
+        except Exception:
+            models_backend = None
         run.output = merge_run_context_window(
             run.output,
             used_tokens=latest_ctx_tokens,

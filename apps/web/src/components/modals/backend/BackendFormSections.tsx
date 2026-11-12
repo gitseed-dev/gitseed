@@ -837,8 +837,8 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                   <button
                     type="button"
                     onClick={onStartCliAuth}
-                    disabled={isStartingCliAuth}
-                    className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                    disabled={isStartingCliAuth || (type !== 'git' && !personalModeAcknowledged)}
+                    className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isStartingCliAuth ? (
                       <>
@@ -874,6 +874,12 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                       </button>
                     )}
                 </div>
+
+                {type !== 'git' && !personalModeAcknowledged && (
+                  <p className="text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                    Check the Personal Mode acknowledgment above to launch sign-in
+                  </p>
+                )}
 
                 {cliAuthSession && cliAuthSession.status !== 'idle' && (
                   <div className="flex flex-col gap-2.5 pt-2 border-t border-zinc-200 dark:border-zinc-700/80">
@@ -1041,12 +1047,18 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
             </div>
           </label>
 
-          {autoCreateAgents && setSetSdlcDefault && (
+          {(autoCreateAgents || isEditing || setSdlcDefault) && setSetSdlcDefault && (
             <label className="flex items-start gap-2.5 pt-2.5 border-t border-zinc-200/70 dark:border-zinc-700/60 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={setSdlcDefault}
-                onChange={(e) => setSetSdlcDefault(e.target.checked)}
+                onChange={(e) => {
+                  const next = e.target.checked
+                  setSetSdlcDefault(next)
+                  if (next && !autoCreateAgents && setAutoCreateAgents) {
+                    setAutoCreateAgents(true)
+                  }
+                }}
                 className="mt-0.5 w-4 h-4 rounded border-zinc-300 dark:border-zinc-600 text-teal-600 focus:ring-teal-500/50 cursor-pointer accent-teal-600"
               />
               <div className="flex-1 min-w-0">

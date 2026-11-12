@@ -1740,7 +1740,21 @@ def _is_trusted_bitbucket_author(
         if assoc in TRUSTED_AUTHOR_ASSOCIATIONS or assoc in TRUSTED_GITLAB_PAYLOAD_ROLES:
             return True, assoc
         return False, assoc or "UNTRUSTED"
-    return True, "MEMBER"
+
+    repo_obj = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
+    actor_obj = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    owner_obj = repo_obj.get("owner") if isinstance(repo_obj.get("owner"), dict) else {}
+    for id_key in ("account_id", "uuid", "username", "nickname"):
+        actor_val = str(actor_obj.get(id_key) or "").strip()
+        owner_val = str(owner_obj.get(id_key) or "").strip()
+        if actor_val and owner_val and actor_val == owner_val:
+            return True, "OWNER"
+
+    # Bitbucket Cloud omits author_association; only private repositories enforce repo-level
+    # access before allowing issue/comment creation. Public or unknown-visibility repos fail closed.
+    if repo_obj.get("is_private") is True:
+        return True, "MEMBER"
+    return False, "UNTRUSTED"
 
 
 async def handle_bitbucket_webhook(

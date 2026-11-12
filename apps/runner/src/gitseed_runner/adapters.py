@@ -35,6 +35,12 @@ ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME: dict[str, frozenset[str]] = {
         {
             ".gemini/oauth_creds.json",
             ".gemini/google_accounts.json",
+            ".gemini/antigravity-cli/antigravity-oauth-token",
+            ".gemini/antigravity-cli/keyring/antigravity-oauth-token",
+            ".gemini/antigravity-cli/installation_id",
+            ".gemini/antigravity-cli/jetski_state.pbtxt",
+            ".gemini/config/projects/default-cli-project.json",
+            ".gemini/config/config.json",
         }
     ),
     "antigravity": frozenset(
@@ -49,6 +55,7 @@ ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME: dict[str, frozenset[str]] = {
             ".gemini/antigravity-cli/acp-auth-state.json",
             ".gemini/antigravity-cli/oauth_creds.json",
             ".gemini/config/projects/default-cli-project.json",
+            ".gemini/config/config.json",
             ".gemini/oauth_creds.json",
             ".gemini/google_accounts.json",
             ".config/antigravity/oauth_creds.json",
@@ -140,7 +147,9 @@ class RuntimeAdapter(ABC):
         self.gateway = ctx.get("gateway") or {}
         self.model = str(ctx.get("model") or self.gateway.get("model") or "default")
         self.gateway_model = str(self.gateway.get("model") or self.model or "default")
-        self.provider = str(self.gateway.get("provider") or "openai").lower()
+        self.provider = str(
+            ctx.get("provider") or self.gateway.get("provider") or "openai"
+        ).lower()
         self.gateway_api_key = str(self.gateway.get("api_key") or "").strip()
         self.gateway_base_url = str(
             self.gateway.get("base_url") or os.environ.get("GITSEED_GATEWAY_URL") or ""
@@ -316,18 +325,44 @@ class RuntimeAdapter(ABC):
 
     harvest_updated_cli_auth_bundle = collect_updated_cli_auth_bundle
 
+    def _multi_repo_workspace_root(self) -> Path | None:
+        """Return parent workspace root when working_dir is inside a multi-repo / worktree layout."""
+        if self.output_file.parent.name == ".gitseed":
+            workspace_root = self.output_file.parent.parent
+            if self.working_dir.resolve() != workspace_root.resolve():
+                return workspace_root
+            return None
+        candidate = self.output_file.parent.parent
+        try:
+            wd_resolved = self.working_dir.resolve()
+            if (
+                self.output_file.parent.resolve() != wd_resolved
+                and wd_resolved != candidate.resolve()
+                and wd_resolved.is_relative_to(candidate.resolve())
+            ):
+                return candidate
+        except OSError:
+            pass
+        if self.working_dir.parent == Path("/workspace") and self.working_dir != Path("/workspace"):
+            return Path("/workspace")
+        return None
+
     def _build_standard_mcp_map(self) -> dict[str, dict[str, Any]]:
-        """Build standard `mcpServers` map used by Claude Code and Antigravity."""
+        """Build standard `mcpServers` map with accurate `stdio`, `http`, or `sse` transport."""
         servers: dict[str, dict[str, Any]] = {}
         for item in self.mcp_servers:
             slug = str(item.get("slug") or item.get("id") or "mcp").strip()
-            provider = str(item.get("provider") or "mcp-sse").strip().lower()
-            endpoint = str(item.get("endpoint") or "").strip()
+            raw_transport = (
+                str(item.get("transport") or item.get("provider") or "mcp-sse")
+                .strip()
+                .lower()
+            )
+            endpoint = str(item.get("endpoint") or item.get("url") or "").strip()
             if not slug or not endpoint:
                 continue
             headers = item.get("headers") if isinstance(item.get("headers"), dict) else {}
             env_map = item.get("env") if isinstance(item.get("env"), dict) else {}
-            if provider == "mcp-stdio":
+            if raw_transport in ("stdio", "mcp-stdio"):
                 parts = endpoint.split()
                 if parts:
                     entry: dict[str, Any] = {
@@ -338,6 +373,14 @@ class RuntimeAdapter(ABC):
                     if env_map:
                         entry["env"] = env_map
                     servers[slug] = entry
+            elif raw_transport in ("http", "mcp-http", "streamable-http", "streamable_http"):
+                entry = {
+                    "type": "http",
+                    "url": endpoint,
+                }
+                if headers:
+                    entry["headers"] = headers
+                servers[slug] = entry
             else:
                 entry = {
                     "type": "sse",
@@ -390,41 +433,19 @@ class OpenCodeAdapter(RuntimeAdapter):
 
     def prepare_workspace(self) -> dict[str, str]:
         self.restore_cli_auth_bundle()
-        opencode_config: dict[str, Any] = {
-            "$schema": "https://opencode.ai/config.json",
-            "model": f"gitseed/{self.model}",
-            "small_model": f"gitseed/{self.model}",
-            "permission": {
-                "edit": "allow",
-                "bash": "allow",
-                "webfetch": "allow",
-            },
-            "provider": {
-                "gitseed": {
-                    "npm": "@ai-sdk/openai-compatible",
-                    "name": "GitSeed LiteLLM Proxy",
-                    "options": {
-                        "baseURL": self.gateway_base_url,
-                        "apiKey": self.gateway_api_key,
-                    },
-                    "models": {
-                        self.model: {
-                            "name": self.model,
-                            "tool_call": True,
-                        }
-                    },
-                }
-            },
-        }
+        mcp_cfg: dict[str, Any] = {}
         if self.mcp_servers:
-            mcp_cfg: dict[str, Any] = {}
             for item in self.mcp_servers:
                 slug = str(item.get("slug") or item.get("id") or "mcp").strip()
-                provider = str(item.get("provider") or "mcp-sse").strip().lower()
-                endpoint = str(item.get("endpoint") or "").strip()
+                raw_transport = (
+                    str(item.get("transport") or item.get("provider") or "mcp-sse")
+                    .strip()
+                    .lower()
+                )
+                endpoint = str(item.get("endpoint") or item.get("url") or "").strip()
                 if not slug or not endpoint:
                     continue
-                if provider == "mcp-stdio":
+                if raw_transport in ("stdio", "mcp-stdio"):
                     parts = endpoint.split()
                     if parts:
                         mcp_cfg[slug] = {
@@ -440,8 +461,48 @@ class OpenCodeAdapter(RuntimeAdapter):
                         "enabled": True,
                         "headers": item.get("headers") or {},
                     }
-            if mcp_cfg:
-                opencode_config["mcp"] = mcp_cfg
+
+        if self.auth_mode == "cli_oauth":
+            opencode_config: dict[str, Any] = {
+                "$schema": "https://opencode.ai/config.json",
+                "permission": {
+                    "edit": "allow",
+                    "bash": "allow",
+                    "webfetch": "allow",
+                },
+            }
+            if self.model and self.model != "default":
+                opencode_config["model"] = self.model
+        else:
+            opencode_config = {
+                "$schema": "https://opencode.ai/config.json",
+                "model": f"gitseed/{self.model}",
+                "small_model": f"gitseed/{self.model}",
+                "permission": {
+                    "edit": "allow",
+                    "bash": "allow",
+                    "webfetch": "allow",
+                },
+                "provider": {
+                    "gitseed": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "GitSeed LiteLLM Proxy",
+                        "options": {
+                            "baseURL": self.gateway_base_url,
+                            "apiKey": self.gateway_api_key,
+                        },
+                        "models": {
+                            self.model: {
+                                "name": self.model,
+                                "tool_call": True,
+                            }
+                        },
+                    }
+                },
+            }
+
+        if mcp_cfg:
+            opencode_config["mcp"] = mcp_cfg
 
         config_path = self.working_dir / "opencode.json"
         if not self._workspace_prepared:
@@ -460,6 +521,34 @@ class OpenCodeAdapter(RuntimeAdapter):
             os.chmod(config_path, 0o600)
 
         env = os.environ.copy()
+        if self.auth_mode == "cli_oauth":
+            env.pop("OPENAI_API_KEY", None)
+            env.pop("OPENAI_BASE_URL", None)
+            env.pop("ANTHROPIC_API_KEY", None)
+            env.pop("ANTHROPIC_BASE_URL", None)
+            env.pop("ANTHROPIC_AUTH_TOKEN", None)
+            home_root = Path.home().resolve()
+            has_opencode_auth_file = any(
+                (home_root / rel).is_file()
+                for rel in ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["opencode"]
+            )
+            if self.oauth_token and not has_opencode_auth_file:
+                provider_hint = (
+                    str(self.ctx.get("provider") or self.gateway.get("provider") or "")
+                    .strip()
+                    .lower()
+                )
+                if provider_hint == "anthropic":
+                    env["ANTHROPIC_AUTH_TOKEN"] = self.oauth_token
+                    env["ANTHROPIC_API_KEY"] = self.oauth_token
+                elif provider_hint in ("gemini", "google"):
+                    env["GEMINI_API_KEY"] = self.oauth_token
+                elif provider_hint in ("xai", "grok"):
+                    env["XAI_API_KEY"] = self.oauth_token
+                elif provider_hint == "openai":
+                    env["OPENAI_API_KEY"] = self.oauth_token
+            return env
+
         env["OPENAI_API_KEY"] = self.gateway_api_key
         env["OPENAI_BASE_URL"] = self.gateway_base_url
         env["ANTHROPIC_API_KEY"] = self.gateway_api_key
@@ -483,7 +572,12 @@ class OpenCodeAdapter(RuntimeAdapter):
             self._preexisting_opencode_bytes = None
 
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
-        cmd = ["opencode", "run", "--format", "json", "--model", f"gitseed/{self.model}"]
+        cmd = ["opencode", "run", "--format", "json"]
+        if self.auth_mode == "cli_oauth":
+            if self.model and self.model != "default":
+                cmd.extend(["--model", self.model])
+        else:
+            cmd.extend(["--model", f"gitseed/{self.model}"])
         if continue_session:
             cmd.append("--continue")
         cmd.append(prompt)
@@ -776,8 +870,9 @@ class CodexAdapter(RuntimeAdapter):
         return env
 
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
+        ws_root = self._multi_repo_workspace_root()
         if continue_session:
-            return [
+            cmd = [
                 "codex",
                 "exec",
                 "resume",
@@ -785,9 +880,14 @@ class CodexAdapter(RuntimeAdapter):
                 "--json",
                 "--full-auto",
                 "--skip-git-repo-check",
-                prompt,
             ]
+            if ws_root is not None:
+                cmd.extend(["--add-dir", str(ws_root)])
+            cmd.append(prompt)
+            return cmd
         cmd = ["codex", "exec", "--json", "--full-auto", "--skip-git-repo-check"]
+        if ws_root is not None:
+            cmd.extend(["--add-dir", str(ws_root)])
         if self.model and self.model != "default":
             cmd.extend(["-m", self.model])
         cmd.append(prompt)
@@ -795,6 +895,9 @@ class CodexAdapter(RuntimeAdapter):
 
     def build_interactive_command(self) -> list[str]:
         cmd = ["codex", "--full-auto"]
+        ws_root = self._multi_repo_workspace_root()
+        if ws_root is not None:
+            cmd.extend(["--add-dir", str(ws_root)])
         if self.model and self.model != "default":
             cmd.extend(["-m", self.model])
         return cmd
@@ -834,6 +937,71 @@ def _write_gemini_trusted_folders(gemini_dir: Path, working_dir: Path) -> None:
     ):
         trusted_map[folder] = "TRUST_FOLDER"
     trusted_path.write_text(json.dumps(trusted_map, indent=2), encoding="utf-8")
+
+
+def _format_gemini_cli_mcp_map(mcp_map: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Convert standard `mcpServers` entries into `@google/gemini-cli` settings.json schema."""
+    formatted: dict[str, dict[str, Any]] = {}
+    for slug, cfg in mcp_map.items():
+        srv_type = str(cfg.get("type") or "sse").lower()
+        if srv_type == "stdio" or "command" in cfg:
+            entry: dict[str, Any] = {
+                "command": cfg["command"],
+                "args": list(cfg.get("args") or []),
+            }
+            if isinstance(cfg.get("env"), dict) and cfg["env"]:
+                entry["env"] = cfg["env"]
+            formatted[slug] = entry
+        elif srv_type == "http":
+            entry = {"httpUrl": cfg["url"]}
+            if isinstance(cfg.get("headers"), dict) and cfg["headers"]:
+                entry["headers"] = cfg["headers"]
+            formatted[slug] = entry
+        else:
+            entry = {"url": cfg["url"]}
+            if isinstance(cfg.get("headers"), dict) and cfg["headers"]:
+                entry["headers"] = cfg["headers"]
+            formatted[slug] = entry
+    return formatted
+
+
+def _write_antigravity_mcp_config(
+    gemini_dir: Path, mcp_map: dict[str, dict[str, Any]]
+) -> None:
+    """Write `~/.gemini/config/mcp_config.json` with native Antigravity `serverUrl` / stdio entries."""
+    if not mcp_map:
+        return
+    config_dir = gemini_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    mcp_config_path = config_dir / "mcp_config.json"
+    existing_doc: dict[str, Any] = {}
+    if mcp_config_path.exists():
+        with contextlib.suppress(Exception):
+            loaded = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_doc = loaded
+    agy_mcp_entries: dict[str, dict[str, Any]] = {}
+    for slug, cfg in mcp_map.items():
+        srv_type = str(cfg.get("type") or "sse").lower()
+        if srv_type == "stdio" or "command" in cfg:
+            entry: dict[str, Any] = {
+                "command": cfg["command"],
+                "args": list(cfg.get("args") or []),
+            }
+            if isinstance(cfg.get("env"), dict) and cfg["env"]:
+                entry["env"] = cfg["env"]
+            agy_mcp_entries[slug] = entry
+        else:
+            entry = {"serverUrl": cfg["url"]}
+            if isinstance(cfg.get("headers"), dict) and cfg["headers"]:
+                entry["headers"] = cfg["headers"]
+            agy_mcp_entries[slug] = entry
+    existing_servers = existing_doc.get("mcpServers")
+    if isinstance(existing_servers, dict):
+        existing_doc["mcpServers"] = {**existing_servers, **agy_mcp_entries}
+    else:
+        existing_doc["mcpServers"] = agy_mcp_entries
+    mcp_config_path.write_text(json.dumps(existing_doc, indent=2), encoding="utf-8")
 
 
 class AntigravityAdapter(RuntimeAdapter):
@@ -896,21 +1064,32 @@ class AntigravityAdapter(RuntimeAdapter):
                 agy_settings["mcpServers"] = {**existing_mcp, **mcp_map}
             else:
                 agy_settings["mcpServers"] = mcp_map
+            _write_antigravity_mcp_config(gemini_dir, mcp_map)
         settings_path.write_text(
             json.dumps(agy_settings, indent=2), encoding="utf-8"
         )
-        # Keep ~/.gemini/settings.json synchronized for OAuth fallback
-        if self.auth_mode == "cli_oauth":
+        # Keep ~/.gemini/settings.json synchronized for OAuth fallback and MCP discovery
+        if self.auth_mode == "cli_oauth" or mcp_map:
             gem_settings_path = gemini_dir / "settings.json"
-            gem_settings: dict[str, Any] = {
-                "selectedAuthType": "oauth-personal",
-                "security": {
+            gem_settings: dict[str, Any] = {}
+            if gem_settings_path.exists():
+                with contextlib.suppress(Exception):
+                    loaded_gem = json.loads(gem_settings_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded_gem, dict):
+                        gem_settings = loaded_gem
+            if self.auth_mode == "cli_oauth":
+                gem_settings["selectedAuthType"] = "oauth-personal"
+                gem_settings["security"] = {
                     "auth": {"selectedType": "oauth-personal"},
                     "folderTrust": {"enabled": False},
-                },
-            }
+                }
             if mcp_map:
-                gem_settings["mcpServers"] = mcp_map
+                gem_mcp = _format_gemini_cli_mcp_map(mcp_map)
+                existing_gem_mcp = gem_settings.get("mcpServers")
+                if isinstance(existing_gem_mcp, dict):
+                    gem_settings["mcpServers"] = {**existing_gem_mcp, **gem_mcp}
+                else:
+                    gem_settings["mcpServers"] = gem_mcp
             gem_settings_path.write_text(
                 json.dumps(gem_settings, indent=2), encoding="utf-8"
             )
@@ -934,6 +1113,7 @@ class AntigravityAdapter(RuntimeAdapter):
 
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
+        ws_root = self._multi_repo_workspace_root()
         if self.binary_name == "gemini":
             cmd = [
                 "gemini",
@@ -943,6 +1123,8 @@ class AntigravityAdapter(RuntimeAdapter):
                 "stream-json",
                 "--yolo",
             ]
+            if ws_root is not None:
+                cmd.extend(["--include-directories", str(ws_root)])
             if normalized_model:
                 cmd.extend(["--model", normalized_model])
             if continue_session:
@@ -968,8 +1150,11 @@ class AntigravityAdapter(RuntimeAdapter):
 
     def build_interactive_command(self) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
+        ws_root = self._multi_repo_workspace_root()
         if self.binary_name == "gemini":
             cmd = ["gemini", "--yolo"]
+            if ws_root is not None:
+                cmd.extend(["--include-directories", str(ws_root)])
             if normalized_model:
                 cmd.extend(["--model", normalized_model])
             return cmd
@@ -1028,11 +1213,13 @@ class GeminiAdapter(RuntimeAdapter):
             gemini_settings["security"] = sec_dict
         mcp_map = self._build_standard_mcp_map()
         if mcp_map:
+            gemini_mcp = _format_gemini_cli_mcp_map(mcp_map)
             existing_mcp = gemini_settings.get("mcpServers")
             if isinstance(existing_mcp, dict):
-                gemini_settings["mcpServers"] = {**existing_mcp, **mcp_map}
+                gemini_settings["mcpServers"] = {**existing_mcp, **gemini_mcp}
             else:
-                gemini_settings["mcpServers"] = mcp_map
+                gemini_settings["mcpServers"] = gemini_mcp
+            _write_antigravity_mcp_config(gemini_cfg_dir, mcp_map)
         settings_path.write_text(
             json.dumps(gemini_settings, indent=2), encoding="utf-8"
         )
@@ -1098,6 +1285,9 @@ class GeminiAdapter(RuntimeAdapter):
             "stream-json",
             "--yolo",
         ]
+        ws_root = self._multi_repo_workspace_root()
+        if ws_root is not None:
+            cmd.extend(["--include-directories", str(ws_root)])
         if normalized_model:
             cmd.extend(["--model", normalized_model])
         if continue_session:
@@ -1112,6 +1302,9 @@ class GeminiAdapter(RuntimeAdapter):
                 cmd.extend(["--model", normalized_model])
             return cmd
         cmd = ["gemini", "--yolo"]
+        ws_root = self._multi_repo_workspace_root()
+        if ws_root is not None:
+            cmd.extend(["--include-directories", str(ws_root)])
         if normalized_model:
             cmd.extend(["--model", normalized_model])
         return cmd
@@ -1132,13 +1325,22 @@ class GrokBuildAdapter(RuntimeAdapter):
         mcp_map = self._build_standard_mcp_map()
         if self.auth_mode == "cli_oauth":
             grok_oauth_settings: dict[str, Any] = {}
+            grok_oauth_user_settings: dict[str, Any] = {}
+            if self.oauth_token:
+                grok_oauth_user_settings["apiKey"] = self.oauth_token
             if self.model and self.model != "default":
                 grok_oauth_settings["model"] = self.model
+                grok_oauth_user_settings["defaultModel"] = self.model
             if mcp_map:
                 grok_oauth_settings["mcpServers"] = mcp_map
+                grok_oauth_user_settings["mcpServers"] = mcp_map
             if grok_oauth_settings:
                 (grok_cfg_dir / "settings.json").write_text(
                     json.dumps(grok_oauth_settings, indent=2), encoding="utf-8"
+                )
+            if grok_oauth_user_settings:
+                (grok_cfg_dir / "user-settings.json").write_text(
+                    json.dumps(grok_oauth_user_settings, indent=2), encoding="utf-8"
                 )
             if self.oauth_token:
                 env["XAI_API_KEY"] = self.oauth_token
@@ -1149,12 +1351,21 @@ class GrokBuildAdapter(RuntimeAdapter):
             "baseURL": self.gateway_base_url,
             "apiKey": self.gateway_api_key,
         }
+        grok_user_settings: dict[str, Any] = {
+            "apiKey": self.gateway_api_key,
+            "baseURL": self.gateway_base_url,
+        }
         if self.model and self.model != "default":
             grok_settings["model"] = self.model
+            grok_user_settings["defaultModel"] = self.model
         if mcp_map:
             grok_settings["mcpServers"] = mcp_map
+            grok_user_settings["mcpServers"] = mcp_map
         (grok_cfg_dir / "settings.json").write_text(
             json.dumps(grok_settings, indent=2), encoding="utf-8"
+        )
+        (grok_cfg_dir / "user-settings.json").write_text(
+            json.dumps(grok_user_settings, indent=2), encoding="utf-8"
         )
 
         env["XAI_API_KEY"] = self.gateway_api_key
@@ -1174,6 +1385,9 @@ class GrokBuildAdapter(RuntimeAdapter):
         ]
         if self.model and self.model != "default":
             cmd.extend(["--model", self.model])
+        max_turns = self._resolve_max_turns()
+        if max_turns is not None:
+            cmd.extend(["--max-tool-rounds", str(max_turns)])
         if continue_session:
             cmd.append("--continue")
         return cmd

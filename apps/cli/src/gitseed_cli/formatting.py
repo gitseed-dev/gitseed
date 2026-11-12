@@ -27,12 +27,17 @@ from gitseed_common.schemas import (
 )
 from pydantic import BaseModel
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
 console = Console()
 err_console = Console(stderr=True)
+
+
+def _add_plain_row(table: Table, *cells: str) -> None:
+    table.add_row(*(escape(c) for c in cells))
 
 
 def _fmt_dt(dt: datetime | None) -> str:
@@ -89,7 +94,7 @@ def print_projects_table(projects: Sequence[ProjectResponse], *, wide: bool = Fa
                     "archived" if p.archived_at else "active",
                 ]
             )
-        table.add_row(*row)
+        _add_plain_row(*((table,) + tuple(row)))
     console.print(table)
 
 
@@ -131,7 +136,7 @@ def print_seeds_table(
                     _fmt_dt(s.updated_at),
                 ]
             )
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -153,7 +158,7 @@ def print_tasks_table(tasks: Sequence[SeedTaskResponse], *, wide: bool = False) 
         ]
         if wide:
             row.extend([_fmt_dt(t.started_at), _fmt_dt(t.completed_at)])
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -189,7 +194,7 @@ def print_runs_table(
         ]
         if wide:
             row.extend([str(r.runtime), r.model, _fmt_dt(r.started_at)])
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -230,7 +235,7 @@ def print_agents_table(agents: Sequence[AgentResponse], *, wide: bool = False) -
                     _fmt_money(a.total_cost),
                 ]
             )
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -238,7 +243,7 @@ def print_benchmarks_table(benchmarks: AgentBenchmarksResponse) -> None:
     if benchmarks.insights:
         console.print(
             Panel(
-                "\n".join(f"• {line}" for line in benchmarks.insights),
+                "\n".join(f"• {escape(line)}" for line in benchmarks.insights),
                 title="Empirical Agent / Model Insights",
                 border_style="cyan",
             )
@@ -259,7 +264,8 @@ def print_benchmarks_table(benchmarks: AgentBenchmarksResponse) -> None:
             if e.first_pass_approval_rate is not None
             else "-"
         )
-        table.add_row(
+        _add_plain_row(
+            table,
             f"@{e.agent_handle}",
             str(e.runtime),
             e.model,
@@ -291,7 +297,7 @@ def print_skills_table(skills: Sequence[SkillResponse], *, wide: bool = False) -
         ]
         if wide:
             row.extend([s.id, _fmt_dt(s.updated_at)])
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -333,7 +339,7 @@ def print_policies_table(
                     str(p.timeout_minutes),
                 ]
             )
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -359,7 +365,7 @@ def print_backends_table(backends: Sequence[BackendResponse], *, wide: bool = Fa
         ]
         if wide:
             row.extend([b.endpoint or "-", str(b.capacity or "-")])
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -392,7 +398,7 @@ def print_sandboxes_table(
                     _fmt_dt(sbx.started_at),
                 ]
             )
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -425,7 +431,7 @@ def print_sessions_table(
         ]
         if wide:
             row.extend([s.ref or "-", _fmt_dt(s.last_activity_at or s.started_at)])
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -458,7 +464,7 @@ def print_agent_sessions_table(
                     _fmt_dt(s.updated_at),
                 ]
             )
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -482,7 +488,7 @@ def print_users_table(users: Sequence[UserResponse], *, wide: bool = False) -> N
         ]
         if wide:
             row.extend([_fmt_dt(u.last_active_at), _fmt_dt(u.created_at)])
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -512,7 +518,7 @@ def print_tokens_table(tokens: Sequence[TokenResponse], *, wide: bool = False) -
                     _fmt_dt(t.created_at),
                 ]
             )
-        table.add_row(*row)
+        _add_plain_row(table, *row)
     console.print(table)
 
 
@@ -526,7 +532,8 @@ def print_events_table(events: Sequence[ActivityResponse]) -> None:
     for ev in events:
         actor = f"{ev.actor_type}:{ev.actor_id or 'system'}"
         details = ", ".join(f"{k}={v}" for k, v in (ev.data or {}).items())
-        table.add_row(
+        _add_plain_row(
+            table,
             _fmt_dt(ev.occurred_at),
             str(ev.type),
             actor,
@@ -549,35 +556,40 @@ def describe_seed(
     runs: Sequence[RunResponse] = (),
 ) -> None:
     ref = f"{project_slug or seed.project_id}#{seed.number}"
+    esc_ref = escape(ref)
+    blocked_suffix = f" ({escape(str(seed.blocked_reason))})" if seed.blocked_reason else ""
+    tags_str = escape(", ".join(seed.tags)) if seed.tags else "-"
     meta_lines = [
-        f"[bold]Reference:[/bold]    {ref} ({seed.id})",
-        f"[bold]Title:[/bold]        {seed.title}",
-        f"[bold]Stage:[/bold]        {seed.stage}",
-        f"[bold]Status:[/bold]       {seed.status}"
-        + (f" ({seed.blocked_reason})" if seed.blocked_reason else ""),
-        f"[bold]Autonomy:[/bold]     {seed.autonomy}",
+        f"[bold]Reference:[/bold]    {esc_ref} ({escape(seed.id)})",
+        f"[bold]Title:[/bold]        {escape(seed.title)}",
+        f"[bold]Stage:[/bold]        {escape(str(seed.stage))}",
+        f"[bold]Status:[/bold]       {escape(str(seed.status))}{blocked_suffix}",
+        f"[bold]Autonomy:[/bold]     {escape(str(seed.autonomy))}",
         (
             f"[bold]Budget:[/bold]       "
             f"{_fmt_money(seed.spent)} spent / {_fmt_money(seed.budget_cap)} cap"
         ),
-        f"[bold]Tags:[/bold]         {', '.join(seed.tags) if seed.tags else '-'}",
+        f"[bold]Tags:[/bold]         {tags_str}",
         f"[bold]Updated:[/bold]      {_fmt_dt(seed.updated_at)}",
     ]
-    console.print(Panel("\n".join(meta_lines), title=f"Seed {ref}", expand=False))
+    console.print(Panel("\n".join(meta_lines), title=f"Seed {esc_ref}", expand=False))
 
     if seed.description:
-        console.print(f"\n[bold cyan]## Summary[/bold cyan]\n{seed.description.strip()}")
+        console.print("\n[bold cyan]## Summary[/bold cyan]")
+        console.print(seed.description.strip(), markup=False, highlight=False)
 
     if seed.specification:
-        console.print(f"\n[bold cyan]## Specification[/bold cyan]\n{seed.specification.strip()}")
+        console.print("\n[bold cyan]## Specification[/bold cyan]")
+        console.print(seed.specification.strip(), markup=False, highlight=False)
 
     if seed.acceptance_criteria:
         console.print("\n[bold cyan]## Acceptance Criteria[/bold cyan]")
         for item in seed.acceptance_criteria:
-            console.print(f"  - {item}")
+            console.print(f"  - {escape(str(item))}")
 
     if seed.plan:
-        console.print(f"\n[bold cyan]## Plan[/bold cyan]\n{seed.plan.strip()}")
+        console.print("\n[bold cyan]## Plan[/bold cyan]")
+        console.print(seed.plan.strip(), markup=False, highlight=False)
 
     if tasks:
         console.print(f"\n[bold cyan]## Tasks ({len(tasks)})[/bold cyan]")
@@ -586,10 +598,10 @@ def describe_seed(
     if approvals:
         console.print(f"\n[bold cyan]## Approvals ({len(approvals)})[/bold cyan]")
         for a in approvals:
-            comment_str = f" - {a.comment}" if a.comment else ""
+            comment_str = f" - {escape(a.comment)}" if a.comment else ""
             console.print(
-                f"  • [{_fmt_dt(a.created_at)}] [bold]{a.stage}[/bold]: "
-                f"{a.decision} by {a.decided_by or 'auto'}{comment_str}"
+                f"  • \\[{_fmt_dt(a.created_at)}] [bold]{escape(str(a.stage))}[/bold]: "
+                f"{escape(str(a.decision))} by {escape(str(a.decided_by or 'auto'))}{comment_str}"
             )
 
     if runs:
@@ -601,15 +613,19 @@ def describe_seed(
         console.print(f"\n[bold cyan]## Comments ({len(visible_comments)})[/bold cyan]")
         for c in visible_comments[-10:]:
             console.print(
-                f"  • [{_fmt_dt(c.created_at)}] [bold]{c.author_id}[/bold] ({c.stage}): {c.body}"
+                f"  • \\[{_fmt_dt(c.created_at)}] [bold]{escape(str(c.author_id))}[/bold] "
+                f"({escape(str(c.stage))}): {escape(c.body)}"
             )
 
 
 def render_seed_diff(changes: SeedChangesResponse) -> None:
+    repo_label = escape(changes.repository_full_name or "repository")
+    base_label = escape(changes.base_ref)
+    head_label = escape(changes.head_ref or "head")
     header = (
         f"[bold]Seed #{changes.seed_number}[/bold] · "
-        f"{changes.repository_full_name or 'repository'} "
-        f"({changes.base_ref} ... {changes.head_ref or 'head'})\n"
+        f"{repo_label} "
+        f"({base_label} ... {head_label})\n"
         f"Commits: {changes.total_commits} · Files: {changes.total_files} · "
         f"[green]+{changes.total_additions}[/green] / [red]-{changes.total_deletions}[/red]"
     )
@@ -619,8 +635,8 @@ def render_seed_diff(changes: SeedChangesResponse) -> None:
         console.print("\n[bold cyan]Commits[/bold cyan]")
         for c in changes.commits:
             console.print(
-                f"  [yellow]{c.short_sha}[/yellow] {c.message} "
-                f"[dim]({c.author_name or 'agent'})[/dim]"
+                f"  [yellow]{escape(c.short_sha)}[/yellow] {escape(c.message)} "
+                f"[dim]({escape(c.author_name or 'agent')})[/dim]"
             )
 
     if not changes.files:
@@ -630,7 +646,7 @@ def render_seed_diff(changes: SeedChangesResponse) -> None:
     console.print("\n[bold cyan]Files Changed[/bold cyan]")
     for f in changes.files:
         console.print(
-            f"  {f.status:10} [bold]{f.path}[/bold] "
+            f"  {escape(f'{f.status:10}')} [bold]{escape(f.path)}[/bold] "
             f"([green]+{f.additions}[/green]/[red]-{f.deletions}[/red])"
         )
         if f.patch:

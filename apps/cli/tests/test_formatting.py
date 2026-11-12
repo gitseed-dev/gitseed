@@ -357,3 +357,50 @@ def test_formatting_all_table_and_detail_printers(
     assert "Core API" in out
     assert "sliding-window" in out
     assert "src/rate_limit.py" in out
+
+
+def test_formatting_escapes_untrusted_rich_markup_tags(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state = _formatting_sample_state()
+    hostile = "crash [/div] ansi [0m] slice arr[/] [bold]notbold"
+
+    seed_data = {
+        **state["seeds"][0],
+        "title": f"Seed {hostile}",
+        "description": f"Summary {hostile}",
+        "specification": f"Spec {hostile}",
+        "acceptance_criteria": [f"Criterion {hostile}"],
+        "plan": f"Plan {hostile}",
+        "blocked_reason": hostile,
+        "tags": [hostile],
+    }
+    task_data = {**state["tasks"][0], "title": f"Task {hostile}"}
+    approval_data = {**state["approvals"][0], "comment": hostile}
+    comment_data = {**state["comments"][0], "body": hostile}
+    changes_data = {
+        **state["changes"],
+        "repository_full_name": f"org/repo-{hostile}",
+        "commits": [{**state["changes"]["commits"][0], "message": hostile}],
+        "files": [{**state["changes"]["files"][0], "path": f"src/{hostile}.py"}],
+    }
+
+    seed = SeedResponse.model_validate(seed_data)
+    task = SeedTaskResponse.model_validate(task_data)
+    approval = ApprovalResponse.model_validate(approval_data)
+    comment = SeedCommentResponse.model_validate(comment_data)
+    changes = SeedChangesResponse.model_validate(changes_data)
+
+    formatting.describe_seed(
+        seed,
+        project_slug="api",
+        tasks=[task],
+        approvals=[approval],
+        comments=[comment],
+    )
+    formatting.render_seed_diff(changes)
+
+    out = capsys.readouterr().out
+    assert "[/div]" in out
+    assert "[0m]" in out
+    assert "arr[/]" in out

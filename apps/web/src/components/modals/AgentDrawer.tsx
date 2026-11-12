@@ -427,33 +427,24 @@ export const AgentDrawer: React.FC<AgentDrawerProps> = ({
             selectedBackendIds={selectedBackendIds}
             onToggleRestrictedBackend={handleToggleRestrictedBackend}
             onNavigateToBackends={() => {
-              try {
-                const rtDef =
-                  runtime !== 'opencode' ? runtime : null
-                const providerMap: Record<string, string> = {
-                  'claude-code': 'anthropic',
-                  codex: 'openai',
-                  antigravity: 'antigravity',
-                  gemini: 'gemini',
-                  'grok-build': 'xai',
-                }
-                const targetProvider = rtDef ? providerMap[rtDef] : undefined
-                const sp = new URLSearchParams(window.location.search)
-                sp.set('open', 'new')
-                sp.set('type', 'inference')
-                if (targetProvider) {
-                  sp.set('provider', targetProvider)
-                }
-                window.history.pushState(
-                  null,
-                  '',
-                  `${window.location.pathname}?${sp.toString()}`
-                )
-              } catch {
-                // Ignore URL history errors
+              const rtDef = runtime !== 'opencode' ? runtime : null
+              const providerMap: Record<string, string> = {
+                'claude-code': 'anthropic',
+                codex: 'openai',
+                antigravity: 'antigravity',
+                gemini: 'gemini',
+                'grok-build': 'xai',
+              }
+              const targetProvider = rtDef ? providerMap[rtDef] : undefined
+              const queryParams: Record<string, string> = {
+                open: 'new',
+                type: 'inference',
+              }
+              if (targetProvider) {
+                queryParams.provider = targetProvider
               }
               onClose()
-              setActiveView(VIEWS.BACKENDS)
+              setActiveView(VIEWS.BACKENDS, queryParams)
             }}
           />
         </div>

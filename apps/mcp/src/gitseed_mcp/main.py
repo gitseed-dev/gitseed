@@ -235,10 +235,6 @@ def create_app(
                 },
             )
 
-        q = session_state.get("queue") if isinstance(session_state, dict) else None
-        if isinstance(q, asyncio.Queue):
-            await q.put(json.dumps(response_data))
-
         return JSONResponse(content=response_data, headers=headers)
 
     @app.get("/mcp")

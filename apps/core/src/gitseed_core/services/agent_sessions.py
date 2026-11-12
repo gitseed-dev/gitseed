@@ -1714,6 +1714,13 @@ async def create_agent_session(
         actor_user_id=actor.id,
     )
 
+    if seed_id is not None:
+        seed_row = await session.get(Seed, seed_id)
+        if seed_row is None or (
+            isinstance(seed_row, Seed) and seed_row.project_id != project.id
+        ):
+            raise NotFound("Seed not found in this project")
+
     # Resolve repository and default branch ref
     repo: ProjectRepository | None = None
     if repository_id is not None:

@@ -594,7 +594,8 @@
       "checkpointRequiredWarning": "When max budget is unset, a spend checkpoint is required to prevent unbounded spend.",
       "unboundedSafeBadge": "Unbounded spend protection active (soft checkpoint mandatory)",
       "enforcementEnforced": "Enforced (LiteLLM Virtual Key)",
-      "enforcementEstimated": "Estimated (CLI Subscription)"
+      "enforcementEstimated": "Estimated (CLI Subscription)",
+      "enforcementUnpriced": "Unpriced (Custom / Local Model)"
     },
     "runners": {
       "title": "Runners & Dispatch Concurrency",
@@ -719,7 +720,8 @@
       "copyJson": "Copy JSON",
       "downloadJson": "Download",
       "enforcementEnforced": "Enforced",
-      "enforcementEstimated": "Estimated"
+      "enforcementEstimated": "Estimated",
+      "enforcementUnpriced": "Unpriced"
     },
     "personalMode": {
       "badge": "Personal Mode (Single-User Subscription)",

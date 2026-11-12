@@ -147,7 +147,13 @@ def test_litellm_model_sync_payloads_and_virtual_key() -> None:
     assert derive_litellm_virtual_key("run_test999") == vk
 
 
-def test_runner_adapter_uses_litellm_virtual_key_not_run_token(tmp_path: Path) -> None:
+def test_runner_adapter_uses_litellm_virtual_key_not_run_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
     ctx = {
         "runtime": "opencode",
         "model": "qwen2.5-coder:32b",

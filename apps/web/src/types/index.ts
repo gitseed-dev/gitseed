@@ -635,9 +635,10 @@ export interface SeedChangeFile {
 export interface PullRequestCheckItem {
   id: string
   name: string
+  stage_or_workflow?: string | null
+  workflow_name?: string | null
   status: 'queued' | 'running' | 'passed' | 'failed' | 'skipped' | 'cancelled' | string
   conclusion: string | null
-  workflow_name?: string | null
   details_url?: string | null
   started_at?: string | null
   completed_at?: string | null
@@ -648,12 +649,23 @@ export interface PullRequestCheckItem {
 export interface PullRequestCommentItem {
   id: string
   author: string
+  author_avatar_url?: string | null
   body: string
-  kind: 'comment' | 'review' | 'inline_comment' | string
+  kind:
+    | 'comment'
+    | 'review'
+    | 'review_approved'
+    | 'review_changes_requested'
+    | 'review_comment'
+    | 'inline_comment'
+    | string
   review_state?: string | null
   path?: string | null
   line?: number | null
+  diff_hunk?: string | null
   created_at?: string | null
+  updated_at?: string | null
+  web_url?: string | null
   html_url?: string | null
 }
 

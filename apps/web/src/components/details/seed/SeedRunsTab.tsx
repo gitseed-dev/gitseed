@@ -45,7 +45,7 @@ import {
   type ParsedRunLogEntry,
   type ToolCallCategory,
 } from '../../../utils/runLogParser'
-import { STAGE_LABELS } from '../../../utils/seeds'
+import { resolveStageRunAgent, STAGE_LABELS } from '../../../utils/seeds'
 import type { Agent, Backend, Run, Seed, SeedTask, StagePolicy } from '../../../types'
 
 export interface SeedRunsTabProps {
@@ -266,9 +266,7 @@ export const SeedRunsTab: React.FC<SeedRunsTabProps> = ({
   )
 
   const stagePolicy = effectivePolicies.find((p) => p.stage === seed.stage)
-  const stageAgent = stagePolicy?.agent_id
-    ? agents.find((a) => a.id === stagePolicy.agent_id)
-    : agents.find((a) => a.enabled && !a.archived_at)
+  const stageAgent = resolveStageRunAgent(seed.stage, stagePolicy, agents)
   const stageAgentHandle = stageAgent ? `@${stageAgent.handle}` : ({ ideate: '@ideator', plan: '@planner', execute: '@coder', review: '@reviewer', merge: '@merger' }[seed.stage] || '@coder')
 
   const totalRunCost = runs.reduce((acc, r) => acc + parseFloat(r.cost || '0'), 0)

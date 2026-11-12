@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import ssl
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -196,26 +197,36 @@ def _build_k8s_default_egress_network_policy(
     }
 
 
+def _resolve_k8s_control_plane_namespace(fallback_ns: str) -> str:
+    """Resolve the Kubernetes namespace hosting the GitSeed control plane (`api` / `egress-proxy`)."""
+    explicit = (getattr(settings, "CONTROL_PLANE_K8S_NAMESPACE", "") or "").strip()
+    if explicit:
+        return explicit
+    try:
+        if INCLUSTER_NAMESPACE_PATH.is_file():
+            in_cluster_ns = INCLUSTER_NAMESPACE_PATH.read_text(encoding="utf-8").strip()
+            if in_cluster_ns:
+                return in_cluster_ns
+    except Exception:
+        pass
+    return fallback_ns
+
+
 async def _ensure_k8s_namespace_network_policy(
     client: httpx.AsyncClient,
     base_url: str,
     target_ns: str,
     control_plane_ns: str,
 ) -> None:
-    """Idempotently apply default egress NetworkPolicy (`POST` ignoring `409 Conflict`)."""
-    try:
-        np_resp = await client.post(
-            f"{base_url}/apis/networking.k8s.io/v1/namespaces/{quote(target_ns, safe='')}/networkpolicies",
-            json=_build_k8s_default_egress_network_policy(target_ns, control_plane_ns),
+    """Idempotently apply default egress NetworkPolicy (`POST` ignoring `409 Conflict`), failing closed on RBAC/API errors."""
+    np_resp = await client.post(
+        f"{base_url}/apis/networking.k8s.io/v1/namespaces/{quote(target_ns, safe='')}/networkpolicies",
+        json=_build_k8s_default_egress_network_policy(target_ns, control_plane_ns),
+    )
+    if np_resp.status_code not in (200, 201, 202, 409):
+        raise RuntimeError(
+            f"Kubernetes NetworkPolicy apply in {target_ns} failed with HTTP {np_resp.status_code}"
         )
-        if np_resp.status_code not in (200, 201, 202, 409):
-            logger.debug(
-                "Kubernetes NetworkPolicy apply in %s returned HTTP %s",
-                target_ns,
-                np_resp.status_code,
-            )
-    except Exception as exc:
-        logger.debug("Kubernetes NetworkPolicy apply in %s ignored error: %s", target_ns, exc)
 
 
 async def _ensure_k8s_namespace(
@@ -227,14 +238,15 @@ async def _ensure_k8s_namespace(
     project_slug: str | None = None,
     workload: str = "runner",
 ) -> str:
-    """Ensure `target_ns` exists in Kubernetes, falling back to `fallback_ns` if RBAC forbids namespace creation."""
+    """Ensure `target_ns` exists with an active egress NetworkPolicy, falling back to `fallback_ns` on RBAC errors."""
     if not target_ns or target_ns == fallback_ns:
         return fallback_ns
+    control_plane_ns = _resolve_k8s_control_plane_namespace(fallback_ns)
     try:
         get_resp = await client.get(f"{base_url}/api/v1/namespaces/{quote(target_ns, safe='')}")
         if get_resp.status_code == 200:
             await _ensure_k8s_namespace_network_policy(
-                client, base_url, target_ns, fallback_ns
+                client, base_url, target_ns, control_plane_ns
             )
             return target_ns
         if get_resp.status_code == 404:
@@ -257,11 +269,16 @@ async def _ensure_k8s_namespace(
             )
             if create_resp.status_code in (200, 201, 202, 409):
                 await _ensure_k8s_namespace_network_policy(
-                    client, base_url, target_ns, fallback_ns
+                    client, base_url, target_ns, control_plane_ns
                 )
                 return target_ns
     except Exception as exc:
-        logger.debug("Kubernetes namespace check/create for %s fell back to %s: %s", target_ns, fallback_ns, exc)
+        logger.warning(
+            "Kubernetes isolated namespace/NetworkPolicy setup for %s fell back to %s: %s",
+            target_ns,
+            fallback_ns,
+            exc,
+        )
     return fallback_ns
 
 
@@ -286,6 +303,38 @@ def _is_k8s_job(name: str) -> bool:
     return name.startswith("gitseed-run-")
 
 
+def build_docker_ssl_context(secrets_map: dict[str, Any]) -> ssl.SSLContext | None:
+    """Build an mTLS/CA SSLContext for remote `tcp://` / `https://` Docker daemons when TLS secrets exist."""
+    tls_ca = (secrets_map.get("tls_ca") or "").strip()
+    tls_cert = (secrets_map.get("tls_cert") or "").strip()
+    tls_key = (secrets_map.get("tls_key") or "").strip()
+    if not (tls_ca or tls_cert):
+        return None
+    ctx = ssl.create_default_context(cadata=tls_ca) if tls_ca else ssl.create_default_context()
+    if tls_cert:
+        cert_path: str | None = None
+        key_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as cf:
+                cf.write(tls_cert)
+                cert_path = cf.name
+            os.chmod(cert_path, 0o600)
+            if tls_key:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as kf:
+                    kf.write(tls_key)
+                    key_path = kf.name
+                os.chmod(key_path, 0o600)
+            ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        finally:
+            for p in (cert_path, key_path):
+                if p:
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+    return ctx
+
+
 def _docker_client_for_backend(backend: Backend) -> tuple[httpx.AsyncClient, str]:
     """Return an httpx.AsyncClient and base URL configured for a Docker compute backend."""
     default_ep = getattr(settings, "DOCKER_HOST", "unix:///var/run/docker.sock") or "unix:///var/run/docker.sock"
@@ -298,13 +347,17 @@ def _docker_client_for_backend(backend: Backend) -> tuple[httpx.AsyncClient, str
         return httpx.AsyncClient(transport=transport, timeout=20.0), "http://docker"
 
     secrets_map = decrypt_secrets(backend.secrets_encrypted)
+    has_tls_secrets = bool(secrets_map.get("tls_cert") or secrets_map.get("tls_ca"))
     if target.startswith("tcp://"):
-        scheme = "https://" if secrets_map.get("tls_cert") else "http://"
+        scheme = "https://" if has_tls_secrets else "http://"
         base_url = scheme + target.removeprefix("tcp://")
     elif target.startswith(("http://", "https://")):
         base_url = target
     else:
         base_url = f"http://{target}"
+    ssl_ctx = build_docker_ssl_context(secrets_map) if base_url.startswith("https://") else None
+    if ssl_ctx is not None:
+        return httpx.AsyncClient(verify=ssl_ctx, timeout=20.0), base_url
     return httpx.AsyncClient(timeout=20.0), base_url
 
 
@@ -1266,6 +1319,10 @@ async def spawn_docker_runner_container(
                         f"{base_url}/containers/{quote(cid, safe='')}/wait",
                         timeout=prepare_wait_timeout,
                     )
+                    if wait_resp.status_code >= 400:
+                        raise RuntimeError(
+                            f"Runner prepare phase wait failed (HTTP {wait_resp.status_code})"
+                        )
                     if wait_resp.status_code == 200:
                         wait_data = wait_resp.json()
                         prep_exit = int(
@@ -1273,17 +1330,22 @@ async def spawn_docker_runner_container(
                             or 0
                         )
                         if prep_exit != 0:
-                            for prev_id in spawned_ids:
-                                await client.delete(
-                                    f"{base_url}/containers/{quote(prev_id, safe='')}?force=true"
-                                )
                             raise RuntimeError(
                                 f"Runner prepare phase failed with exit code {prep_exit}"
                             )
-                except RuntimeError:
-                    raise
-                except Exception:
-                    pass
+                except Exception as exc:
+                    for prev_id in spawned_ids:
+                        try:
+                            await client.delete(
+                                f"{base_url}/containers/{quote(prev_id, safe='')}?force=true"
+                            )
+                        except Exception:
+                            pass
+                    if isinstance(exc, RuntimeError):
+                        raise
+                    raise RuntimeError(
+                        f"Runner prepare phase did not complete cleanly: {exc}"
+                    ) from exc
             elif role == "agent":
                 primary_container_id = cid
 

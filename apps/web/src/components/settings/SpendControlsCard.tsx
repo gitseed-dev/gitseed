@@ -2,6 +2,7 @@ import React from 'react'
 import { AlertTriangle, CheckCircle2, DollarSign, ShieldCheck } from 'lucide-react'
 import { Card } from '@heroui/react'
 import { useTranslation } from '../../context/I18nContext'
+import type { BudgetEnforcement } from '../../types'
 
 interface SpendControlsCardProps {
   defaultMonthlyBudget: number
@@ -11,7 +12,8 @@ interface SpendControlsCardProps {
   spendCheckpoint: string
   onChangeSpendCheckpoint: (next: string) => void
   isCheckpointMissingWhenUnbounded: boolean
-  enforcement?: 'enforced' | 'estimated'
+  enforcement?: BudgetEnforcement
+  enforcementDetail?: string | null
 }
 
 export const SpendControlsCard: React.FC<SpendControlsCardProps> = ({
@@ -23,9 +25,17 @@ export const SpendControlsCard: React.FC<SpendControlsCardProps> = ({
   onChangeSpendCheckpoint,
   isCheckpointMissingWhenUnbounded,
   enforcement = 'enforced',
+  enforcementDetail,
 }) => {
   const { t } = useTranslation()
   const trimmedCap = seedBudgetCap.trim()
+  const resolvedTooltip =
+    enforcementDetail ||
+    (enforcement === 'unpriced'
+      ? 'Custom or unpriced model without a known pricing catalog entry'
+      : enforcement === 'estimated'
+        ? 'Estimated from CLI token reports in Personal Mode (bounded by timeout and max turns)'
+        : 'Enforced in real time via LiteLLM per-run virtual key max_budget')
 
   return (
     <Card className="p-5 border border-zinc-200/80 dark:border-zinc-700/80 bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md rounded-2xl shadow-xs flex flex-col gap-4 dark:ring-1 dark:ring-white/[0.04]">
@@ -45,15 +55,20 @@ export const SpendControlsCard: React.FC<SpendControlsCardProps> = ({
         </div>
         <span
           data-testid="settings-spend-enforcement-badge"
+          title={resolvedTooltip}
           className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
-            enforcement === 'estimated'
-              ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
-              : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+            enforcement === 'unpriced'
+              ? 'bg-zinc-500/15 text-zinc-700 dark:text-zinc-300 border-zinc-400/30'
+              : enforcement === 'estimated'
+                ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
           }`}
         >
-          {enforcement === 'estimated'
-            ? t('settings.spend.enforcementEstimated')
-            : t('settings.spend.enforcementEnforced')}
+          {enforcement === 'unpriced'
+            ? t('settings.spend.enforcementUnpriced')
+            : enforcement === 'estimated'
+              ? t('settings.spend.enforcementEstimated')
+              : t('settings.spend.enforcementEnforced')}
         </span>
       </div>
 

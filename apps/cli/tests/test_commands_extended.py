@@ -870,3 +870,42 @@ def test_client_error_extraction_and_reference_resolution() -> None:
         c.resolve_seed_ref("api#notanumber")
     with pytest.raises(CLIError):
         GitSeedClient("http://localhost:8420").resolve_project_ref()
+
+
+def test_logs_sandbox_logs_and_describe_escape_rich_markup(
+    full_cli_env: dict[str, Any],
+) -> None:
+    hostile = "line with [/div] and [0m] and arr[/] markup"
+    full_cli_env["runs"][0]["error"] = f"Runner error: {hostile}"
+    full_cli_env["runs"][0]["output"] = {"log_tail": f"stdout: {hostile}\n"}
+    full_cli_env["run_logs"] = {
+        "run_01hfirst": {"run_id": "run_01hfirst", "log_tail": f"stream: {hostile}\n"}
+    }
+    full_cli_env["sandboxes"][0]["log_tail"] = f"sbx out: {hostile}\n"
+    full_cli_env["seeds"][0]["title"] = f"Title {hostile}"
+    full_cli_env["seeds"][0]["description"] = f"Desc {hostile}"
+    full_cli_env["projects"][0]["description"] = f"Proj {hostile}"
+    full_cli_env["agents"][0]["instructions"] = f"Prompt {hostile}"
+    full_cli_env["skills"][0]["content"] = f"Skill {hostile}"
+
+    res_logs = runner.invoke(app, ["logs", "run_01hfirst"])
+    assert res_logs.exit_code == 0, res_logs.output
+    assert "[/div]" in res_logs.output
+    assert "arr[/]" in res_logs.output
+
+    res_sbx_logs = runner.invoke(app, ["sandbox", "logs", "sbx_01hsession"])
+    assert res_sbx_logs.exit_code == 0, res_sbx_logs.output
+    assert "[/div]" in res_sbx_logs.output
+    assert "[0m]" in res_sbx_logs.output
+
+    for res_type, res_id in [
+        ("seed", "api#12"),
+        ("project", "api"),
+        ("agent", "architect"),
+        ("skill", "pytest-conventions"),
+        ("run", "run_01hfirst"),
+    ]:
+        res_desc = runner.invoke(app, ["describe", res_type, res_id])
+        assert res_desc.exit_code == 0, f"describe {res_type}: {res_desc.output}"
+        assert "[/div]" in res_desc.output
+

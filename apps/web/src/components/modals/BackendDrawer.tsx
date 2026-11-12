@@ -305,9 +305,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
         .map((m) => m.id)
       base.auto_create_agents = autoCreateAgents
       base.set_sdlc_default = setSdlcDefault
-      if (setSdlcDefault) {
-        base.is_sdlc_default = true
-      }
+      base.is_sdlc_default = setSdlcDefault
     } else if (type === 'tools' && provider === 'mcp-stdio') {
       if (commandArgs.trim()) {
         base.command_args = commandArgs.trim()
@@ -449,6 +447,8 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     appId,
     installationId,
     k8sNamespace,
+    k8sSandboxNamespace,
+    k8sNamespaceIsolation,
     runnerImage,
     gitRepositories,
     selectedAgentIds,
@@ -480,11 +480,13 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     )
   }, [authMode, currentBackend, gitAppSetupMode, provider, providerDef.secrets, providerDef.supportsCliOAuth, secrets, type])
 
+  const isInlineCreatedClean = !backendToEdit && Boolean(localBackend) && !isDirty
+
   const isSaveDisabled =
     isSaving ||
     !name.trim() ||
     requiresPersonalModeAck ||
-    (isEditing ? !isDirty : missingRequiredSecret)
+    (isEditing ? !isDirty && !isInlineCreatedClean : missingRequiredSecret)
 
   const cliAuthenticated = Boolean(
     cliAuthSession?.authenticated ||
@@ -544,6 +546,10 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
   }, [cliAuthSession, currentBackend, isOpen, queryClient])
 
   const handleStartCliAuth = async () => {
+    if (requiresPersonalModeAck) {
+      setErrorMessage('Check the Personal Mode acknowledgment above to launch sign-in.')
+      return
+    }
     setErrorMessage(null)
     setIsStartingCliAuth(true)
     try {
@@ -808,18 +814,37 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
         }
       })
 
-      const isCliOAuth =
-        type === 'inference' && providerDef.supportsCliOAuth && authMode === 'cli_oauth'
-      const effectiveEndpoint = isCliOAuth ? null : endpoint.trim() || null
+      const hasEnteredSecrets = Object.keys(nonEmptySecrets).length > 0
+      const isInferenceCliOAuth =
+        type === 'inference' && Boolean(providerDef.supportsCliOAuth) && authMode === 'cli_oauth'
+      const isManifestAuth =
+        type === 'git' &&
+        provider === 'github-app' &&
+        (gitAppSetupMode === 'manifest' ||
+          currentBackend?.config?.auth_mode === 'manifest' ||
+          Boolean(currentBackend?.config?.manifest_status))
+      const isDeviceOAuth =
+        type === 'git' &&
+        ((Boolean(providerDef.supportsCliOAuth) && authMode === 'cli_oauth') ||
+          currentBackend?.config?.auth_mode === 'device_oauth')
+      const effectiveEndpoint = isInferenceCliOAuth ? null : endpoint.trim() || null
 
-      const hasUnsavedConnChanges =
-        !currentBackend ||
-        (effectiveEndpoint || '') !== (currentBackend.endpoint || '') ||
-        (currentBackend.config?.auth_mode || 'api_key') !==
-          (isCliOAuth ? 'cli_oauth' : 'api_key') ||
-        Object.keys(nonEmptySecrets).length > 0
+      const providerOrTypeChanged = Boolean(
+        currentBackend && (type !== currentBackend.type || provider !== currentBackend.provider)
+      )
+      const endpointChanged = Boolean(
+        currentBackend && (effectiveEndpoint || '') !== (currentBackend.endpoint || '')
+      )
+      const useStoredBackendPing = Boolean(
+        currentBackend?.id &&
+          !providerOrTypeChanged &&
+          (isManifestAuth ||
+            isDeviceOAuth ||
+            (isInferenceCliOAuth && !hasEnteredSecrets) ||
+            (!hasEnteredSecrets && !endpointChanged))
+      )
 
-      if (currentBackend && !hasUnsavedConnChanges) {
+      if (currentBackend && useStoredBackendPing) {
         const updated = await api.backends.test(currentBackend.id)
         await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
         if (updated.type === 'git') {
@@ -836,6 +861,18 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
                 : 'unreachable',
           latencyMs: updated.health_latency_ms,
           error: updated.health_error,
+        })
+      } else if (
+        currentBackend &&
+        !providerOrTypeChanged &&
+        !hasEnteredSecrets &&
+        endpointChanged &&
+        currentBackend.secret_keys.length > 0
+      ) {
+        setPingResult({
+          status: 'unreachable',
+          latencyMs: null,
+          error: 'Save your updated endpoint first or re-enter credentials to test the new URL.',
         })
       } else {
         const probed = await api.backends.probe({
@@ -882,6 +919,12 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || isSaving) return
+
+    if (isInlineCreatedClean && localBackend) {
+      onSaved?.(localBackend)
+      onClose()
+      return
+    }
 
     setIsSaving(true)
     setErrorMessage(null)
@@ -1309,12 +1352,15 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
             <div className="flex items-center gap-2.5">
               {isEditing && (
                 <span
-                  className={`text-xs font-medium mr-1 select-none ${isDirty
+                  className={`text-xs font-medium mr-1 select-none ${
+                    isDirty
                       ? 'text-amber-600 dark:text-amber-400'
-                      : 'text-zinc-400 dark:text-zinc-500'
-                    }`}
+                      : isInlineCreatedClean
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-zinc-400 dark:text-zinc-500'
+                  }`}
                 >
-                  {isDirty ? 'Unsaved changes' : 'No changes'}
+                  {isDirty ? 'Unsaved changes' : isInlineCreatedClean ? 'Saved' : 'No changes'}
                 </span>
               )}
               <Button
@@ -1341,9 +1387,11 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
                 <span>
                   {isSaving
                     ? 'Saving...'
-                    : isEditing
-                      ? 'Save Changes'
-                      : 'Register Backend'}
+                    : isInlineCreatedClean
+                      ? 'Done'
+                      : isEditing
+                        ? 'Save Changes'
+                        : 'Register Backend'}
                 </span>
               </Button>
             </div>

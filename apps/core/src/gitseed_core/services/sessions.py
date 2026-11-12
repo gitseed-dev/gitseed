@@ -106,10 +106,21 @@ async def list_sessions(
 
     items: list[dict[str, Any]] = []
 
+    fetch_cap = max(1, offset + limit)
+    sbx_active_vals = [s.value for s in SANDBOX_ACTIVE_STATUSES]
+
     sbx_stmt = select(SandboxSession).where(col(SandboxSession.project_id).in_(pids))
     if scope == "mine":
         sbx_stmt = sbx_stmt.where(SandboxSession.started_by == actor.id)
-    for s in (await session.execute(sbx_stmt.order_by(col(SandboxSession.started_at).desc()).limit(limit))).scalars().all():
+    if state == "running":
+        sbx_stmt = sbx_stmt.where(col(SandboxSession.status).in_(sbx_active_vals))
+    elif state == "ended":
+        sbx_stmt = sbx_stmt.where(col(SandboxSession.status).not_in(sbx_active_vals))
+    for s in (
+        await session.execute(
+            sbx_stmt.order_by(col(SandboxSession.started_at).desc()).limit(fetch_cap)
+        )
+    ).scalars().all():
         p = projects[s.project_id]
         running = s.status in SANDBOX_ACTIVE_STATUSES
         items.append(
@@ -133,10 +144,25 @@ async def list_sessions(
             }
         )
 
+    chat_running_cond = or_(
+        col(AgentSession.status).in_(
+            [AgentSessionStatus.STARTING.value, AgentSessionStatus.RUNNING_TURN.value]
+        ),
+        (col(AgentSession.status) == AgentSessionStatus.IDLE.value)
+        & col(AgentSession.container_id).is_not(None),
+    )
     chat_stmt = select(AgentSession).where(col(AgentSession.project_id).in_(pids))
     if scope == "mine":
         chat_stmt = chat_stmt.where(AgentSession.created_by == actor.id)
-    chats = (await session.execute(chat_stmt.order_by(col(AgentSession.updated_at).desc()).limit(limit))).scalars().all()
+    if state == "running":
+        chat_stmt = chat_stmt.where(chat_running_cond)
+    elif state == "ended":
+        chat_stmt = chat_stmt.where(~chat_running_cond)
+    chats = (
+        await session.execute(
+            chat_stmt.order_by(col(AgentSession.updated_at).desc()).limit(fetch_cap)
+        )
+    ).scalars().all()
     agent_ids = {c.agent_id for c in chats}
     handles = {
         a.id: a.handle
@@ -188,20 +214,64 @@ async def get_session_item(
     session: AsyncSession, actor: User, kind: Literal["chat", "terminal"], session_id: str
 ) -> dict[str, Any]:
     """Resolve one session (and its project) by kind + id, for the `/sessions/<kind>/<id>` page."""
-    owner_pid: str | None = None
+    projects = await _visible_projects(session, actor)
     if kind == "terminal":
         row = await session.get(SandboxSession, session_id)
-        owner_pid = row.project_id if row else None
-    else:
-        chat = await session.get(AgentSession, session_id)
-        owner_pid = chat.project_id if chat else None
-    if owner_pid is None:
+        if row is None or row.project_id not in projects:
+            raise NotFound("Session not found")
+        if row.status in SANDBOX_ACTIVE_STATUSES:
+            await reconcile_sandbox_sessions(session)
+            await session.commit()
+            await session.refresh(row)
+        p = projects[row.project_id]
+        running = row.status in SANDBOX_ACTIVE_STATUSES
+        return {
+            "kind": "terminal",
+            "id": row.id,
+            "project_id": p.id,
+            "project_slug": p.slug,
+            "project_name": p.name,
+            "name": _terminal_name(row),
+            "ref": row.ref,
+            "head_sha": row.head_sha or "",
+            "status": str(row.status),
+            "is_running": running,
+            "started_by": row.started_by,
+            "started_at": row.started_at,
+            "last_activity_at": row.last_activity_at or row.started_at,
+            "expires_at": row.expires_at if running else None,
+            "image": row.image,
+            "pushed_seed_id": row.pushed_seed_id,
+        }
+
+    chat = await session.get(AgentSession, session_id)
+    if chat is None or chat.project_id not in projects:
         raise NotFound("Session not found")
-    projects = await _visible_projects(session, actor)
-    if owner_pid not in projects:
-        raise NotFound("Session not found")
-    items = await list_sessions(session, actor, project_id=owner_pid, limit=300)
-    match = next((i for i in items if i["kind"] == kind and i["id"] == session_id), None)
-    if match is None:
-        raise NotFound("Session not found")
-    return match
+    p = projects[chat.project_id]
+    agent = await session.get(Agent, chat.agent_id) if chat.agent_id else None
+    running = chat.status in (
+        AgentSessionStatus.STARTING,
+        AgentSessionStatus.RUNNING_TURN,
+    ) or (chat.status == AgentSessionStatus.IDLE and bool(chat.container_id))
+    last = chat.updated_at or chat.created_at
+    return {
+        "kind": "chat",
+        "id": chat.id,
+        "project_id": p.id,
+        "project_slug": p.slug,
+        "project_name": p.name,
+        "name": chat.title,
+        "ref": chat.ref,
+        "head_sha": chat.head_sha or "",
+        "status": str(chat.status),
+        "is_running": running,
+        "started_by": chat.created_by,
+        "started_at": chat.created_at,
+        "last_activity_at": last,
+        "expires_at": (last + timedelta(minutes=settings.SESSION_IDLE_MINUTES))
+        if running and last
+        else None,
+        "agent_handle": agent.handle if agent else None,
+        "pushed_seed_id": chat.pushed_seed_id,
+        "context_window": await resolve_session_context_window(chat),
+    }

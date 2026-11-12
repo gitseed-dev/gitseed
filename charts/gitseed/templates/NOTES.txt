@@ -11,6 +11,9 @@ Access the GitSeed Web UI and isolated VS Code Sandbox Origin:
 {{- range $host := .Values.ingress.hosts }}
   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
 {{- end }}
+{{- if .Values.ingress.sandboxHost }}
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.sandboxHost }} (VS Code Sandbox origin)
+{{- end }}
 {{- else }}
   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "gitseed.fullname" . }}-web {{ .Values.web.port }}:{{ .Values.web.port }} {{ .Values.web.sandboxPort }}:{{ .Values.web.sandboxPort }}
   Then open: http://localhost:{{ .Values.web.port }} (VS Code Sandbox origin: {{ .Values.web.sandboxOrigin }})

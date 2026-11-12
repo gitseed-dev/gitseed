@@ -24,8 +24,8 @@ class RunResponse(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cost: Decimal = Decimal("0")
-    cost_enforcement: Literal["enforced", "estimated"] = "enforced"
-    enforcement: Literal["enforced", "estimated"] = "enforced"
+    cost_enforcement: Literal["enforced", "estimated", "unpriced"] = "enforced"
+    enforcement: Literal["enforced", "estimated", "unpriced"] = "enforced"
     enforcement_detail: str | None = None
     output: dict[str, Any] = Field(default_factory=dict)
     exit_code: int | None = None
@@ -46,9 +46,13 @@ class RunResponse(BaseModel):
                 or self.output.get("enforcement")
                 or ""
             ).strip().lower()
-            if raw_enf in ("enforced", "estimated"):
-                resolved: Literal["enforced", "estimated"] = (
-                    "estimated" if raw_enf == "estimated" else "enforced"
+            if raw_enf in ("enforced", "estimated", "unpriced"):
+                resolved: Literal["enforced", "estimated", "unpriced"] = (
+                    "estimated"
+                    if raw_enf == "estimated"
+                    else "unpriced"
+                    if raw_enf == "unpriced"
+                    else "enforced"
                 )
                 self.cost_enforcement = resolved
                 self.enforcement = resolved

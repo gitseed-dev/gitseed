@@ -40,5 +40,17 @@ spec:
                   number: {{ $.Values.web.port }}
           {{- end }}
     {{- end }}
+    {{- if .Values.ingress.sandboxHost }}
+    - host: {{ .Values.ingress.sandboxHost | quote }}
+      http:
+        paths:
+          - path: /api/v1/vscode
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-web
+                port:
+                  number: {{ .Values.web.sandboxPort }}
+    {{- end }}
 {{- end }}
 

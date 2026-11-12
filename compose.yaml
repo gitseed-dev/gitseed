@@ -123,7 +123,7 @@ services:
     environment:
       - EGRESS_ALLOWLIST=${EGRESS_ALLOWLIST:-}
       - EGRESS_ALLOWLIST_EXTRA=${EGRESS_ALLOWLIST_EXTRA:-}
-      - EGRESS_INTERNAL_HOSTS=${EGRESS_INTERNAL_HOSTS:-litellm}
+      - EGRESS_INTERNAL_HOSTS=${EGRESS_INTERNAL_HOSTS:-litellm,api}
       - EGRESS_PROXY_PORT=${EGRESS_PROXY_PORT:-3128}
     security_opt:
       - no-new-privileges:true
@@ -148,6 +148,8 @@ services:
         condition: service_started
       docker-socket-proxy:
         condition: service_started
+      runner-image:
+        condition: service_completed_successfully
     ports:
       - "${API_PORT:-8420}:${API_PORT:-8420}"
     volumes:
@@ -165,6 +167,7 @@ services:
     networks:
       - gitseed-network
       - gitseed-runners
+      - gitseed-sandboxes
       - gitseed-docker-proxy
 
   litellm:

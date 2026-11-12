@@ -25,6 +25,7 @@ from gitseed_core.services import backends as backends_service
 from gitseed_core.services import cli_auth as cli_auth_service
 
 router = APIRouter(prefix="/backends", tags=["Backends"])
+public_router = APIRouter(prefix="/backends", tags=["Backends"])
 
 
 async def _serialize_backend(
@@ -138,7 +139,7 @@ async def start_github_app_manifest(
     )
 
 
-@router.get("/github-app/callback")
+@public_router.get("/github-app/callback")
 async def github_app_manifest_callback(
     code: str,
     state: str,
@@ -151,7 +152,7 @@ async def github_app_manifest_callback(
     return RedirectResponse(url=install_url, status_code=status.HTTP_302_FOUND)
 
 
-@router.get("/github-app/setup", response_class=HTMLResponse)
+@public_router.get("/github-app/setup", response_class=HTMLResponse)
 async def github_app_setup_callback(
     session: DBSession,
     installation_id: str | None = None,

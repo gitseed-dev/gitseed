@@ -17,9 +17,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from gitseed_common.enums import OrgRole, ProjectVisibility, UserStatus
+from sqlmodel import select
 
 from gitseed_core.config import settings
-from gitseed_core.db import get_redis
+from gitseed_core.db import AsyncSessionLocal, get_redis
+from gitseed_core.models.project import Project, ProjectMember
+from gitseed_core.models.user import User
 from gitseed_core.security import decrypt_secrets, encrypt_secrets
 from gitseed_core.services.errors import Invalid
 
@@ -50,19 +54,21 @@ def _derive_device_id(user_id: str, platform: str, push_token: str) -> str:
 
 
 async def _load_all_records() -> dict[str, dict[str, Any]]:
-    records: dict[str, dict[str, Any]] = dict(_MEMORY_PUSH_DEVICES)
     try:
         redis = get_redis()
         raw = await redis.get(_PUSH_DEVICES_REDIS_KEY)
-        if raw:
+        if raw is not None:
             parsed = json.loads(str(raw))
             if isinstance(parsed, dict):
-                for k, v in parsed.items():
-                    if isinstance(v, dict):
-                        records[str(k)] = v
+                loaded = {
+                    str(k): v for k, v in parsed.items() if isinstance(v, dict)
+                }
+                _MEMORY_PUSH_DEVICES.clear()
+                _MEMORY_PUSH_DEVICES.update(loaded)
+                return loaded
     except Exception:
         pass
-    return records
+    return dict(_MEMORY_PUSH_DEVICES)
 
 
 async def _save_all_records(records: dict[str, dict[str, Any]]) -> None:
@@ -150,6 +156,49 @@ def should_push_notify_event(envelope: dict[str, Any]) -> bool:
     return ev_type in PUSH_WORTHY_EVENT_TYPES
 
 
+async def _resolve_authorized_project_user_ids(
+    project_id: str | None,
+) -> set[str] | None:
+    """Return authorized user IDs when `project_id` resolves to a PRIVATE project, else `None`."""
+    clean_pid = (project_id or "").strip()
+    if not clean_pid:
+        return None
+    try:
+        async with AsyncSessionLocal() as session:
+            project = await session.get(Project, clean_pid)
+            if project is None or project.visibility != ProjectVisibility.PRIVATE:
+                return None
+            member_ids = set(
+                (
+                    await session.execute(
+                        select(ProjectMember.user_id).where(
+                            ProjectMember.project_id == clean_pid
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            admin_ids = set(
+                (
+                    await session.execute(
+                        select(User.id).where(
+                            User.org_role == OrgRole.ADMIN,
+                            User.status == UserStatus.ACTIVE,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            allowed = {str(uid) for uid in (member_ids | admin_ids) if uid}
+            if project.created_by:
+                allowed.add(str(project.created_by))
+            return allowed
+    except Exception:
+        return None
+
+
 async def dispatch_push_relay(envelope: dict[str, Any]) -> bool:
     """Best-effort dispatch of a push-worthy event to `settings.MOBILE_PUSH_RELAY_URL`."""
     relay_url = (getattr(settings, "MOBILE_PUSH_RELAY_URL", "") or "").strip()
@@ -160,8 +209,16 @@ async def dispatch_push_relay(envelope: dict[str, Any]) -> bool:
     if not records:
         return False
 
+    allowed_user_ids = await _resolve_authorized_project_user_ids(
+        str(envelope.get("project_id") or "") or None
+    )
+
     targets: list[dict[str, str | None]] = []
     for rec in records.values():
+        if allowed_user_ids is not None:
+            rec_uid = str(rec.get("user_id") or "")
+            if rec_uid not in allowed_user_ids:
+                continue
         enc_b64 = rec.get("token_encrypted")
         if not isinstance(enc_b64, str) or not enc_b64:
             continue

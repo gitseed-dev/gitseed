@@ -6,6 +6,7 @@ from gitseed_core.api.v1.agent_sessions import pty_router as agent_sessions_pty_
 from gitseed_core.api.v1.agent_sessions import router as agent_sessions_router
 from gitseed_core.api.v1.agents import router as agents_router
 from gitseed_core.api.v1.auth import router as auth_router
+from gitseed_core.api.v1.backends import public_router as backends_public_router
 from gitseed_core.api.v1.backends import router as backends_router
 from gitseed_core.api.v1.events import router as events_router
 from gitseed_core.api.v1.local_git import router as local_git_router
@@ -50,6 +51,8 @@ api_v1_router.include_router(vscode_router)
 api_v1_router.include_router(local_git_router)
 # Governance receipts (/receipts/public-key is public; /seeds/{seed_id}/receipt requires CurrentUser)
 api_v1_router.include_router(receipts_router)
+# GitHub App manifest & setup browser redirects verify cryptographic state / App JWT ownership
+api_v1_router.include_router(backends_public_router)
 
 # All other v1 routers require authentication on every request
 _auth_required = [Depends(get_current_user)]

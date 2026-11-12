@@ -5,6 +5,10 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $EnvExample = if ($env:GITSEED_ENV_EXAMPLE) { $env:GITSEED_ENV_EXAMPLE } else { Join-Path $RepoRoot ".env.example" }
 $EnvFile = if ($env:GITSEED_ENV_FILE) { $env:GITSEED_ENV_FILE } else { Join-Path $RepoRoot ".env" }
+$EnvDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($EnvFile))
+$WorkspacesDir = if ($env:GITSEED_WORKSPACES_DIR) { $env:GITSEED_WORKSPACES_DIR } else { Join-Path $EnvDir "data/workspaces" }
+
+New-Item -ItemType Directory -Force -Path $WorkspacesDir | Out-Null
 
 function New-RandomHex([int]$ByteCount = 32) {
     $bytes = New-Object byte[] $ByteCount

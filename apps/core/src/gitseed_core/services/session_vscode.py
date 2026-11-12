@@ -237,6 +237,66 @@ def verify_vscode_token(
 _derive_vscode_token = mint_vscode_token
 
 
+def derive_vscode_upstream_token(session_key: str, container_id: str) -> str:
+    """Derive a per-container connection token gating `openvscode-server` on the bridge network."""
+    return hmac.new(
+        settings.GITSEED_SECRET_KEY.encode("utf-8"),
+        f"vscode-upstream:{session_key}:{container_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()[:48]
+
+
+def _append_upstream_vscode_token(target_path: str, upstream_token: str) -> str:
+    """Append `tkn=<upstream_token>` to an upstream `openvscode-server` path if not present."""
+    if not upstream_token:
+        return target_path
+    sep = "&" if "?" in target_path else "?"
+    if "tkn=" in target_path.split("?", 1)[-1]:
+        return target_path
+    return f"{target_path}{sep}tkn={quote(upstream_token, safe='')}"
+
+
+def _build_vscode_frame_headers(existing_headers: dict[str, str]) -> dict[str, str]:
+    """Build clickjacking & MIME-isolation headers compatible with `SANDBOX_ORIGIN` framing."""
+    headers_out: dict[str, str] = {"X-Content-Type-Options": "nosniff"}
+    has_csp = any(k.lower() == "content-security-policy" for k in existing_headers)
+    sandbox_origin_raw = (getattr(settings, "SANDBOX_ORIGIN", "") or "").strip()
+    if not sandbox_origin_raw:
+        headers_out["X-Frame-Options"] = "SAMEORIGIN"
+        if not has_csp:
+            headers_out["Content-Security-Policy"] = "frame-ancestors 'self'"
+        return headers_out
+
+    # Cross-origin SANDBOX_ORIGIN mode: omit X-Frame-Options: SAMEORIGIN (which blocks cross-origin
+    # iframes from PUBLIC_WEB_URL) and restrict framing via CSP frame-ancestors instead.
+    ancestors: list[str] = ["'self'"]
+    raw_candidates: list[str] = [
+        str(getattr(settings, "PUBLIC_WEB_URL", "") or ""),
+        *str(getattr(settings, "CORS_ORIGINS", "") or "").split(","),
+        *str(getattr(settings, "ALLOWED_ORIGINS", "") or "").split(","),
+    ]
+    for raw in raw_candidates:
+        cand = raw.strip().rstrip("/")
+        if not cand or cand == "*":
+            continue
+        parsed = urlsplit(cand)
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+        if origin not in ancestors:
+            ancestors.append(origin)
+        host_only, sep, port = parsed.netloc.lower().partition(":")
+        if host_only in ("localhost", "127.0.0.1"):
+            alt_host = "127.0.0.1" if host_only == "localhost" else "localhost"
+            alt_origin = f"{parsed.scheme.lower()}://{alt_host}{sep}{port}"
+            if alt_origin not in ancestors:
+                ancestors.append(alt_origin)
+
+    if not has_csp:
+        headers_out["Content-Security-Policy"] = f"frame-ancestors {' '.join(ancestors)}"
+    return headers_out
+
+
 async def _persist_vscode_state_redis(state: VsCodeSessionState) -> None:
     """Best-effort persistence of VS Code proxy metadata in Valkey for multi-worker routing."""
     try:
@@ -492,6 +552,7 @@ async def _start_sidecar_vscode(
     network_name: str,
     token: str,
     base_path: str,
+    upstream_token: str = "",
     source_container_id: str | None = None,
     has_ws_volume: bool = True,
 ) -> str:
@@ -499,13 +560,17 @@ async def _start_sidecar_vscode(
     sidecar_name = f"gitseed-vscode-{session_id.lower()}"
     ws_vol = session_workspace_volume_name(session_id)
     await client.delete(f"{base_url}/containers/{quote(sidecar_name, safe='')}?force=true")
-    cmd = [
+    server_args = [
         f"{VSCODE_MOUNT_PATH}/bin/openvscode-server",
         "--host",
         "0.0.0.0",
         "--port",
         str(VSCODE_INTERNAL_PORT),
-        "--without-connection-token",
+        *(
+            ["--connection-token-file", "/tmp/.gitseed-vscode-tkn"]
+            if upstream_token
+            else ["--without-connection-token"]
+        ),
         "--server-base-path",
         base_path,
         "--user-data-dir",
@@ -529,10 +594,22 @@ async def _start_sidecar_vscode(
         host_cfg["Binds"].insert(0, f"{ws_vol}:/workspace")
     elif source_container_id:
         host_cfg["VolumesFrom"] = [source_container_id]
+    if upstream_token:
+        quoted_args = " ".join(f"'{a.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'" for a in server_args)
+        entrypoint = [
+            "sh",
+            "-c",
+            f"umask 077 && printf '%s' \"$GITSEED_VSCODE_TKN\" > /tmp/.gitseed-vscode-tkn && unset GITSEED_VSCODE_TKN && exec {quoted_args}",
+        ]
+        env_list = [f"GITSEED_VSCODE_TKN={upstream_token}"]
+    else:
+        entrypoint = server_args
+        env_list = []
     payload: dict[str, Any] = {
         "Image": DEFAULT_OPENVSCODE_IMAGE,
-        "Entrypoint": cmd,
+        "Entrypoint": entrypoint,
         "Cmd": [],
+        **({"Env": env_list} if env_list else {}),
         "WorkingDir": "/workspace",
         "Labels": {
             "app.gitseed.managed": "true",
@@ -693,6 +770,8 @@ async def ensure_session_vscode(
 ) -> dict[str, Any]:
     """Start `openvscode-server` on demand for a session and return its authenticated launch URL."""
     enforce_vscode_production_origin()
+    if is_k8s_backend(backend):
+        raise Invalid("Embedded VS Code currently requires a Docker compute backend")
     resolved_key = session_key or f"{'agent' if kind == 'chat' else 'sandbox'}:{session_id}"
     resolved_theme = "light" if (theme or "").strip().lower() == "light" else "dark"
     info = await _inspect_docker_container(backend, container_id)
@@ -736,6 +815,7 @@ async def ensure_session_vscode(
             }
 
     token = mint_vscode_token(resolved_key, container_id)
+    upstream_token = derive_vscode_upstream_token(resolved_key, container_id)
     base_path = f"/api/v1/vscode/{resolved_key}/{token}"
 
     client, base_url = _docker_client_for_backend(backend)
@@ -778,11 +858,9 @@ async def ensure_session_vscode(
                 head_sha=head_sha,
                 theme=resolved_theme,
             )
-            # Start openvscode-server directly inside the session container so language servers,
-            # debuggers, and the integrated terminal share the session's exact environment.
-            # Notice we bind strictly to 127.0.0.1 and use --without-connection-token internally
-            # because our reverse proxy (/api/v1/vscode/{session_key}/{token}/...) already enforces
-            # constant-time cryptographic token verification on every HTTP and WebSocket request.
+            # Start openvscode-server inside the session container gated by a per-session
+            # --connection-token-file so neighboring containers on shared Docker bridge networks
+            # cannot connect to port 31337 without our reverse proxy's upstream token.
             kill_existing_js = (
                 f"{VSCODE_MOUNT_PATH}/node -e '"
                 "const fs=require(\"fs\");"
@@ -795,13 +873,14 @@ async def ensure_session_vscode(
             launch_cmd = (
                 kill_existing_js
                 + f"mkdir -p {VSCODE_DATA_ROOT}/data {VSCODE_DATA_ROOT}/extensions && "
+                f"(umask 077 && printf '%s' '{upstream_token}' > {VSCODE_DATA_ROOT}/conn.token) && "
                 f"if [ -d {VSCODE_MOUNT_PATH}/bundled-extensions ]; then "
                 f"  cp -rn {VSCODE_MOUNT_PATH}/bundled-extensions/* {VSCODE_DATA_ROOT}/extensions/ 2>/dev/null || true; "
                 f"fi && "
                 f"nohup {VSCODE_MOUNT_PATH}/bin/openvscode-server "
                 f"--host 0.0.0.0 "
                 f"--port {VSCODE_INTERNAL_PORT} "
-                f"--without-connection-token "
+                f"--connection-token-file {VSCODE_DATA_ROOT}/conn.token "
                 f"--server-base-path {base_path} "
                 f"--user-data-dir {VSCODE_DATA_ROOT}/data "
                 f"--extensions-dir {VSCODE_DATA_ROOT}/extensions "
@@ -858,6 +937,7 @@ async def ensure_session_vscode(
                 network_name=network_name,
                 token=token,
                 base_path=base_path,
+                upstream_token=upstream_token,
                 source_container_id=container_id,
                 has_ws_volume=True,
             )
@@ -1246,10 +1326,13 @@ async def proxy_vscode_http(
         return redir_slash
     if request.url.query:
         target_path = f"{target_path}?{request.url.query}"
+    upstream_tkn = derive_vscode_upstream_token(session_key, state.container_id)
+    target_path = _append_upstream_vscode_token(target_path, upstream_tkn)
 
     body = await request.body()
     upstream_req_headers: dict[str, str] = {
         "Host": request.headers.get("host", "localhost"),
+        "Cookie": f"vscode-tkn={upstream_tkn}",
     }
     for k, v in request.headers.items():
         if k.lower() not in _STRIPPED_UPSTREAM_REQUEST_HEADERS:
@@ -1289,6 +1372,7 @@ async def proxy_vscode_http(
                 f"{request.method} {target_path} HTTP/1.1",
                 f"Host: {request.headers.get('host', 'localhost')}",
                 "Connection: close",
+                f"Cookie: vscode-tkn={upstream_tkn}",
                 f"Content-Length: {len(body)}",
             ]
             for k, v in request.headers.items():
@@ -1347,10 +1431,7 @@ async def proxy_vscode_http(
                 pass
 
     # Isolate origin capabilities, block MIME sniffing & prevent embedding in foreign frames
-    resp_headers["X-Frame-Options"] = "SAMEORIGIN"
-    resp_headers["X-Content-Type-Options"] = "nosniff"
-    if "Content-Security-Policy" not in resp_headers and "content-security-policy" not in resp_headers:
-        resp_headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+    resp_headers.update(_build_vscode_frame_headers(resp_headers))
 
     content_type = (resp_headers.get("Content-Type") or resp_headers.get("content-type") or "").lower()
     if not clean_sub and "text/html" in content_type and content_bytes:
@@ -1491,6 +1572,8 @@ async def proxy_vscode_websocket(
     target_path = f"{base_path}/{clean_sub}" if clean_sub else f"{base_path}/"
     if websocket.url.query:
         target_path = f"{target_path}?{websocket.url.query}"
+    upstream_tkn = derive_vscode_upstream_token(session_key, state.container_id)
+    target_path = _append_upstream_vscode_token(target_path, upstream_tkn)
 
     # Connect to openvscode-server's WebSocket endpoint via direct container/Pod IP when reachable,
     # falling back to the raw Docker exec TCP bridge when on an isolated network.
@@ -1515,6 +1598,7 @@ async def proxy_vscode_websocket(
         f"Host: {websocket.headers.get('host', '127.0.0.1')}",
         "Upgrade: websocket",
         "Connection: Upgrade",
+        f"Cookie: vscode-tkn={upstream_tkn}",
         f"Sec-WebSocket-Key: {ws_key}",
         "Sec-WebSocket-Version: 13",
     ]

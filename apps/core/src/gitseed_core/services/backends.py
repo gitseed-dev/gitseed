@@ -67,7 +67,11 @@ def _validate_provider_and_secrets(
 
     cleaned = {k.strip(): v.strip() for k, v in secrets_map.items() if v and v.strip()}
 
-    unknown = sorted(set(cleaned.keys()) - spec.allowed_secrets)
+    allowed_secret_keys = set(spec.allowed_secrets)
+    if backend_type == BackendType.GIT and provider in ("github", "github-enterprise"):
+        allowed_secret_keys.add("_device_code")
+
+    unknown = sorted(set(cleaned.keys()) - allowed_secret_keys)
     if unknown:
         allowed_keys = ", ".join(sorted(spec.allowed_secrets)) or "none"
         raise Invalid(
@@ -92,7 +96,9 @@ def _validate_provider_and_secrets(
 
 def get_secret_keys(backend: Backend) -> list[str]:
     """Return the sorted names of secrets configured on a backend (never their values)."""
-    return sorted(decrypt_secrets(backend.secrets_encrypted).keys())
+    return sorted(
+        k for k in decrypt_secrets(backend.secrets_encrypted) if not k.startswith("_")
+    )
 
 
 async def get_allowed_agent_ids(session: AsyncSession, backend_id: str) -> list[str]:
@@ -686,6 +692,12 @@ async def _probe_backend(
             )
 
     if backend.type == BackendType.GIT:
+        if provider == "local":
+            from gitseed_core.services.local_git import local_repos_root
+
+            root = local_repos_root()
+            root.mkdir(parents=True, exist_ok=True)
+            return BackendHealth.HEALTHY, None
         token = await resolve_git_backend_token(backend, secrets_map)
         headers = {}
         if provider in ("github", "github-enterprise", "github-app"):
@@ -888,6 +900,21 @@ async def _fetch_git_repositories(
     """Fetch accessible repositories from a Git backend provider."""
     endpoint = (backend.endpoint or "").strip().rstrip("/")
     provider = backend.provider.lower()
+    if provider == "local":
+        from gitseed_core.services.local_git import local_repos_root
+
+        root = local_repos_root()
+        out: list[dict[str, Any]] = []
+        for p in sorted(root.glob("*.git")):
+            slug = p.name[:-4] if p.name.endswith(".git") else p.name
+            out.append(
+                {
+                    "full_name": f"local/{slug}",
+                    "default_branch": "main",
+                    "private": True,
+                }
+            )
+        return out
     token = await resolve_git_backend_token(backend, secrets_map)
     headers: dict[str, str] = {}
 
@@ -1072,11 +1099,6 @@ async def create_remote_repository(
     if backend.type != BackendType.GIT:
         raise Invalid("Remote repository creation is only supported for Git backends")
 
-    secrets_map = decrypt_secrets(backend.secrets_encrypted)
-    token = await resolve_git_backend_token(backend, secrets_map, write_access=True)
-    if not token:
-        raise Invalid("Git backend does not have an access token configured")
-
     raw_name = name.strip().strip("/")
     if not raw_name:
         raise Invalid("Repository name is required")
@@ -1096,138 +1118,146 @@ async def create_remote_repository(
     provider = backend.provider.lower()
     created_repo: dict[str, Any] | None = None
 
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-        if provider in ("github", "github-enterprise", "github-app"):
-            base = endpoint or "https://api.github.com"
-            headers = {
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {token}",
-            }
-            payload = {
-                "name": repo_slug,
-                "description": description.strip(),
-                "private": private,
-                "auto_init": auto_init,
-            }
+    if provider == "local":
+        from gitseed_core.services.local_git import ensure_local_bare_repo
 
-            target_url = f"{base}/user/repos"
-            if owner_prefix:
-                user_resp = await client.get(f"{base}/user", headers=headers)
-                user_login = (
-                    str((user_resp.json() or {}).get("login") or "").strip()
-                    if user_resp.status_code == 200
-                    else ""
-                )
-                if user_login and user_login.lower() != owner_prefix.lower():
-                    target_url = f"{base}/orgs/{owner_prefix}/repos"
+        ensure_local_bare_repo(repo_slug, repo_slug, default_branch="main")
+        created_repo = {
+            "full_name": f"local/{repo_slug}",
+            "default_branch": "main",
+            "private": True,
+            "web_url": f"local://local/{repo_slug}",
+        }
+    else:
+        secrets_map = decrypt_secrets(backend.secrets_encrypted)
+        token = await resolve_git_backend_token(backend, secrets_map, write_access=True)
+        if not token:
+            raise Invalid("Git backend does not have an access token configured")
 
-            resp = await client.post(target_url, headers=headers, json=payload)
-            if resp.status_code == 404 and target_url != f"{base}/user/repos":
-                resp = await client.post(
-                    f"{base}/user/repos", headers=headers, json=payload
-                )
-
-            if 200 <= resp.status_code < 300:
-                data = resp.json()
-                created_repo = {
-                    "full_name": str(data.get("full_name") or f"{owner_prefix or 'user'}/{repo_slug}"),
-                    "default_branch": str(data.get("default_branch") or "main"),
-                    "private": bool(data.get("private", private)),
-                    "web_url": str(data.get("html_url") or ""),
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            if provider in ("github", "github-enterprise", "github-app"):
+                base = endpoint or "https://api.github.com"
+                headers = {
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {token}",
                 }
-            else:
-                err_msg = ""
-                try:
-                    err_json = resp.json()
-                    if isinstance(err_json, dict):
-                        err_msg = str(err_json.get("message") or "")
-                        errors_list = err_json.get("errors")
-                        if isinstance(errors_list, list) and errors_list:
-                            first_err = errors_list[0]
-                            if isinstance(first_err, dict) and first_err.get("message"):
-                                err_msg = f"{err_msg}: {first_err['message']}"
-                except Exception:
-                    pass
-                raise Invalid(
-                    f"GitHub API could not create repository (HTTP {resp.status_code}"
-                    f"{f': {err_msg}' if err_msg else ''}). If your token is a fine-grained PAT "
-                    "without Administration: Write permission, click 'New on GitHub' to create it "
-                    "in your browser and then click 'Sync repositories'."
-                )
-
-        elif provider == "gitlab":
-            base = endpoint or "https://gitlab.com"
-            api_base = base if base.endswith("/api/v4") else f"{base}/api/v4"
-            headers = {"PRIVATE-TOKEN": token}
-            payload = {
-                "name": repo_slug,
-                "path": repo_slug,
-                "description": description.strip(),
-                "visibility": "private" if private else "public",
-                "initialize_with_readme": auto_init,
-            }
-            resp = await client.post(f"{api_base}/projects", headers=headers, json=payload)
-            if 200 <= resp.status_code < 300:
-                data = resp.json()
-                created_repo = {
-                    "full_name": str(data.get("path_with_namespace") or repo_slug),
-                    "default_branch": str(data.get("default_branch") or "main"),
-                    "private": data.get("visibility") != "public",
-                    "web_url": str(data.get("web_url") or ""),
-                }
-            else:
-                raise Invalid(
-                    f"GitLab API could not create repository (HTTP {resp.status_code}). "
-                    "You can click 'New on GitLab' to create it in your browser and then click 'Sync repositories'."
-                )
-
-        elif provider == "bitbucket":
-            base = endpoint or "https://api.bitbucket.org/2.0"
-            api_base = base if base.endswith("/2.0") else f"{base}/2.0"
-            headers = {"Authorization": f"Bearer {token}"}
-            workspace = owner_prefix
-            if not workspace:
-                ws_resp = await client.get(f"{api_base}/user", headers=headers)
-                if ws_resp.status_code == 200 and isinstance(ws_resp.json(), dict):
-                    workspace = str(ws_resp.json().get("username") or "").strip()
-            if not workspace:
-                raise Invalid("Specify workspace/repo-name for Bitbucket repository creation")
-            resp = await client.post(
-                f"{api_base}/repositories/{workspace}/{repo_slug}",
-                headers=headers,
-                json={
-                    "scm": "git",
-                    "is_private": private,
+                payload = {
+                    "name": repo_slug,
                     "description": description.strip(),
-                },
-            )
-            if 200 <= resp.status_code < 300:
-                data = resp.json()
-                created_repo = {
-                    "full_name": str(data.get("full_name") or f"{workspace}/{repo_slug}"),
-                    "default_branch": "main",
-                    "private": bool(data.get("is_private", private)),
-                    "web_url": str(
-                        ((data.get("links") or {}).get("html") or {}).get("href") or ""
-                    ),
+                    "private": private,
+                    "auto_init": auto_init,
                 }
-            else:
-                raise Invalid(
-                    f"Bitbucket API could not create repository (HTTP {resp.status_code}). "
-                    "You can click 'New on Bitbucket' to create it in your browser and then click 'Sync repositories'."
-                )
-        elif provider == "local":
-            from gitseed_core.services.local_git import ensure_local_bare_repo
 
-            ensure_local_bare_repo(repo_slug, repo_slug, default_branch="main")
-            created_repo = {
-                "full_name": f"local/{repo_slug}",
-                "default_branch": "main",
-                "private": True,
-                "web_url": f"local://local/{repo_slug}",
-            }
-        else:
-            raise Invalid(f"Unsupported Git provider '{provider}' for remote creation")
+                target_url = f"{base}/user/repos"
+                if owner_prefix:
+                    user_resp = await client.get(f"{base}/user", headers=headers)
+                    user_login = (
+                        str((user_resp.json() or {}).get("login") or "").strip()
+                        if user_resp.status_code == 200
+                        else ""
+                    )
+                    if user_login and user_login.lower() != owner_prefix.lower():
+                        target_url = f"{base}/orgs/{owner_prefix}/repos"
+
+                resp = await client.post(target_url, headers=headers, json=payload)
+                if resp.status_code == 404 and target_url != f"{base}/user/repos":
+                    resp = await client.post(
+                        f"{base}/user/repos", headers=headers, json=payload
+                    )
+
+                if 200 <= resp.status_code < 300:
+                    data = resp.json()
+                    created_repo = {
+                        "full_name": str(data.get("full_name") or f"{owner_prefix or 'user'}/{repo_slug}"),
+                        "default_branch": str(data.get("default_branch") or "main"),
+                        "private": bool(data.get("private", private)),
+                        "web_url": str(data.get("html_url") or ""),
+                    }
+                else:
+                    err_msg = ""
+                    try:
+                        err_json = resp.json()
+                        if isinstance(err_json, dict):
+                            err_msg = str(err_json.get("message") or "")
+                            errors_list = err_json.get("errors")
+                            if isinstance(errors_list, list) and errors_list:
+                                first_err = errors_list[0]
+                                if isinstance(first_err, dict) and first_err.get("message"):
+                                    err_msg = f"{err_msg}: {first_err['message']}"
+                    except Exception:
+                        pass
+                    raise Invalid(
+                        f"GitHub API could not create repository (HTTP {resp.status_code}"
+                        f"{f': {err_msg}' if err_msg else ''}). If your token is a fine-grained PAT "
+                        "without Administration: Write permission, click 'New on GitHub' to create it "
+                        "in your browser and then click 'Sync repositories'."
+                    )
+
+            elif provider == "gitlab":
+                base = endpoint or "https://gitlab.com"
+                api_base = base if base.endswith("/api/v4") else f"{base}/api/v4"
+                headers = {"PRIVATE-TOKEN": token}
+                payload = {
+                    "name": repo_slug,
+                    "path": repo_slug,
+                    "description": description.strip(),
+                    "private": None,
+                    "visibility": "private" if private else "public",
+                    "initialize_with_readme": auto_init,
+                }
+                payload.pop("private", None)
+                resp = await client.post(f"{api_base}/projects", headers=headers, json=payload)
+                if 200 <= resp.status_code < 300:
+                    data = resp.json()
+                    created_repo = {
+                        "full_name": str(data.get("path_with_namespace") or repo_slug),
+                        "default_branch": str(data.get("default_branch") or "main"),
+                        "private": data.get("visibility") != "public",
+                        "web_url": str(data.get("web_url") or ""),
+                    }
+                else:
+                    raise Invalid(
+                        f"GitLab API could not create repository (HTTP {resp.status_code}). "
+                        "You can click 'New on GitLab' to create it in your browser and then click 'Sync repositories'."
+                    )
+
+            elif provider == "bitbucket":
+                base = endpoint or "https://api.bitbucket.org/2.0"
+                api_base = base if base.endswith("/2.0") else f"{base}/2.0"
+                headers = {"Authorization": f"Bearer {token}"}
+                workspace = owner_prefix
+                if not workspace:
+                    ws_resp = await client.get(f"{api_base}/user", headers=headers)
+                    if ws_resp.status_code == 200 and isinstance(ws_resp.json(), dict):
+                        workspace = str(ws_resp.json().get("username") or "").strip()
+                if not workspace:
+                    raise Invalid("Specify workspace/repo-name for Bitbucket repository creation")
+                resp = await client.post(
+                    f"{api_base}/repositories/{workspace}/{repo_slug}",
+                    headers=headers,
+                    json={
+                        "scm": "git",
+                        "is_private": private,
+                        "description": description.strip(),
+                    },
+                )
+                if 200 <= resp.status_code < 300:
+                    data = resp.json()
+                    created_repo = {
+                        "full_name": str(data.get("full_name") or f"{workspace}/{repo_slug}"),
+                        "default_branch": "main",
+                        "private": bool(data.get("is_private", private)),
+                        "web_url": str(
+                            ((data.get("links") or {}).get("html") or {}).get("href") or ""
+                        ),
+                    }
+                else:
+                    raise Invalid(
+                        f"Bitbucket API could not create repository (HTTP {resp.status_code}). "
+                        "You can click 'New on Bitbucket' to create it in your browser and then click 'Sync repositories'."
+                    )
+            else:
+                raise Invalid(f"Unsupported Git provider '{provider}' for remote creation")
 
     cfg = dict(backend.config or {})
     existing_repos = cfg.get("repositories")
@@ -1694,6 +1724,9 @@ async def complete_github_app_manifest_callback(
     state: str,
 ) -> tuple[Backend, str]:
     """Exchange GitHub's temporary manifest `code` for the App ID, PEM key, and webhook secret."""
+    clean_state = (state or "").strip()
+    if not clean_state:
+        raise NotFound("No pending GitHub App setup matched this state token")
     stmt = select(Backend).where(
         Backend.type == BackendType.GIT,
         Backend.provider == "github-app",
@@ -1702,7 +1735,8 @@ async def complete_github_app_manifest_callback(
     target: Backend | None = None
     for b in candidates:
         cfg = b.config or {}
-        if cfg.get("manifest_state") == state:
+        saved_state = str(cfg.get("manifest_state") or "").strip()
+        if saved_state and py_secrets.compare_digest(saved_state, clean_state):
             target = b
             break
     if target is None:
@@ -1853,9 +1887,11 @@ async def complete_github_app_setup(
     candidates = list((await session.execute(stmt)).scalars().all())
     target: Backend | None = None
 
-    if state:
+    clean_state = (state or "").strip()
+    if clean_state:
         for b in candidates:
-            if (b.config or {}).get("manifest_state") == state:
+            saved_state = str((b.config or {}).get("manifest_state") or "").strip()
+            if saved_state and py_secrets.compare_digest(saved_state, clean_state):
                 target = b
                 break
 
@@ -1884,13 +1920,6 @@ async def complete_github_app_setup(
                         break
             except Exception:
                 continue
-
-    if target is None and not state and candidates:
-        awaiting = [
-            b for b in candidates if (b.config or {}).get("manifest_status") == "awaiting_install"
-        ]
-        if len(awaiting) == 1:
-            target = awaiting[0]
 
     if target is None:
         return None
@@ -2228,9 +2257,11 @@ async def provision_sdlc_agents_for_backend(
     # 1. Ensure `@coordinator` assistant agent exists (and uses the primary runtime when switching defaults)
     coordinator = (
         await session.execute(
-            select(Agent).where(Agent.handle == "coordinator")
+            select(Agent)
+            .where(Agent.handle == "coordinator")
+            .order_by(col(Agent.archived_at).is_not(None).asc(), col(Agent.created_at).asc())
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
     if coordinator is None:
         coordinator = Agent(
             name="Coordinator",
@@ -2269,9 +2300,11 @@ async def provision_sdlc_agents_for_backend(
         # Check if an agent with the target handle already exists
         target_agent = (
             await session.execute(
-                select(Agent).where(Agent.handle == target_handle)
+                select(Agent)
+                .where(Agent.handle == target_handle)
+                .order_by(col(Agent.archived_at).is_not(None).asc(), col(Agent.created_at).asc())
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
 
         # If switching primary provider during onboarding, check if the currently assigned stage agent has 0 runs
         # so we can cleanly rename/re-runtime it in-place rather than leaving unused agents behind

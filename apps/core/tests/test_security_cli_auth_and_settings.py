@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -33,6 +35,7 @@ from gitseed_core.security import (
     verify_password,
 )
 from gitseed_core.services.cli_auth import (
+    _build_pty_auth_script,
     _extract_auth_url_and_code,
     _strip_ansi,
     submit_cli_auth_code,
@@ -346,6 +349,59 @@ class TestCliAuthParsingAndSSRF:
             == "https://accounts.google.com/o/oauth2/v2/auth?client_id=123&scope=openid"
         )
         assert code3 == "9876-WXYZ"
+
+        # 4. Wide-PTY (1000-col) TUI box padding is collapsed cleanly
+        wide_box = (
+            " ╭" + ("─" * 996) + "╮\r\n"
+            + " │   2. Trust parent folder (home)" + (" " * 964) + "│\r\n"
+            + " ╰" + ("─" * 996) + "╯\r\n"
+        )
+        cleaned_box = _strip_ansi(wide_box)
+        assert " " * 20 not in cleaned_box
+        assert "Trust parent folder (home)  │" in cleaned_box
+
+    def test_build_pty_auth_script_antigravity_and_gemini_bypass_folder_trust(
+        self, tmp_path: Any
+    ) -> None:
+        for prov in ("antigravity", "gemini", "anthropic", "openai", "xai"):
+            script = _build_pty_auth_script(prov)
+            compile(script, f"<pty_auth_{prov}>", "exec")
+
+        agy_script = _build_pty_auth_script("antigravity")
+        assert "trustedFolders.json" in agy_script
+        assert '"folderTrust": {"enabled": False}' in agy_script
+        assert '"selectedType": "oauth-personal"' in agy_script
+        assert '"onboardingComplete": True' in agy_script
+        assert "trustedWorkspaces" in agy_script
+
+        # Execute the config-prepopulation block against a temporary home directory
+        setup_part = agy_script.split('if provider == "antigravity":\n    if shutil.which("agy"):')[0]
+        setup_part = setup_part.replace('Path("/home/runner")', f"Path({str(tmp_path)!r})")
+        setup_part = setup_part.replace('"/tmp/.gitseed_stdin"', f"{str(tmp_path / 'stdin_fifo')!r}")
+        setup_part = setup_part.replace("os.mkfifo(fifo_path)", "Path(fifo_path).touch()")
+        setup_part = setup_part.replace(
+            "import fcntl, os, pty, select, shutil, struct, subprocess, sys, termios, time, json",
+            "import json, os",
+        )
+        exec(setup_part, {"Path": Path})  # noqa: S102
+
+        gem_settings = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
+        assert gem_settings["selectedAuthType"] == "oauth-personal"
+        assert gem_settings["security"]["auth"]["selectedType"] == "oauth-personal"
+        assert gem_settings["security"]["folderTrust"]["enabled"] is False
+        assert gem_settings["ui"]["theme"] == "Default"
+
+        trusted_folders = json.loads(
+            (tmp_path / ".gemini" / "trustedFolders.json").read_text()
+        )
+        assert trusted_folders[str(tmp_path)] == "TRUST_FOLDER"
+        assert trusted_folders["/workspace"] == "TRUST_FOLDER"
+
+        agy_settings = json.loads(
+            (tmp_path / ".gemini" / "antigravity-cli" / "settings.json").read_text()
+        )
+        assert agy_settings["onboardingComplete"] is True
+        assert str(tmp_path) in agy_settings["trustedWorkspaces"]
 
     @pytest.mark.asyncio
     async def test_submit_cli_auth_code_ssrf_protection_localhost_vs_evil_domain(

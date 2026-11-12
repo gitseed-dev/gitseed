@@ -17,6 +17,14 @@ import type { SessionListItem } from '../../types'
 
 const HEIGHT_KEY = 'gitseed.sessionDock.height'
 const MIN_HEIGHT = 200
+const INACTIVE_DOCK_STATUSES = new Set([
+  'sleeping',
+  'stopped',
+  'terminated',
+  'failed',
+  'completed',
+  'archived',
+])
 
 function initialHeight(): number {
   const saved = Number(window.localStorage.getItem(HEIGHT_KEY))
@@ -81,8 +89,15 @@ export const SessionDock: React.FC = () => {
         return
       }
       if (data.name && data.name !== it.title) updateTitle(key, data.name)
+      const isActiveContainer =
+        data.is_running && !INACTIVE_DOCK_STATUSES.has(data.status)
+      if (!isActiveContainer && data.status !== 'starting' && vscodeStartingKey !== key) {
+        if (it.vscodeUrl || it.pane === 'vscode') {
+          updatePane(key, it.pane === 'vscode' ? 'terminal' : it.pane || 'terminal', null)
+        }
+      }
       // Awake again: a later sleep should ask before waking, so forget the resume request
-      if (data.is_running)
+      if (isActiveContainer)
         setResumed((s) => {
           if (!s.has(key)) return s
           const next = new Set(s)
@@ -90,7 +105,7 @@ export const SessionDock: React.FC = () => {
           return next
         })
     })
-  }, [items, statuses, undock, updateTitle])
+  }, [items, statuses, undock, updateTitle, updatePane, vscodeStartingKey])
 
   useEffect(() => {
     if (!notice) return
@@ -152,7 +167,15 @@ export const SessionDock: React.FC = () => {
 
   const selectDockPane = async (it: DockedSession, pane: 'terminal' | 'code' | 'vscode') => {
     const key = dockKey(it.kind, it.id)
-    if (pane !== 'vscode' || it.vscodeUrl) {
+    const proj = projects.find((p) => p.id === it.projectId) || null
+    if (pane === 'vscode' && !canStartSessions(user, proj)) {
+      return
+    }
+    const liveStatus = statusFor(it)
+    const isActivelyRunning = Boolean(
+      liveStatus?.is_running && !INACTIVE_DOCK_STATUSES.has(liveStatus.status)
+    )
+    if (pane !== 'vscode' || (it.vscodeUrl && isActivelyRunning)) {
       updatePane(key, pane)
       return
     }
@@ -169,12 +192,14 @@ export const SessionDock: React.FC = () => {
 
   const openFull = (it: DockedSession) => {
     const pane = resolvePane(it)
+    const proj = projects.find((p) => p.id === it.projectId) || null
+    const canManageItem = canStartSessions(user, proj)
     setExpanded(null)
     navigateToDetail(
       VIEWS.SESSIONS,
       it.kind,
       it.id,
-      pane === 'code' || pane === 'vscode' ? { pane } : undefined
+      pane === 'code' || (pane === 'vscode' && canManageItem) ? { pane } : undefined
     )
   }
 
@@ -202,7 +227,10 @@ export const SessionDock: React.FC = () => {
               )}
               {statusFor(expanded)?.is_running && (
                 <div className="ml-2 inline-flex rounded-lg p-0.5 bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-                  {(['terminal', 'code', 'vscode'] as const).map((p) => {
+                  {(canContributeExpanded
+                    ? (['terminal', 'code', 'vscode'] as const)
+                    : (['terminal', 'code'] as const)
+                  ).map((p) => {
                     const isStarting = p === 'vscode' && vscodeStartingKey === dockKey(expanded.kind, expanded.id)
                     return (
                       <button
@@ -229,7 +257,7 @@ export const SessionDock: React.FC = () => {
                   })}
                 </div>
               )}
-              {expandedPane === 'vscode' && expanded.vscodeUrl && (
+              {canContributeExpanded && expandedPane === 'vscode' && expanded.vscodeUrl && (
                 <a
                   href={expanded.vscodeUrl}
                   target="_blank"

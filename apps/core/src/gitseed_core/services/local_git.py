@@ -120,6 +120,14 @@ def _allowed_workspace_roots() -> list[Path]:
     return roots
 
 
+def default_project_workspace_path(slug: str) -> Path:
+    """Return the default workspace directory for `slug` under `LOCAL_WORKSPACE_ROOTS` (or `~/GitSeed/workspaces`)."""
+    raw = (getattr(settings, "LOCAL_WORKSPACE_ROOTS", "") or "").strip()
+    if raw:
+        return _allowed_workspace_roots()[0] / slug.strip()
+    return Path.home() / "GitSeed" / "workspaces" / slug.strip()
+
+
 def validate_workspace_path(workspace_path: str | Path) -> Path:
     """Resolve `workspace_path` and verify it resides under `settings.LOCAL_WORKSPACE_ROOTS` (or `Path.home()`),
     rejecting `$HOME` itself, `/` root, hidden/credential dot-directories, and symlink escapes.
@@ -596,7 +604,7 @@ async def maybe_auto_attach_existing_local_workspace(
     if not isinstance(slug, str) or not slug.strip():
         return None
 
-    candidate_ws = Path.home() / "GitSeed" / "workspaces" / slug.strip()
+    candidate_ws = default_project_workspace_path(slug.strip())
     candidate_bare = resolve_local_bare_repo_path(slug.strip())
     if not candidate_ws.exists() and not candidate_bare.exists() and not create_if_missing:
         from gitseed_core.models.seed import Seed
@@ -734,7 +742,7 @@ async def init_project_local_repository(
 
     default_ws = workspace_path
     if not default_ws:
-        default_ws = str(Path.home() / "GitSeed" / "workspaces" / project.slug)
+        default_ws = str(default_project_workspace_path(project.slug))
 
     bare_path, resolved_ws = ensure_local_bare_repo(
         project.slug,

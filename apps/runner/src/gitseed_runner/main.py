@@ -1341,7 +1341,9 @@ async def _run_prepared_stage_session(
     initial_prompt = build_stage_prompt(
         ctx,
         output_file,
-        workspace_dir=primary_dir if repo_dirs else None,
+        workspace_dir=(workspace_root if len(repo_dirs) > 1 else primary_dir)
+        if repo_dirs
+        else None,
         git_diff_summary=git_diff_summary,
     )
     logger.info("Stage prompt: %s", summarize_prompt_stats())

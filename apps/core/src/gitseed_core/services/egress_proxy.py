@@ -40,6 +40,10 @@ DEFAULT_EGRESS_ALLOWLIST: tuple[str, ...] = (
     "*.antigravity.google",
     "api.x.ai",
     "*.x.ai",
+    "opencode.ai",
+    "*.opencode.ai",
+    "models.dev",
+    "*.models.dev",
     # Package registries & Git hosting
     "registry.npmjs.org",
     "pypi.org",

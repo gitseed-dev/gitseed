@@ -176,6 +176,7 @@ BACKEND_PROVIDER_SPECS: dict[BackendType, dict[str, ProviderSpec]] = {
     },
     BackendType.TOOLS: {
         "mcp-sse": ProviderSpec(optional_secrets=frozenset({"api_key", "bearer_token"})),
+        "mcp-http": ProviderSpec(optional_secrets=frozenset({"api_key", "bearer_token"})),
         "mcp-stdio": ProviderSpec(optional_secrets=frozenset({"env_secret"})),
     },
 }

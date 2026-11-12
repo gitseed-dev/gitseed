@@ -49,6 +49,7 @@ from gitseed_core.services.errors import Conflict, Forbidden, Invalid, NotFound,
 from gitseed_core.services.gateway import docker_host_fallback_url
 from gitseed_core.services.git_auth import resolve_git_backend_token
 from gitseed_core.services.git_browse import (
+    _bitbucket_api_base_and_headers,
     _build_authenticated_git_url,
     _github_api_base_and_headers,
     _gitlab_api_base_and_headers,
@@ -1564,19 +1565,24 @@ async def post_seed_pull_request_comment(
             }
         elif provider == "bitbucket":
             raw_cfg = backend.config or {}
-            base_url = docker_host_fallback_url(
-                (backend.endpoint or raw_cfg.get("url") or "https://api.bitbucket.org/2.0").rstrip("/")
+            raw_ep, bb_headers = _bitbucket_api_base_and_headers(
+                backend.endpoint or raw_cfg.get("url"), token
             )
-            username = (
+            base_url = docker_host_fallback_url(raw_ep)
+            bb_headers["Accept"] = "application/json"
+            explicit_user = (
                 raw_cfg.get("username")
                 or raw_cfg.get("user")
                 or raw_cfg.get("email")
-                or "x-token-auth"
             )
-            auth = (str(username), token) if ":" not in token else None
-            bb_headers: dict[str, str] = {"Accept": "application/json"}
-            if auth is None:
-                bb_headers["Authorization"] = f"Bearer {token}"
+            auth: tuple[str, str] | None = None
+            if ":" in token:
+                user_part, pass_part = token.split(":", 1)
+                auth = (user_part, pass_part)
+                bb_headers.pop("Authorization", None)
+            elif explicit_user:
+                auth = (str(explicit_user), token)
+                bb_headers.pop("Authorization", None)
             resp = await client.post(
                 f"{base_url}/repositories/{repo.full_name}/pullrequests/{pr_num}/comments",
                 headers=bb_headers,

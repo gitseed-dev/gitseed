@@ -5,6 +5,7 @@ from typing import Any
 
 import typer
 from gitseed_common import __version__
+from rich.markup import escape
 from typer.core import TyperGroup
 
 from gitseed_cli.client import CLIError
@@ -107,7 +108,7 @@ class GlobalOptionsGroup(TyperGroup):
             prefix = (
                 f"[red]Error ({exc.status_code}):[/red]" if exc.status_code else "[red]Error:[/red]"
             )
-            err_console.print(f"{prefix} {exc.message}")
+            err_console.print(f"{prefix} {escape(exc.message)}")
             raise typer.Exit(1) from exc
 
 
@@ -253,7 +254,7 @@ def cli() -> None:
         prefix = (
             f"[red]Error ({exc.status_code}):[/red]" if exc.status_code else "[red]Error:[/red]"
         )
-        err_console.print(f"{prefix} {exc.message}")
+        err_console.print(f"{prefix} {escape(exc.message)}")
         sys.exit(1)
 
 

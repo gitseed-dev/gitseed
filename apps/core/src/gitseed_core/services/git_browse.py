@@ -210,7 +210,11 @@ def _bitbucket_api_base_and_headers(
     api_base = raw if raw.endswith("/2.0") else f"{raw}/2.0"
     headers: dict[str, str] = {}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        if ":" in token:
+            b64_auth = base64.b64encode(token.encode("utf-8")).decode("ascii")
+            headers["Authorization"] = f"Basic {b64_auth}"
+        else:
+            headers["Authorization"] = f"Bearer {token}"
     return api_base, headers
 
 

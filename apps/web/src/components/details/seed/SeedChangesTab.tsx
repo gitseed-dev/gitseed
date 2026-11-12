@@ -61,6 +61,7 @@ export interface SeedChangesTabProps {
   isFetching: boolean
   error: Error | null
   canContribute?: boolean
+  canRequestChanges?: boolean
   onRefresh: () => void
   onBrowseCode?: (branchRef: string) => void
   onRunSandbox?: (branchRef: string) => void
@@ -140,6 +141,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
   isFetching,
   error,
   canContribute = false,
+  canRequestChanges,
   onRefresh,
   onBrowseCode,
   onRunSandbox,
@@ -205,7 +207,9 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
 
   const canAnnotateDiff =
     canContribute && seed.status !== 'merged' && seed.status !== 'closed'
+  const effectiveCanRequestChanges = canRequestChanges ?? Boolean(canContribute)
   const canRequestChangesViaApproval =
+    effectiveCanRequestChanges &&
     seed.status === 'awaiting_approval' &&
     (seed.stage === 'review' || seed.stage === 'merge')
 
@@ -938,6 +942,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
               </div>
               {prChecks.map((chk) => {
                 const dur = formatDurationSeconds(chk.duration_seconds)
+                const workflowLabel = chk.stage_or_workflow ?? chk.workflow_name
                 return (
                   <div
                     key={chk.id}
@@ -949,9 +954,9 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                         <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">
                           {chk.name}
                         </span>
-                        {chk.workflow_name && (
+                        {workflowLabel && (
                           <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[10px] font-mono text-zinc-500 dark:text-zinc-400 shrink-0">
-                            {chk.workflow_name}
+                            {workflowLabel}
                           </span>
                         )}
                       </div>
@@ -1018,55 +1023,77 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
               </p>
             ) : (
               <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-                {prComments.map((cm) => (
-                  <div
-                    key={cm.id}
-                    className="p-3 rounded-xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 space-y-1.5 text-xs"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                          @{cm.author}
-                        </span>
-                        {cm.review_state && (
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                              cm.review_state === 'approved'
-                                ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
-                                : cm.review_state === 'changes_requested'
-                                  ? 'bg-rose-500/12 text-rose-700 dark:text-rose-300'
-                                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
-                            }`}
-                          >
-                            {cm.review_state.replace('_', ' ')}
+                {prComments.map((cm) => {
+                  const rawKind =
+                    (cm.kind && cm.kind !== 'comment' ? cm.kind : cm.review_state) || null
+                  const normalizedKind = rawKind ? rawKind.toLowerCase() : null
+                  const kindBadgeLabel =
+                    normalizedKind === 'review_approved' || normalizedKind === 'approved'
+                      ? 'approved'
+                      : normalizedKind === 'review_changes_requested' ||
+                          normalizedKind === 'changes_requested'
+                        ? 'changes requested'
+                        : normalizedKind === 'review_comment'
+                          ? 'reviewed'
+                          : normalizedKind === 'inline_comment'
+                            ? 'inline comment'
+                            : normalizedKind
+                              ? normalizedKind.replace(/_/g, ' ')
+                              : null
+                  const commentUrl = cm.web_url ?? cm.html_url
+
+                  return (
+                    <div
+                      key={cm.id}
+                      className="p-3 rounded-xl border border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 space-y-1.5 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                            @{cm.author}
                           </span>
-                        )}
-                        {cm.path && (
-                          <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-                            {cm.path}
-                            {cm.line ? `:${cm.line}` : ''}
-                          </span>
-                        )}
+                          {kindBadgeLabel && (
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                                normalizedKind === 'review_approved' ||
+                                normalizedKind === 'approved'
+                                  ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
+                                  : normalizedKind === 'review_changes_requested' ||
+                                      normalizedKind === 'changes_requested'
+                                    ? 'bg-rose-500/12 text-rose-700 dark:text-rose-300'
+                                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
+                              }`}
+                            >
+                              {kindBadgeLabel}
+                            </span>
+                          )}
+                          {cm.path && (
+                            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                              {cm.path}
+                              {cm.line ? `:${cm.line}` : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-zinc-400">
+                          {cm.created_at && (
+                            <span>{formatRelativeTime(cm.created_at)}</span>
+                          )}
+                          {commentUrl && (
+                            <a
+                              href={commentUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="hover:text-teal-500"
+                            >
+                              <ExternalLink size={11} />
+                            </a>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 text-zinc-400">
-                        {cm.created_at && (
-                          <span>{formatRelativeTime(cm.created_at)}</span>
-                        )}
-                        {cm.html_url && (
-                          <a
-                            href={cm.html_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="hover:text-teal-500"
-                          >
-                            <ExternalLink size={11} />
-                          </a>
-                        )}
-                      </div>
+                      <MarkdownContent content={cm.body} />
                     </div>
-                    <MarkdownContent content={cm.body} />
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
 

@@ -351,12 +351,31 @@ def build_stage_prompt(
     repos = ctx.get("repositories") or []
     if isinstance(repos, list) and repos:
         lines.extend(["", "## Checked-Out Project Repositories in `/workspace`"])
-        for r in repos:
-            if isinstance(r, dict):
-                primary_tag = " (primary)" if r.get("is_primary") else ""
-                lines.append(
-                    f"- `{r.get('full_name')}` on branch `{r.get('default_branch')}`{primary_tag}"
-                )
+        dict_repos = [r for r in repos if isinstance(r, dict)]
+        multi_repo = len(dict_repos) > 1
+        for r in dict_repos:
+            full_name = str(r.get("full_name") or "")
+            folder_name = full_name.split("/")[-1] if full_name else "repo"
+            primary_tag = " (primary)" if r.get("is_primary") else ""
+            checkout_loc = (
+                f" — checked out at `/workspace/{folder_name}`"
+                if multi_repo
+                else " — checked out at `/workspace`"
+            )
+            lines.append(
+                f"- `{full_name}` on branch `{r.get('default_branch')}`{primary_tag}{checkout_loc}"
+            )
+        if multi_repo:
+            lines.extend(
+                [
+                    "",
+                    "**Multi-Repository Workspace Layout**: Your initial working directory (`CWD`) starts "
+                    "inside the primary repository (`/workspace/<primary_repo>`). Sibling repositories are "
+                    "located at `/workspace/<name>` (parent directory `../<name>` relative to your starting CWD). "
+                    f"Stage output MUST always be written to `/workspace/.gitseed/output.json` (`{output_file.as_posix()}`), "
+                    "never inside a repository subdirectory.",
+                ]
+            )
 
     mark = len(lines)
     tree_limits = _TREE_LIMITS.get(stage)

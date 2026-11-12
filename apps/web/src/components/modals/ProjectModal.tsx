@@ -207,7 +207,20 @@ const ProjectModalForm: React.FC<{
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const createdDraftProjectRef = useRef<Project | null>(null)
+  const [createdDraftProject, setCreatedDraftProject] = useState<Project | null>(null)
+  const [createdRemoteRepo, setCreatedRemoteRepo] = useState<{
+    backendId: string
+    name: string
+    fullName: string
+    defaultBranch: string
+  } | null>(null)
+  const [attachedRepoKey, setAttachedRepoKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    setCreatedDraftProject(null)
+    setCreatedRemoteRepo(null)
+    setAttachedRepoKey(null)
+  }, [project])
 
   const effectiveSlug = slugTouched ? slug : deriveProjectSlug(name)
   const orgDefaultBudget = orgSettings?.default_monthly_budget
@@ -291,8 +304,8 @@ const ProjectModalForm: React.FC<{
         let targetRepoFullName = trimmedRepo
         let targetDefaultBranch = defaultBranch.trim() || 'main'
 
-        if (createdDraftProjectRef.current) {
-          saved = await api.projects.update(createdDraftProjectRef.current.id, {
+        if (createdDraftProject) {
+          saved = await api.projects.update(createdDraftProject.id, {
             name: trimmedName,
             slug: finalSlug,
             description: description.trim(),
@@ -300,6 +313,7 @@ const ProjectModalForm: React.FC<{
             visibility,
             monthly_budget: parsedBudget,
           })
+          setCreatedDraftProject(saved)
         } else {
           saved = await api.projects.create({
             name: trimmedName,
@@ -309,40 +323,65 @@ const ProjectModalForm: React.FC<{
             visibility,
             monthly_budget: parsedBudget,
           })
-          createdDraftProjectRef.current = saved
+          setCreatedDraftProject(saved)
         }
 
         if (repoMode === 'local') {
-          await api.localWorkspaces.init(saved.id, {
-            workspace_path: localWorkspacePath.trim() || null,
-            default_branch: targetDefaultBranch,
-          })
-          await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
+          const localKey = `local:${localWorkspacePath.trim()}:${targetDefaultBranch}`
+          if (attachedRepoKey !== localKey) {
+            await api.localWorkspaces.init(saved.id, {
+              workspace_path: localWorkspacePath.trim() || null,
+              default_branch: targetDefaultBranch,
+            })
+            setAttachedRepoKey(localKey)
+            await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
+          }
         } else if (repoMode === 'create' && gitBackendId && effectiveNewRepoName) {
-          const createdRemote = await api.backends.createRepo(gitBackendId, {
-            name: effectiveNewRepoName,
-            description: description.trim(),
-            private: newRepoPrivate,
-            auto_init: true,
-          })
-          targetRepoFullName = createdRemote.full_name
-          targetDefaultBranch = createdRemote.default_branch || 'main'
-          await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
-          if (targetRepoFullName) {
+          if (
+            createdRemoteRepo &&
+            createdRemoteRepo.backendId === gitBackendId &&
+            createdRemoteRepo.name === effectiveNewRepoName
+          ) {
+            targetRepoFullName = createdRemoteRepo.fullName
+            targetDefaultBranch = createdRemoteRepo.defaultBranch
+          } else {
+            const createdRemote = await api.backends.createRepo(gitBackendId, {
+              name: effectiveNewRepoName,
+              description: description.trim(),
+              private: newRepoPrivate,
+              auto_init: true,
+            })
+            targetRepoFullName = createdRemote.full_name
+            targetDefaultBranch = createdRemote.default_branch || 'main'
+            setCreatedRemoteRepo({
+              backendId: gitBackendId,
+              name: effectiveNewRepoName,
+              fullName: targetRepoFullName,
+              defaultBranch: targetDefaultBranch,
+            })
+            await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
+          }
+          const attachKey = `${gitBackendId}:${targetRepoFullName}`
+          if (targetRepoFullName && attachedRepoKey !== attachKey) {
             await api.projects.addRepo(saved.id, {
               backend_id: gitBackendId,
               full_name: targetRepoFullName,
               default_branch: targetDefaultBranch,
               is_primary: true,
             })
+            setAttachedRepoKey(attachKey)
           }
         } else if (repoMode === 'existing' && targetRepoFullName && gitBackendId) {
-          await api.projects.addRepo(saved.id, {
-            backend_id: gitBackendId,
-            full_name: targetRepoFullName,
-            default_branch: targetDefaultBranch,
-            is_primary: true,
-          })
+          const attachKey = `${gitBackendId}:${targetRepoFullName}`
+          if (attachedRepoKey !== attachKey) {
+            await api.projects.addRepo(saved.id, {
+              backend_id: gitBackendId,
+              full_name: targetRepoFullName,
+              default_branch: targetDefaultBranch,
+              is_primary: true,
+            })
+            setAttachedRepoKey(attachKey)
+          }
         }
 
         if (customizedStages.length > 0) {

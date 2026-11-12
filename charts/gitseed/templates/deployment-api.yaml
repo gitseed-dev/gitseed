@@ -38,6 +38,9 @@ spec:
             - name: http
               containerPort: {{ .Values.api.port }}
               protocol: TCP
+          env:
+            - name: CONTROL_PLANE_K8S_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
           envFrom:
             - configMapRef:
                 name: {{ $fullname }}-config

@@ -239,4 +239,9 @@ ingress:
       paths:
         - path: /
           pathType: Prefix
+  # Dedicated cookie-less origin for Embedded VS Code webviews (SANDBOX_ORIGIN).
+  # Setting ingress.sandboxHost exposes a separate host rule routing /api/v1/vscode
+  # to the web service's sandbox port (8423). Also set web.sandboxOrigin to match
+  # (e.g. "https://sandbox.gitseed.local").
+  sandboxHost: ""
   tls: []

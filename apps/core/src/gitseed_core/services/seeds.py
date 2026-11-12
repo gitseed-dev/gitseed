@@ -66,6 +66,75 @@ async def resolve_should_stage_seed(
     return bool(getattr(org_settings, "default_stage_seeds", False))
 
 
+async def reset_orphaned_running_tasks(
+    session: AsyncSession,
+    seed_id: str,
+    *,
+    exclude_run_id: str | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Reset `SeedTask` rows stuck in `RUNNING` back to `PENDING` when no active `EXECUTE` run remains."""
+    exec_fn = getattr(session, "execute", None)
+    if not callable(exec_fn) or getattr(exec_fn, "side_effect", None) is not None:
+        return 0
+
+    ts = now or datetime.now(UTC)
+    stmt = select(Run).where(
+        Run.seed_id == seed_id,
+        Run.stage == SeedStage.EXECUTE,
+        col(Run.status).in_([s.value for s in RUN_ACTIVE_STATUSES]),
+    )
+    if exclude_run_id:
+        stmt = stmt.where(Run.id != exclude_run_id)
+
+    try:
+        active_res = await session.execute(stmt)
+        scalars_fn = getattr(active_res, "scalars", None)
+        if callable(scalars_fn):
+            scalars_obj = scalars_fn()
+            if inspect.iscoroutine(scalars_obj):
+                scalars_obj.close()
+                return 0
+            all_fn = getattr(scalars_obj, "all", None)
+            active_runs = all_fn() if callable(all_fn) else []
+            if inspect.iscoroutine(active_runs):
+                active_runs.close()
+                return 0
+            if isinstance(active_runs, list) and active_runs:
+                return 0
+
+        running_res = await session.execute(
+            select(SeedTask).where(
+                SeedTask.seed_id == seed_id,
+                SeedTask.status == TaskStatus.RUNNING,
+            )
+        )
+        t_scalars_fn = getattr(running_res, "scalars", None)
+        if not callable(t_scalars_fn):
+            return 0
+        t_scalars = t_scalars_fn()
+        if inspect.iscoroutine(t_scalars):
+            t_scalars.close()
+            return 0
+        t_all_fn = getattr(t_scalars, "all", None)
+        tasks = t_all_fn() if callable(t_all_fn) else []
+        if inspect.iscoroutine(tasks):
+            tasks.close()
+            return 0
+        if not isinstance(tasks, list):
+            return 0
+        reset_count = 0
+        for task in tasks:
+            if isinstance(task, SeedTask) and task.status == TaskStatus.RUNNING:
+                task.status = TaskStatus.PENDING
+                task.started_at = None
+                task.updated_at = ts
+                reset_count += 1
+        return reset_count
+    except Exception:
+        return 0
+
+
 async def get_seed(
     session: AsyncSession,
     actor: User,
@@ -724,6 +793,13 @@ async def advance_seed(
     if next_stage is None:
         raise Invalid("Seed is already at the final stage ('merge')")
 
+    cur_idx = STAGE_ORDER.index(seed.stage)
+    tgt_idx = STAGE_ORDER.index(next_stage)
+    if tgt_idx <= cur_idx:
+        raise Invalid(
+            "Target stage must be ahead of current stage; use move-back to return a seed to an earlier stage"
+        )
+
     pol = await get_effective_stage_policy(session, seed.project_id, next_stage)
     if not pol.enabled and next_stage not in (SeedStage.EXECUTE, SeedStage.MERGE):
         raise Invalid(f"Stage '{str(next_stage)}' is disabled for this project")
@@ -735,11 +811,7 @@ async def advance_seed(
     )
 
     if actor.org_role != OrgRole.ADMIN:
-        cur_idx = STAGE_ORDER.index(seed.stage)
-        tgt_idx = STAGE_ORDER.index(next_stage)
-        stages_to_check = (
-            STAGE_ORDER[cur_idx:tgt_idx] if tgt_idx > cur_idx else [seed.stage]
-        )
+        stages_to_check = STAGE_ORDER[cur_idx:tgt_idx]
         for st in stages_to_check:
             st_pol = (
                 pol

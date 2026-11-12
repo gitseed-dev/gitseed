@@ -178,6 +178,7 @@ class Settings(BaseSettings):
     GITSEED_BOOTSTRAP_COMPUTE_PROVIDER: str = "auto"  # "auto" | "docker" | "kubernetes" | "none"
     DOCKER_HOST: str = "unix:///var/run/docker.sock"
     K8S_API_URL: str = "https://kubernetes.default.svc"
+    CONTROL_PLANE_K8S_NAMESPACE: str = ""
     RUNNER_K8S_NAMESPACE: str = ""
     SANDBOX_K8S_NAMESPACE: str = ""
     K8S_NAMESPACE_ISOLATION: str = "workload"  # "shared" | "workload" | "project"

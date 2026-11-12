@@ -1,8 +1,10 @@
 import { SEED_OPEN_STATUSES } from '../constants'
 import { canUserContributeToProject, canUserManageProject } from './projects'
 import type {
+  Agent,
   Backend,
   Project,
+  ProjectMember,
   ProjectRepository,
   Seed,
   SeedAutonomy,
@@ -117,18 +119,30 @@ export function getEffectiveSeedPolicies(
   return orgPolicies
 }
 
+export function canUserDecideSeedStage(
+  user: User | null,
+  project: Project | null | undefined,
+  policy?: StagePolicy | null,
+  members: ProjectMember[] = []
+): boolean {
+  if (!user || !project || project.archived_at) return false
+  if (!canUserContributeToProject(user, project, members)) return false
+  if (policy?.min_approver_role === 'maintainer') {
+    if (!canUserManageProject(user, project, members)) return false
+  }
+  return true
+}
+
 export function canUserApproveSeedStage(
   user: User | null,
   project: Project | null | undefined,
   seed: Seed,
   policy?: StagePolicy | null,
-  codeEditorUserIds?: ReadonlySet<string> | string[]
+  codeEditorUserIds?: ReadonlySet<string> | string[],
+  members: ProjectMember[] = []
 ): boolean {
-  if (!user || !project || project.archived_at) return false
-  if (!canUserContributeToProject(user, project)) return false
-  if (policy?.min_approver_role === 'maintainer') {
-    if (!canUserManageProject(user, project)) return false
-  }
+  if (!canUserDecideSeedStage(user, project, policy, members)) return false
+  if (!user) return false
   if (policy && policy.allow_self_approval === false) {
     if (seed.created_by === user.id) {
       return false
@@ -146,6 +160,40 @@ export function canUserApproveSeedStage(
     }
   }
   return true
+}
+
+const STAGE_ROLE_SLUGS: Record<SeedStage, string> = {
+  ideate: 'ideator',
+  plan: 'planner',
+  execute: 'coder',
+  review: 'reviewer',
+  merge: 'merger',
+}
+
+export function resolveStageRunAgent(
+  stage: SeedStage,
+  policy: StagePolicy | null | undefined,
+  agents: Agent[]
+): Agent | undefined {
+  if (policy?.agent_id) {
+    const configured = agents.find(
+      (a) => a.id === policy.agent_id && a.kind === 'stage' && !a.archived_at && a.enabled
+    )
+    if (configured) return configured
+  }
+  const stageAgents = agents.filter(
+    (a) => a.kind === 'stage' && !a.archived_at && a.enabled
+  )
+  const roleSlug = STAGE_ROLE_SLUGS[stage]
+  const matchingStageAgent = stageAgents.find((a) => {
+    const h = a.handle.toLowerCase()
+    return (
+      h === roleSlug ||
+      h.endsWith(`-${roleSlug}`) ||
+      Boolean(a.template && a.template.toLowerCase() === roleSlug)
+    )
+  })
+  return matchingStageAgent || stageAgents[0]
 }
 
 export function resolveProjectCloneUrl(

@@ -80,6 +80,19 @@ function isActiveStatus(status: string): boolean {
   return status === 'starting' || status === 'running' || status === 'running_turn'
 }
 
+const INACTIVE_SESSION_STATUSES = new Set([
+  'sleeping',
+  'stopped',
+  'terminated',
+  'failed',
+  'completed',
+  'archived',
+])
+
+function isAgentContainerActive(s: AgentSession | undefined): boolean {
+  return Boolean(s?.container_id && !INACTIVE_SESSION_STATUSES.has(s.status))
+}
+
 /** Agent sessions run the agent's CLI in a terminal; status reflects its container. */
 function agentStatus(s: AgentSession): { label: string; className: string; dotClass: string; spin: boolean } {
   if (s.status === 'starting')
@@ -96,7 +109,7 @@ function agentStatus(s: AgentSession): { label: string; className: string; dotCl
       dotClass: 'bg-rose-500',
       spin: false,
     }
-  if (s.container_id && s.status !== 'stopped')
+  if (isAgentContainerActive(s))
     return {
       label: 'Running',
       className: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
@@ -424,11 +437,16 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
   const [pushNotice, setPushNotice] = useState<{ id: string; number: number; prUrl: string | null } | null>(null)
   const [vscodeLoading, setVscodeLoading] = useState(false)
   const [vscodeInfo, setVscodeInfo] = useState<SessionVsCodeInfo | null>(null)
+  const vscodeContainerIdRef = useRef<string | null>(null)
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const initialPane = new URLSearchParams(window.location.search).get('pane')
   const initialActivePane: 'code' | 'vscode' | 'terminal' | 'artifacts' =
-    initialPane === 'code' ? 'code' : initialPane === 'vscode' ? 'vscode' : 'terminal'
+    initialPane === 'code'
+      ? 'code'
+      : initialPane === 'vscode' && canContribute
+        ? 'vscode'
+        : 'terminal'
   const [activePane, setActivePane] = useState<'code' | 'vscode' | 'terminal' | 'artifacts'>(
     initialActivePane
   )
@@ -449,6 +467,8 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
 
   useEffect(() => {
     setDetectedRoot(false)
+    setVscodeInfo(null)
+    vscodeContainerIdRef.current = null
   }, [sessionId])
 
   const showCode = activePane === 'code'
@@ -500,8 +520,12 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
 
   const sessionRunningNow =
     kind === 'chat'
-      ? Boolean(agentSession?.container_id && agentSession.status !== 'stopped')
-      : Boolean(terminal && isActiveStatus(terminal.status))
+      ? isAgentContainerActive(agentSession)
+      : Boolean(terminal && isActiveStatus(terminal.status) && !INACTIVE_SESSION_STATUSES.has(terminal.status))
+
+  const currentContainerId =
+    kind === 'chat' ? agentSession?.container_id ?? null : terminal?.container_id ?? null
+  const loadedSession = kind === 'chat' ? agentSession : terminal
 
   const { data: workspaceFiles } = useQuery({
     queryKey: ['sessionWorkspaceFiles', kind, project.id, sessionId],
@@ -521,10 +545,28 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
     }
   }, [agentSession?.title, terminal?.title, paneInitialized, initialPane])
   // Once awake, forget the resume request so a later sleep shows the Resume prompt again
-  const awakeNow = !!agentSession?.container_id && agentSession.status !== 'stopped'
+  const awakeNow = isAgentContainerActive(agentSession)
   useEffect(() => {
     if (awakeNow) setResumeRequested(false)
   }, [awakeNow])
+
+  // Clear stale VS Code URL/iframe whenever the session container becomes inactive or is recreated
+  useEffect(() => {
+    if (!loadedSession || vscodeLoading) return
+    const containerChanged =
+      Boolean(vscodeContainerIdRef.current) &&
+      Boolean(currentContainerId) &&
+      vscodeContainerIdRef.current !== currentContainerId
+    if (!sessionRunningNow || containerChanged) {
+      if (vscodeInfo) {
+        setVscodeInfo(null)
+      }
+      vscodeContainerIdRef.current = null
+      if (!sessionRunningNow && activePane === 'vscode') {
+        setActivePane('terminal')
+      }
+    }
+  }, [loadedSession, vscodeLoading, sessionRunningNow, currentContainerId, vscodeInfo, activePane])
   // Only offer "Run tests" when the project explicitly configures a test command in Project Settings
   const testCommand = (project.sandbox_config?.test_command || '').trim() || null
 
@@ -622,8 +664,9 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
   }
 
   const openVsCode = useCallback(async (opts?: { popout?: boolean }) => {
+    if (!canContribute) return
     setActivePane('vscode')
-    if (vscodeInfo?.url) {
+    if (vscodeInfo?.url && sessionRunningNow) {
       if (opts?.popout) window.open(vscodeInfo.url, '_blank', 'noopener,noreferrer')
       void api.projects.openSessionVsCode(project.id, kind, sessionId, theme).catch(() => {})
       return
@@ -632,28 +675,41 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
     setActionError(null)
     try {
       const res = await api.projects.openSessionVsCode(project.id, kind, sessionId, theme)
+      await refresh()
+      const freshSession =
+        kind === 'chat'
+          ? queryClient.getQueryData<AgentSession>(['sessionDetail', kind, project.id, sessionId])
+          : queryClient.getQueryData<SandboxSession>(['sessionDetail', kind, project.id, sessionId, 'terminal'])
+      vscodeContainerIdRef.current = freshSession?.container_id ?? currentContainerId
       setVscodeInfo(res)
       if (opts?.popout) window.open(res.url, '_blank', 'noopener,noreferrer')
-      await refresh()
     } catch (err) {
       setActivePane('terminal')
       setActionError(err instanceof Error ? err.message : 'Could not open VS Code for this session')
     } finally {
       setVscodeLoading(false)
     }
-  }, [vscodeInfo, project.id, kind, sessionId, theme, refresh])
+  }, [canContribute, vscodeInfo, sessionRunningNow, project.id, kind, sessionId, theme, refresh, queryClient, currentContainerId])
 
   useEffect(() => {
-    if (initialActivePane === 'vscode' && activePane === 'vscode' && !vscodeInfo && !vscodeLoading && !actionError) {
+    if (
+      canContribute &&
+      sessionRunningNow &&
+      initialActivePane === 'vscode' &&
+      activePane === 'vscode' &&
+      !vscodeInfo &&
+      !vscodeLoading &&
+      !actionError
+    ) {
       void openVsCode()
     }
-  }, [initialActivePane, activePane, vscodeInfo, vscodeLoading, actionError, openVsCode])
+  }, [canContribute, sessionRunningNow, initialActivePane, activePane, vscodeInfo, vscodeLoading, actionError, openVsCode])
 
   // Keep running VS Code color theme synced when GitSeed's theme toggles between dark and light
   useEffect(() => {
-    if (!vscodeInfo?.url) return
+    if (!vscodeInfo?.url || !sessionRunningNow || !canContribute) return
     void api.projects.openSessionVsCode(project.id, kind, sessionId, theme).catch(() => {})
-  }, [theme, vscodeInfo?.url, project.id, kind, sessionId])
+  }, [theme, vscodeInfo?.url, sessionRunningNow, canContribute, project.id, kind, sessionId])
 
   const selectCodePane = () => {
     setActivePane('code')
@@ -706,8 +762,8 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
   }
 
   const name = kind === 'chat' ? (agentSession as AgentSession).title : terminalDisplayName(terminal as SandboxSession)
-  const terminalRunning = !!terminal && isActiveStatus(terminal.status)
-  const agentAwake = !!agentSession && !!agentSession.container_id && agentSession.status !== 'stopped'
+  const terminalRunning = !!terminal && isActiveStatus(terminal.status) && !INACTIVE_SESSION_STATUSES.has(terminal.status)
+  const agentAwake = isAgentContainerActive(agentSession)
   const isRunning = kind === 'chat' ? agentAwake : terminalRunning
   const left = terminal && terminalRunning ? minutesLeft(terminal.expires_at) : null
   const canPush = canContribute && isRunning

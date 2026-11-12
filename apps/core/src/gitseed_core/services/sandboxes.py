@@ -917,7 +917,7 @@ async def create_sandbox_session(
     requested_ref = (
         ref.strip()
         if ref and ref.strip()
-        else (f"gitseed/seed-{seed_obj.number}" if seed_obj else default_branch)
+        else (format_seed_branch(project.slug, seed_obj.number) if seed_obj else default_branch)
     )
 
     workspace_tar, resolved_ref, head_sha = await asyncio.to_thread(

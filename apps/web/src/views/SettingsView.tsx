@@ -391,6 +391,8 @@ export const SettingsView: React.FC = () => {
           spendCheckpoint={spendCheckpoint}
           onChangeSpendCheckpoint={setSpendCheckpoint}
           isCheckpointMissingWhenUnbounded={isCheckpointMissingWhenUnbounded}
+          enforcement={orgSettings?.enforcement}
+          enforcementDetail={orgSettings?.enforcement_detail}
         />
 
         <RunnersConcurrencyCard

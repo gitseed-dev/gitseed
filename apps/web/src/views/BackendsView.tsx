@@ -55,6 +55,7 @@ export const BackendsView: React.FC = () => {
     projectReposByProject,
     runs,
     activeDetailId,
+    viewFilterParams,
     clearDetail,
   } = useData()
   const { t } = useTranslation()
@@ -194,7 +195,7 @@ export const BackendsView: React.FC = () => {
       syncFromUrl()
       window.addEventListener('popstate', syncFromUrl)
       return () => window.removeEventListener('popstate', syncFromUrl)
-    }, [backends, activeDetailId])
+    }, [backends, activeDetailId, viewFilterParams])
 
     const handleTestConnection = async (b: Backend) => {
       setTestingId(b.id)

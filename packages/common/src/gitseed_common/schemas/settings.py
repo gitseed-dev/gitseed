@@ -16,7 +16,7 @@ class OrgSettingsResponse(BaseModel):
     default_monthly_budget: Decimal
     default_seed_budget_cap: Decimal | None = None
     default_spend_checkpoint: Decimal | None = None
-    enforcement: Literal["enforced", "estimated"] = "enforced"
+    enforcement: Literal["enforced", "estimated", "unpriced"] = "enforced"
     enforcement_detail: str | None = None
     max_concurrent_runners: int
     max_sandbox_sessions: int = 2

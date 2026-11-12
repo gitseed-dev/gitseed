@@ -57,6 +57,7 @@ from gitseed_core.services.seeds import (
     create_remediation_task_and_return_to_execute,
     get_seed,
     list_stage_cycle_runs,
+    reset_orphaned_running_tasks,
 )
 
 _TERMINAL_RUN_STATUSES = frozenset(
@@ -870,8 +871,18 @@ async def cancel_run(
             logs = await fetch_docker_container_logs(compute_backend, run.container_id)
             if logs:
                 run.output = {**(run.output or {}), "log_tail": logs}
-            await stop_and_remove_docker_container(compute_backend, run.container_id)
+            try:
+                await stop_and_remove_docker_container(
+                    compute_backend, run.container_id, run_id=run.id
+                )
+            except TypeError:
+                await stop_and_remove_docker_container(compute_backend, run.container_id)
         run.container_id = None
+
+    if run.stage == SeedStage.EXECUTE:
+        await reset_orphaned_running_tasks(
+            session, seed.id, exclude_run_id=run.id, now=now
+        )
 
     if seed.status == SeedStatus.RUNNING:
         seed.status = SeedStatus.QUEUED

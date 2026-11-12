@@ -57,11 +57,13 @@ from gitseed_core.services.compute_runtime import (
     k8s_fetch_archive,
     k8s_put_archive,
     session_workspace_volume_name,
+    stop_and_remove_docker_container,
 )
 from gitseed_core.services.coordinator import _resolve_coordinator_model
 from gitseed_core.services.errors import Invalid
 from gitseed_core.services.gateway import (
     _litellm_headers,
+    finalize_run_litellm_key,
     sync_backend_to_litellm,
 )
 from gitseed_core.services.git_auth import resolve_git_backend_token
@@ -1121,8 +1123,21 @@ async def push_session_to_seed(
             )
         ).scalars().all()
         for r in active_runs:
+            await finalize_run_litellm_key(session, r, seed, project, delete_key=True)
+            if r.compute_backend_id and (r.container_id or r.id):
+                comp_b = await session.get(Backend, r.compute_backend_id)
+                if comp_b is not None:
+                    try:
+                        await stop_and_remove_docker_container(
+                            comp_b, r.container_id, run_id=r.id
+                        )
+                    except TypeError:
+                        if r.container_id:
+                            await stop_and_remove_docker_container(comp_b, r.container_id)
+                r.container_id = None
             r.status = RunStatus.CANCELLED
             r.finished_at = now
+            r.updated_at = now
             r.error = f"Superseded by interactive session push from {session_label}"
 
         # Backfill specification and acceptance criteria if pushing from an earlier stage (Ideate/Plan/Execute)

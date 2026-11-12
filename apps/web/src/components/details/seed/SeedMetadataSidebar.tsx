@@ -137,6 +137,18 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
     return anyCliOAuthBackend ? 'estimated' : 'enforced'
   }, [backends, runs, seed.enforcement])
 
+  const spendEnforcementDetail = useMemo(() => {
+    if (seed.enforcement_detail) return seed.enforcement_detail
+    for (const r of runs) {
+      if (r.enforcement_detail) return r.enforcement_detail
+      const out = (r.output || {}) as Record<string, unknown>
+      if (typeof out.enforcement_detail === 'string' && out.enforcement_detail) {
+        return out.enforcement_detail
+      }
+    }
+    return null
+  }, [runs, seed.enforcement_detail])
+
   const receiptFilename = `gitseed-receipt-${seed.id}.json`
   const verifyCommand = `gitseed receipt verify ${receiptFilename} --offline --public-key-file receipt-pub.pem`
 
@@ -503,11 +515,12 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
             <span
               data-testid="spend-enforcement-badge"
               title={
-                spendEnforcement === 'unpriced'
+                spendEnforcementDetail ||
+                (spendEnforcement === 'unpriced'
                   ? 'Custom or unpriced model without a known pricing catalog entry'
                   : spendEnforcement === 'estimated'
                     ? 'Estimated from CLI token reports in Personal Mode (bounded by timeout and max turns)'
-                    : 'Enforced in real time via LiteLLM per-run virtual key max_budget'
+                    : 'Enforced in real time via LiteLLM per-run virtual key max_budget')
               }
               className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border ${
                 spendEnforcement === 'unpriced'

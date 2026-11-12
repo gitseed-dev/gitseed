@@ -46,7 +46,7 @@ class ProjectResponse(BaseModel):
     monthly_budget: Decimal | None = None
     seed_budget_cap: Decimal | None = None
     spend_checkpoint: Decimal | None = None
-    enforcement: Literal["enforced", "estimated"] = "enforced"
+    enforcement: Literal["enforced", "estimated", "unpriced"] = "enforced"
     enforcement_detail: str | None = None
     max_concurrent_runs: int | None = None
     backends_restricted: bool = False

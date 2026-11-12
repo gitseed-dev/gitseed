@@ -83,6 +83,7 @@ from gitseed_core.services.gateway import (
     finalize_run_litellm_key,
     merge_run_context_window,
     resolve_models_backend_for_run,
+    revoke_run_virtual_key,
 )
 from gitseed_core.services.git_merge import (
     _build_git_urls,
@@ -103,6 +104,7 @@ from gitseed_core.services.seeds import (
     MULTI_OPINION_STAGES,
     extract_agent_mentions,
     list_stage_cycle_runs,
+    reset_orphaned_running_tasks,
 )
 
 logger = logging.getLogger("uvicorn.error")
@@ -195,15 +197,24 @@ _ALLOWED_CREDENTIAL_WRAPPER_KEYS: frozenset[str] = frozenset(
     {
         "claudeaioauth",
         "oauthaccount",
+        "mcpoauth",
         "tokens",
         "security",
         "auth",
+        "projects",
         "openai",
         "anthropic",
         "google",
         "gemini",
         "antigravity",
         "xai",
+        "openrouter",
+        "github",
+        "github-copilot",
+        "copilot",
+        "groq",
+        "mistral",
+        "deepseek",
     }
 )
 
@@ -274,7 +285,11 @@ def _is_primitive_or_str_list(val: Any) -> bool:
 
 
 def _validate_credential_json_fields(
-    source_name: str, obj: dict[str, Any], *, depth: int = 0
+    source_name: str,
+    obj: dict[str, Any],
+    *,
+    depth: int = 0,
+    allow_dynamic_children: bool = False,
 ) -> None:
     if depth > 2:
         raise Invalid(f"Credential payload '{source_name}' contains unexpected nested objects")
@@ -286,9 +301,23 @@ def _validate_credential_json_fields(
             raise Invalid(f"Disallowed credential field '{raw_k}' in '{source_name}'")
         if _is_primitive_or_str_list(val):
             continue
-        if isinstance(val, dict) and lower_k in _ALLOWED_CREDENTIAL_WRAPPER_KEYS and depth < 2:
-            _validate_credential_json_fields(f"{source_name}.{raw_k}", val, depth=depth + 1)
-            continue
+        if isinstance(val, dict) and depth < 2:
+            if lower_k in _ALLOWED_CREDENTIAL_WRAPPER_KEYS:
+                _validate_credential_json_fields(
+                    f"{source_name}.{raw_k}",
+                    val,
+                    depth=depth + 1,
+                    allow_dynamic_children=lower_k in ("mcpoauth", "projects"),
+                )
+                continue
+            if allow_dynamic_children and depth == 1:
+                _validate_credential_json_fields(
+                    f"{source_name}.{raw_k}",
+                    val,
+                    depth=depth + 1,
+                    allow_dynamic_children=False,
+                )
+                continue
         raise Invalid(
             f"Credential field '{raw_k}' in '{source_name}' must be a string or primitive value"
         )
@@ -1504,7 +1533,17 @@ async def complete_runner_execution(
     if payload.output_tokens and payload.output_tokens > 0:
         run.output_tokens = max(int(run.output_tokens or 0), int(payload.output_tokens))
     if payload.context_tokens > 0 or payload.peak_context_tokens > 0:
-        models_backend, _ = await resolve_models_backend_for_run(session, run, project)
+        ctx_models_backend: Any = None
+        try:
+            ctx_models_backend, _ = await resolve_models_backend_for_run(
+                session, run, project, allow_disabled=True
+            )
+        except TypeError:
+            ctx_models_backend, _ = await resolve_models_backend_for_run(
+                session, run, project
+            )
+        except Exception:
+            ctx_models_backend = None
         run.output = merge_run_context_window(
             run.output,
             used_tokens=payload.context_tokens,
@@ -1512,9 +1551,9 @@ async def complete_runner_execution(
             turns=payload.turn_count,
             model=run.model,
             runtime=str(run.runtime or ""),
-            backend=models_backend,
+            backend=ctx_models_backend,
         )
-    await finalize_run_litellm_key(session, run, seed, project, delete_key=True)
+    await finalize_run_litellm_key(session, run, seed, project, delete_key=False)
     if isinstance(run.output, dict):
         for k in _PRESERVED_RUN_OUTPUT_KEYS:
             if k in run.output and run.output[k] is not None:
@@ -1529,7 +1568,16 @@ async def complete_runner_execution(
         if Decimal(str(run.cost or 0)) == Decimal("0") and total_tokens > 0:
             est_backend = None
             try:
-                est_backend, _ = await resolve_models_backend_for_run(session, run, project)
+                est_backend, _ = await resolve_models_backend_for_run(
+                    session, run, project, allow_disabled=True
+                )
+            except TypeError:
+                try:
+                    est_backend, _ = await resolve_models_backend_for_run(
+                        session, run, project
+                    )
+                except Exception:
+                    est_backend = None
             except Exception:
                 est_backend = None
             model_for_est = str(
@@ -1570,9 +1618,14 @@ async def complete_runner_execution(
 
     if payload.updated_cli_auth_bundle:
         try:
-            models_backend, _ = await resolve_models_backend_for_run(
-                session, run, project
-            )
+            try:
+                models_backend, _ = await resolve_models_backend_for_run(
+                    session, run, project, allow_disabled=True
+                )
+            except TypeError:
+                models_backend, _ = await resolve_models_backend_for_run(
+                    session, run, project
+                )
             if models_backend is not None:
                 m_secrets = decrypt_secrets(models_backend.secrets_encrypted)
                 merged_bundle, updated_keys = _validate_and_merge_refreshed_cli_auth_bundle(
@@ -1631,6 +1684,10 @@ async def complete_runner_execution(
                 task_row.status = TaskStatus.FAILED
                 task_row.completed_at = now
                 task_row.updated_at = now
+        elif run.stage == SeedStage.EXECUTE:
+            await reset_orphaned_running_tasks(
+                session, seed.id, exclude_run_id=run.id, now=now
+            )
 
         # Reconcile seed status across parallel opinions or retry automatically
         if seed.status != SeedStatus.BLOCKED:
@@ -1693,6 +1750,7 @@ async def complete_runner_execution(
             },
         )
         await session.commit()
+        await revoke_run_virtual_key(run.id)
         await session.refresh(run)
         return run
 
@@ -1932,6 +1990,8 @@ async def complete_runner_execution(
             f"Invalid /workspace/.gitseed/output.json for stage '{str(run.stage)}': {exc}"
         ) from exc
 
+    await revoke_run_virtual_key(run.id)
+
     run.output = {
         **preserved_run_meta,
         **(run.output or {}),
@@ -1991,6 +2051,7 @@ async def complete_runner_execution(
     # If the seed was blocked by budget/checkpoint during the final call, keep it blocked
     if seed.status == SeedStatus.BLOCKED:
         await session.commit()
+        await revoke_run_virtual_key(run.id)
         await session.refresh(run)
         return run
 

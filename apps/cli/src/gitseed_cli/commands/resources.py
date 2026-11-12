@@ -13,6 +13,7 @@ import click
 import typer
 from gitseed_common.enums import RUN_ACTIVE_STATUSES, SeedAutonomy, SeedStage
 from gitseed_common.schemas import CreateSeedRequest, RunResponse
+from rich.markup import escape
 from rich.panel import Panel
 
 from gitseed_cli.client import CLIError, GitSeedClient
@@ -568,14 +569,16 @@ def register_resource_commands(app: typer.Typer) -> None:
                 )
                 return
             lines = [
-                f"[bold]Slug:[/bold]          {proj.slug} ({proj.id})",
-                f"[bold]Name:[/bold]          {proj.name}",
-                f"[bold]Visibility:[/bold]    {proj.visibility}",
-                f"[bold]Role:[/bold]          {proj.my_role or '-'}",
+                f"[bold]Slug:[/bold]          {escape(proj.slug)} ({escape(proj.id)})",
+                f"[bold]Name:[/bold]          {escape(proj.name)}",
+                f"[bold]Visibility:[/bold]    {escape(str(proj.visibility))}",
+                f"[bold]Role:[/bold]          {escape(str(proj.my_role or '-'))}",
                 f"[bold]Seeds:[/bold]         {proj.seed_counter}",
-                f"[bold]Description:[/bold]   {proj.description or '-'}",
+                f"[bold]Description:[/bold]   {escape(proj.description or '-')}",
             ]
-            console.print(Panel("\n".join(lines), title=f"Project {proj.slug}", expand=False))
+            console.print(
+                Panel("\n".join(lines), title=f"Project {escape(proj.slug)}", expand=False)
+            )
             console.print("\n[bold cyan]## Effective Stage Policies[/bold cyan]")
             print_policies_table(policies, agent_handles=_agent_handle_map(client), wide=True)
             return
@@ -585,7 +588,11 @@ def register_resource_commands(app: typer.Typer) -> None:
             if opts.output == "json":
                 dump_json(ag)
                 return
-            console.print(_export_resource_markdown(client, "agent", ag.id))
+            console.print(
+                _export_resource_markdown(client, "agent", ag.id),
+                markup=False,
+                highlight=False,
+            )
             return
 
         if res == "skill":
@@ -593,7 +600,11 @@ def register_resource_commands(app: typer.Typer) -> None:
             if opts.output == "json":
                 dump_json(sk)
                 return
-            console.print(_export_resource_markdown(client, "skill", sk.id))
+            console.print(
+                _export_resource_markdown(client, "skill", sk.id),
+                markup=False,
+                highlight=False,
+            )
             return
 
         if res == "run":
@@ -602,18 +613,18 @@ def register_resource_commands(app: typer.Typer) -> None:
                 dump_json(run)
                 return
             lines = [
-                f"[bold]Run ID:[/bold]        {run.id}",
-                f"[bold]Seed ID:[/bold]       {run.seed_id}",
-                f"[bold]Stage:[/bold]         {run.stage} (attempt #{run.attempt})",
-                f"[bold]Agent:[/bold]         {run.agent_id}",
-                f"[bold]Runtime/Model:[/bold] {run.runtime} / {run.model}",
-                f"[bold]Status:[/bold]        {run.status}",
+                f"[bold]Run ID:[/bold]        {escape(run.id)}",
+                f"[bold]Seed ID:[/bold]       {escape(run.seed_id)}",
+                f"[bold]Stage:[/bold]         {escape(str(run.stage))} (attempt #{run.attempt})",
+                f"[bold]Agent:[/bold]         {escape(run.agent_id)}",
+                f"[bold]Runtime/Model:[/bold] {escape(str(run.runtime))} / {escape(run.model)}",
+                f"[bold]Status:[/bold]        {escape(str(run.status))}",
                 f"[bold]Tokens:[/bold]        in={run.input_tokens}, out={run.output_tokens}",
                 f"[bold]Cost:[/bold]          ${float(run.cost):.4f}",
             ]
             if run.error:
-                lines.append(f"[bold red]Error:[/bold red]         {run.error}")
-            console.print(Panel("\n".join(lines), title=f"Run {run.id}", expand=False))
+                lines.append(f"[bold red]Error:[/bold red]         {escape(run.error)}")
+            console.print(Panel("\n".join(lines), title=f"Run {escape(run.id)}", expand=False))
             if run.output:
                 dump_json(run.output)
             return
@@ -738,8 +749,9 @@ def register_resource_commands(app: typer.Typer) -> None:
             dump_json(created)
             return
         console.print(
-            f"[green]✓[/green] Created seed [bold]{project.slug}#{created.number}[/bold] "
-            f"({created.id}) in stage [bold]{created.stage}[/bold]: {created.title}"
+            f"[green]✓[/green] Created seed [bold]{escape(project.slug)}#{created.number}[/bold] "
+            f"({escape(created.id)}) in stage [bold]{escape(str(created.stage))}[/bold]: "
+            f"{escape(created.title)}"
         )
 
     @app.command("apply")
@@ -781,7 +793,7 @@ def register_resource_commands(app: typer.Typer) -> None:
             )
             results.append(summary)
             if opts.output != "json":
-                console.print(f"[green]✓[/green] {summary}")
+                console.print(f"[green]✓[/green] {escape(summary)}")
 
         if opts.output == "json":
             dump_json({"applied": results})
@@ -836,7 +848,7 @@ def register_resource_commands(app: typer.Typer) -> None:
                 source=f"{res}/{resource_id}",
                 project_override=opts.project,
             )
-            console.print(f"[green]✓[/green] {summary}")
+            console.print(f"[green]✓[/green] {escape(summary)}")
         finally:
             try:
                 tmp_path.unlink(missing_ok=True)
@@ -1022,7 +1034,7 @@ def register_resource_commands(app: typer.Typer) -> None:
                     else current_chunk
                 )
                 if new_part:
-                    console.print(new_part, end="")
+                    console.print(new_part, end="", markup=False, highlight=False)
                 printed_text = current_chunk
 
             if not follow or run.status not in RUN_ACTIVE_STATUSES:
@@ -1032,8 +1044,8 @@ def register_resource_commands(app: typer.Typer) -> None:
 
         if not printed_text:
             console.print(
-                f"[dim]Run {run.id} ({run.stage}) status: {run.status} "
-                "(no log output recorded).[/dim]"
+                f"[dim]Run {escape(run.id)} ({escape(str(run.stage))}) status: "
+                f"{escape(str(run.status))} (no log output recorded).[/dim]"
             )
 
     @app.command("diff")

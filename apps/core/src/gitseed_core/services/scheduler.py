@@ -85,6 +85,7 @@ from gitseed_core.services.seeds import (
     MAX_OPINIONS_PER_STAGE,
     MULTI_OPINION_STAGES,
     list_stage_cycle_runs,
+    reset_orphaned_running_tasks,
 )
 
 logger = logging.getLogger("uvicorn.error")
@@ -235,6 +236,10 @@ async def _reconcile_active_runs(session: AsyncSession) -> None:
             run.status = RunStatus.CANCELLED
             run.finished_at = now
             run.updated_at = now
+            if run.stage == SeedStage.EXECUTE:
+                await reset_orphaned_running_tasks(
+                    session, seed.id, exclude_run_id=run.id, now=now
+                )
             continue
 
         # 2. Enforce stage timeout_minutes from started_at (or created_at if stuck in starting)
@@ -257,6 +262,10 @@ async def _reconcile_active_runs(session: AsyncSession) -> None:
             run.finished_at = now
             run.error = f"Run exceeded stage timeout of {pol.timeout_minutes} minutes"
             run.updated_at = now
+            if run.stage == SeedStage.EXECUTE:
+                await reset_orphaned_running_tasks(
+                    session, seed.id, exclude_run_id=run.id, now=now
+                )
 
             await _reconcile_seed_after_run_failure(session, seed, run, pol, now)
 
@@ -316,6 +325,10 @@ async def _reconcile_active_runs(session: AsyncSession) -> None:
                 run.exit_code = exit_code
                 run.error = err_msg
                 run.updated_at = now
+                if run.stage == SeedStage.EXECUTE:
+                    await reset_orphaned_running_tasks(
+                        session, seed.id, exclude_run_id=run.id, now=now
+                    )
 
                 await _reconcile_seed_after_run_failure(session, seed, run, pol, now)
 

@@ -603,8 +603,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveDetailTab(null)
       setViewFilterParams(filterParams || null)
       const targetPath = buildPath(view)
-      if (window.location.pathname !== targetPath) {
-        window.history.pushState(null, '', targetPath)
+      const search =
+        filterParams && Object.keys(filterParams).length > 0
+          ? new URLSearchParams(filterParams).toString()
+          : ''
+      const fullUrl = search ? `${targetPath}?${search}` : targetPath
+      if (`${window.location.pathname}${window.location.search}` !== fullUrl) {
+        window.history.pushState(null, '', fullUrl)
       }
     },
     []

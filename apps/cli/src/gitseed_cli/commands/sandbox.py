@@ -10,7 +10,9 @@ from gitseed_common.schemas import (
     SandboxInputRequest,
     SendAgentSessionMessageRequest,
 )
+from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from gitseed_cli.client import CLIError, GitSeedClient
 from gitseed_cli.config import RuntimeOptions, get_opts, make_client
@@ -195,7 +197,7 @@ def sandbox_logs(
     printed_len = 0
     current_log = sbx.log_tail or ""
     if current_log:
-        console.print(current_log, end="", highlight=False)
+        console.print(current_log, end="", highlight=False, markup=False)
         printed_len = len(current_log)
 
     if not follow:
@@ -210,7 +212,7 @@ def sandbox_logs(
             updated_log = sbx.log_tail or ""
             if len(updated_log) > printed_len:
                 delta = updated_log[printed_len:]
-                console.print(delta, end="", highlight=False)
+                console.print(delta, end="", highlight=False, markup=False)
                 printed_len = len(updated_log)
     except KeyboardInterrupt:
         console.print("\n[dim]Stopped following sandbox output.[/dim]")
@@ -232,11 +234,11 @@ def sandbox_config(
         dump_json(cfg)
         return
 
-    console.print(f"[bold]Source:[/bold]        {cfg.source} (ref: {cfg.ref})")
-    console.print(f"[bold]Image:[/bold]         {cfg.image}")
-    console.print(f"[bold]Setup Command:[/bold] {cfg.setup_command or '-'}")
-    console.print(f"[bold]Run Command:[/bold]   {cfg.run_command or '-'}")
-    console.print(f"[bold]Test Command:[/bold]  {cfg.test_command or '-'}")
+    console.print(f"[bold]Source:[/bold]        {escape(str(cfg.source))} (ref: {escape(str(cfg.ref))})")
+    console.print(f"[bold]Image:[/bold]         {escape(str(cfg.image))}")
+    console.print(f"[bold]Setup Command:[/bold] {escape(cfg.setup_command or '-')}")
+    console.print(f"[bold]Run Command:[/bold]   {escape(cfg.run_command or '-')}")
+    console.print(f"[bold]Test Command:[/bold]  {escape(cfg.test_command or '-')}")
 
 
 @sandbox_app.command("delete")
@@ -385,8 +387,10 @@ def session_show(
         return
     print_agent_sessions_table([sess], wide=True)
     for msg in sess.messages:
-        role_label = msg.role.upper()
-        console.print(Panel(msg.content or "", title=f"{role_label} ({msg.id})", expand=False))
+        role_label = escape(msg.role.upper())
+        console.print(
+            Panel(Text(msg.content or ""), title=f"{role_label} ({escape(msg.id)})", expand=False)
+        )
 
 
 @session_app.command("stop")

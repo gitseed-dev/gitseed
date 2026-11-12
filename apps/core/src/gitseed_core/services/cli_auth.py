@@ -43,6 +43,7 @@ logger = logging.getLogger("uvicorn.error")
 
 _OSC8_URL_RE = re.compile(r"\x1b\]8;[^;]*;(https?://[^\x07\x1b]+)(?:\x07|\x1b\\)")
 _OSC_ESCAPE_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_DCS_ESCAPE_RE = re.compile(r"\x1b[P_^][^\x07\x1b]*(?:\x07|\x1b\\)")
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\([A-Z0-9])")
 _URL_RE = re.compile(r"https?://[^\s\"'<>)\]\x00-\x1f\x7f]+")
 _DEVICE_CODE_RE = re.compile(
@@ -53,10 +54,14 @@ _DEVICE_CODE_RE = re.compile(
 
 def _strip_ansi(text: str) -> str:
     cleaned = _OSC_ESCAPE_RE.sub("", text or "")
+    cleaned = _DCS_ESCAPE_RE.sub("", cleaned)
     cleaned = _ANSI_ESCAPE_RE.sub("", cleaned)
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-    # Collapse long horizontal box-drawing divider lines from wide PTY
+    # Collapse long horizontal box-drawing divider lines and wide-PTY padding
     cleaned = re.sub(r"─{40,}", "─" * 40, cleaned)
+    cleaned = re.sub(r"[ \t]{16,}([│|])", r"  \1", cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{4,}", "\n\n\n", cleaned)
     return cleaned
 
 
@@ -150,20 +155,42 @@ env["BROWSER"] = "echo"
 env["NO_BROWSER"] = "true"
 env["DISPLAY"] = ""
 
-if provider == "gemini":
+if provider in ("gemini", "antigravity"):
     gemini_dir = home / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
+    trusted_folders_path = gemini_dir / "trustedFolders.json"
+    trusted_folders = {{
+        str(home): "TRUST_FOLDER",
+        str(home.parent): "TRUST_FOLDER",
+        "/workspace": "TRUST_FOLDER",
+    }}
+    trusted_folders_path.write_text(json.dumps(trusted_folders, indent=2))
     default_gem_cfg = {{
         "selectedAuthType": "oauth-personal",
-        "security": {{"auth": {{"selectedType": "oauth-personal"}}}},
+        "security": {{
+            "auth": {{"selectedType": "oauth-personal"}},
+            "folderTrust": {{"enabled": False}},
+        }},
         "theme": "Default",
+        "ui": {{
+            "theme": "Default",
+            "autoThemeSwitching": False,
+        }},
     }}
     settings_path = gemini_dir / "settings.json"
-    if not settings_path.exists():
-        settings_path.write_text(json.dumps(default_gem_cfg, indent=2))
-elif provider == "antigravity":
+    settings_path.write_text(json.dumps(default_gem_cfg, indent=2))
+if provider == "antigravity":
     agy_dir = home / ".gemini" / "antigravity-cli"
     agy_dir.mkdir(parents=True, exist_ok=True)
+    default_agy_cfg = {{
+        "onboardingComplete": True,
+        "colorScheme": "dark",
+        "telemetryEnabled": False,
+        "trustedWorkspaces": [str(home), "/workspace"],
+    }}
+    agy_settings_path = agy_dir / "settings.json"
+    if not agy_settings_path.exists():
+        agy_settings_path.write_text(json.dumps(default_agy_cfg, indent=2))
 elif provider == "anthropic":
     claude_cfg = home / ".claude.json"
     if not claude_cfg.exists():
@@ -211,6 +238,7 @@ def spawn_in_pty(argv):
 master_fd, proc = spawn_in_pty(cmd)
 fifo_fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
 start_ts = time.time()
+sent_folder_trust_enter = False
 sent_agy_oauth_enter = False
 accum_text = ""
 
@@ -225,14 +253,25 @@ try:
                     sys.stdout.buffer.flush()
                     accum_text += data.decode("utf-8", errors="ignore")
                     if (
-                        provider == "antigravity"
-                        and cmd == ["agy"]
-                        and not sent_agy_oauth_enter
-                        and "Select login method" in accum_text
+                        provider in ("antigravity", "gemini")
+                        and "https://" not in accum_text
+                        and "Enter the authorization code" not in accum_text
                     ):
-                        sent_agy_oauth_enter = True
-                        time.sleep(0.2)
-                        os.write(master_fd, b"\\r")
+                        if not sent_folder_trust_enter and (
+                            "Trust parent folder" in accum_text
+                            or "Do you trust this folder" in accum_text
+                        ):
+                            sent_folder_trust_enter = True
+                            time.sleep(0.2)
+                            os.write(master_fd, b"\\r")
+                        elif (
+                            cmd == ["agy"]
+                            and not sent_agy_oauth_enter
+                            and "Select login method" in accum_text
+                        ):
+                            sent_agy_oauth_enter = True
+                            time.sleep(0.2)
+                            os.write(master_fd, b"\\r")
             except OSError:
                 break
         if fifo_fd in rlist:
@@ -308,6 +347,7 @@ ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME: dict[str, frozenset[str]] = {
             ".gemini/antigravity-cli/keyring/antigravity-oauth-token",
             ".gemini/antigravity-cli/installation_id",
             ".gemini/antigravity-cli/jetski_state.pbtxt",
+            ".config/Antigravity/User/globalStorage/jetski_state.pbtxt",
             ".gemini/antigravity-cli/auth.json",
             ".gemini/antigravity-cli/acp-auth-state.json",
             ".gemini/antigravity-cli/oauth_creds.json",
@@ -336,11 +376,16 @@ ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME: dict[str, frozenset[str]] = {
 }
 
 ALLOWED_CLI_AUTH_PATHS_BY_PROVIDER: dict[str, frozenset[str]] = {
-    "anthropic": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["claude-code"],
-    "openai": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["codex"],
-    "gemini": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["gemini"],
-    "antigravity": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["antigravity"],
-    "xai": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["grok-build"],
+    "anthropic": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["claude-code"]
+    | ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["opencode"],
+    "openai": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["codex"]
+    | ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["opencode"],
+    "gemini": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["gemini"]
+    | ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["opencode"],
+    "antigravity": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["antigravity"]
+    | ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["opencode"],
+    "xai": ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["grok-build"]
+    | ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME["opencode"],
 }
 
 ALL_ALLOWED_CLI_AUTH_PATHS: frozenset[str] = frozenset().union(
@@ -372,6 +417,7 @@ _NON_JSON_CLI_AUTH_PATHS: frozenset[str] = frozenset(
         ".gemini/antigravity-cli/keyring/antigravity-oauth-token",
         ".gemini/antigravity-cli/installation_id",
         ".gemini/antigravity-cli/jetski_state.pbtxt",
+        ".config/Antigravity/User/globalStorage/jetski_state.pbtxt",
     }
 )
 
@@ -444,7 +490,7 @@ def validate_and_filter_cli_auth_bundle(
 
 
 _CREDENTIAL_ARCHIVE_ROOTS: dict[str, tuple[str, ...]] = {
-    "antigravity": (".gemini", ".config/antigravity"),
+    "antigravity": (".gemini", ".config/antigravity", ".config/Antigravity"),
     "gemini": (".gemini",),
     "anthropic": (".claude",),
     "openai": (".codex",),
@@ -765,11 +811,11 @@ async def start_cli_auth_session(
                 "backend": backend,
             }
 
-    # Poll logs briefly (up to ~3.5 seconds) so the OAuth URL is ready on first response
+    # Poll logs briefly (up to ~5 seconds) so the OAuth URL is ready on first response
     log_text = ""
     auth_url: str | None = None
     user_code: str | None = None
-    for _ in range(7):
+    for _ in range(10):
         await asyncio.sleep(0.5)
         raw_logs = await fetch_docker_container_logs(
             compute_backend, container_name, tail_lines=200
@@ -975,8 +1021,8 @@ async def submit_cli_auth_code(
                     timeout=8.0,
                 )
 
-    # Poll for up to 5 seconds for the CLI to exchange the code and write credentials
-    for _ in range(10):
+    # Poll for up to 8 seconds for the CLI to exchange the code and write credentials
+    for _ in range(16):
         await asyncio.sleep(0.5)
         status_res = await get_cli_auth_status(session, admin, backend_id)
         if status_res.get("authenticated"):

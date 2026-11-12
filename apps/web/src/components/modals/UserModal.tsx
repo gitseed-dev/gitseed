@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@heroui/react'
-import { Check, Copy, ExternalLink, FolderGit2, Link2, Plus } from 'lucide-react'
+import { AlertTriangle, Check, Copy, ExternalLink, FolderGit2, Link2, Plus } from 'lucide-react'
 import { api } from '../../api/client'
 import { queryKeys } from '../../api/queryClient'
 import { Modal } from '../common/Modal'
@@ -41,6 +41,7 @@ const UserModalForm: React.FC<{
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [membershipWarning, setMembershipWarning] = useState<string | null>(null)
   const [createdInvite, setCreatedInvite] = useState<UserInviteCreated | null>(null)
   const [copiedInvite, setCopiedInvite] = useState(false)
 
@@ -84,6 +85,7 @@ const UserModalForm: React.FC<{
 
     setIsSubmitting(true)
     setError(null)
+    setMembershipWarning(null)
 
     try {
       const invited = await api.users.invite({
@@ -91,15 +93,30 @@ const UserModalForm: React.FC<{
         email: trimmedEmail,
         org_role: orgRole,
       })
+      setCreatedInvite(invited)
 
+      const failedProjects: string[] = []
       for (const assignment of projectRoles) {
-        await api.projects.addMember(assignment.project_id, {
-          user_id: invited.id,
-          role: assignment.role,
-        })
+        try {
+          await api.projects.addMember(assignment.project_id, {
+            user_id: invited.id,
+            role: assignment.role,
+          })
+        } catch (memberErr) {
+          const projName =
+            projects.find((p) => p.id === assignment.project_id)?.name || assignment.project_id
+          const detail = memberErr instanceof Error ? memberErr.message : 'failed to attach'
+          failedProjects.push(`${projName} (${detail})`)
+        }
       }
 
-      await Promise.all([
+      if (failedProjects.length > 0) {
+        setMembershipWarning(
+          `Project membership could not be attached for ${failedProjects.join(', ')}. You can assign projects anytime from the user's detail drawer.`
+        )
+      }
+
+      await Promise.allSettled([
         queryClient.invalidateQueries({ queryKey: queryKeys.users }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
         queryClient.invalidateQueries({ queryKey: queryKeys.activity }),
@@ -107,8 +124,6 @@ const UserModalForm: React.FC<{
           queryClient.invalidateQueries({ queryKey: queryKeys.projectMembers(pr.project_id) })
         ),
       ])
-
-      setCreatedInvite(invited)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to invite user.')
     } finally {
@@ -133,6 +148,13 @@ const UserModalForm: React.FC<{
             </p>
           </div>
         </div>
+
+        {membershipWarning && (
+          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300 font-medium flex items-start gap-2.5">
+            <AlertTriangle size={15} className="shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+            <span>{membershipWarning}</span>
+          </div>
+        )}
 
         <div className="flex flex-col gap-2">
           <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">

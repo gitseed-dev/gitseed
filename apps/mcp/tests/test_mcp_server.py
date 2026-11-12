@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import re
@@ -1323,6 +1324,75 @@ def test_cli_default_loopback_host_and_list_seeds_limit_schema(
     list_seeds_tool = next(tool for tool in TOOLS_CATALOG if tool["name"] == "list_seeds")
     limit_prop = list_seeds_tool["inputSchema"]["properties"]["limit"]
     assert "(1-1000)" in limit_prop["description"]
+
+    approve_ckpt_tool = next(
+        tool for tool in TOOLS_CATALOG if tool["name"] == "approve_seed_checkpoint"
+    )
+    assert approve_ckpt_tool["inputSchema"]["required"] == ["seed_id", "approved_through"]
+
+
+def test_streamable_http_post_does_not_duplicate_response_into_sse_queue() -> None:
+    """POST /mcp returns JSONResponse directly without pushing a duplicate onto GET /mcp SSE queue."""
+    cfg = MCPSettings(
+        GITSEED_API_URL="http://localhost:8420",
+        GITSEED_TOKEN="gsp_env_token",
+    )
+    app = create_app(settings=cfg, http_transport=_make_mock_api_transport([]))
+
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    session_id = "sess_no_dup_1"
+    app.state.streamable_sessions[session_id] = {
+        "token": "gsp_valid_token",
+        "queue": queue,
+    }
+
+    raw_body = json.dumps({"jsonrpc": "2.0", "id": 77, "method": "ping"}).encode("utf-8")
+    sent_messages: list[dict[str, Any]] = []
+    body_consumed = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal body_consumed
+        if not body_consumed:
+            body_consumed = True
+            return {"type": "http.request", "body": raw_body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent_messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/mcp",
+        "raw_path": b"/mcp",
+        "query_string": b"",
+        "headers": [
+            (b"authorization", b"Bearer gsp_valid_token"),
+            (b"content-type", b"application/json"),
+            (b"accept", b"application/json, text/event-stream"),
+            (b"mcp-session-id", session_id.encode("utf-8")),
+        ],
+    }
+
+    coro = app(scope, receive, send)
+    try:
+        while True:
+            coro.send(None)
+    except StopIteration:
+        pass
+    finally:
+        coro.close()
+
+    start_msg = next(m for m in sent_messages if m["type"] == "http.response.start")
+    body_msg = next(m for m in sent_messages if m["type"] == "http.response.body")
+    assert start_msg["status"] == 200
+    parsed = json.loads(body_msg["body"].decode("utf-8"))
+    assert parsed == {"jsonrpc": "2.0", "id": 77, "result": {}}
+    assert queue.empty() is True
+
 
 
 

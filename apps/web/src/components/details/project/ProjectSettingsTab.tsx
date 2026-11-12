@@ -918,9 +918,36 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
               <DollarSign size={16} />
             </div>
             <div>
-              <h3 className="font-heading text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100">
-                Spend & Concurrency Overrides
-              </h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-heading text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100">
+                  Spend & Concurrency Overrides
+                </h3>
+                {project.enforcement && (
+                  <span
+                    title={
+                      project.enforcement_detail ||
+                      (project.enforcement === 'unpriced'
+                        ? 'Custom or unpriced model without a known pricing catalog entry'
+                        : project.enforcement === 'estimated'
+                          ? 'Estimated from CLI token reports in Personal Mode'
+                          : 'Enforced in real time via LiteLLM per-run virtual key max_budget')
+                    }
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide border ${
+                      project.enforcement === 'unpriced'
+                        ? 'bg-zinc-500/15 text-zinc-700 dark:text-zinc-300 border-zinc-400/30'
+                        : project.enforcement === 'estimated'
+                          ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30'
+                          : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                    }`}
+                  >
+                    {project.enforcement === 'unpriced'
+                      ? 'Unpriced'
+                      : project.enforcement === 'estimated'
+                        ? 'Estimated'
+                        : 'Enforced'}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 Leave blank to inherit organization-wide defaults configured in Settings
               </p>

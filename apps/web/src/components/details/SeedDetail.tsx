@@ -31,8 +31,10 @@ import { formatRelativeTime } from '../../utils/format'
 import { canUserContributeToProject, canUserManageProject } from '../../utils/projects'
 import {
   canUserApproveSeedStage,
+  canUserDecideSeedStage,
   getEffectiveSeedPolicies,
   getSeedStatusClasses,
+  resolveStageRunAgent,
   SEED_STAGE_ORDER,
   STAGE_LABELS,
   STATUS_LABELS,
@@ -461,10 +463,19 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
           project,
           seed,
           currentPolicy,
-          codeEditorUserIds
+          codeEditorUserIds,
+          members
         )
         : false,
-    [user, project, seed, currentPolicy, codeEditorUserIds]
+    [user, project, seed, currentPolicy, codeEditorUserIds, members]
+  )
+
+  const canDecideStage = useMemo(
+    () =>
+      seed
+        ? canUserDecideSeedStage(user, project, currentPolicy, members)
+        : false,
+    [user, project, seed, currentPolicy, members]
   )
 
   const parsedSeedEvents = useMemo(
@@ -546,12 +557,10 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
 
   const handleDispatchRun = async (taskId?: string | null) => {
     setActionError(null)
-    const stageAgent = currentPolicy?.agent_id
-      ? agents.find((a) => a.id === currentPolicy.agent_id)
-      : agents.find((a) => a.enabled && !a.archived_at)
+    const stageAgent = resolveStageRunAgent(seed.stage, currentPolicy, agents)
 
     if (!stageAgent) {
-      setActionError('No enabled agent is configured for this stage.')
+      setActionError('No enabled stage agent is configured for this stage.')
       return
     }
 
@@ -999,6 +1008,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
         pullRequestStatus={changesQuery.data?.pull_request_status || null}
         canApprove={canApproveStage}
         canContribute={canContribute}
+        canRequestChanges={canDecideStage}
         onRefresh={invalidateSeedState}
         onOpenPullRequest={() => handleTabChange('changes')}
       />
@@ -1122,6 +1132,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
           isFetching={changesQuery.isFetching}
           error={changesQuery.error instanceof Error ? changesQuery.error : null}
           canContribute={canContribute}
+          canRequestChanges={canDecideStage}
           onRefresh={() => {
             void changesQuery.refetch()
             void invalidateSeedState()

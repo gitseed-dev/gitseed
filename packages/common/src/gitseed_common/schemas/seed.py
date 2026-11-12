@@ -14,7 +14,7 @@ from gitseed_common.enums import (
     TaskStatus,
 )
 
-BudgetEnforcement = Literal["enforced", "estimated"]
+BudgetEnforcement = Literal["enforced", "estimated", "unpriced"]
 
 
 class BudgetStatusResponse(BaseModel):

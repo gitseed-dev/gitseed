@@ -58,7 +58,9 @@ jobs:
       - name: Lint Helm chart
         run: helm lint charts/gitseed
       - name: Render Helm chart templates
-        run: helm template gitseed charts/gitseed >/dev/null
+        run: |
+          helm template gitseed charts/gitseed >/dev/null
+          helm template gitseed charts/gitseed --set ingress.enabled=true --set ingress.sandboxHost=sandbox.gitseed.local --set compute.namespaceIsolation=project >/dev/null
       - name: Verify GitOps fail-closed secret guard
         run: |
           if helm template gitseed charts/gitseed --set gitops.requireExistingSecret=true >/dev/null 2>&1; then
@@ -77,6 +79,8 @@ jobs:
       - name: Verify Control Plane CLI entrypoint
         run: docker run --rm gitseed/gitseed:ci help
       - name: Build Runner Sandbox image
-        run: docker build -t gitseed/runner:ci ./apps/runner
+        run: docker build --build-arg INCLUDE_PROPRIETARY_CLIS=false -t gitseed/runner:ci apps/runner
+      - name: Verify Runner Sandbox package
+        run: docker run --rm --entrypoint python gitseed/runner:ci -c "import gitseed_runner.main"
 
 

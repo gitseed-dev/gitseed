@@ -7,6 +7,9 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 ENV_EXAMPLE="${GITSEED_ENV_EXAMPLE:-${REPO_ROOT}/.env.example}"
 ENV_FILE="${GITSEED_ENV_FILE:-${REPO_ROOT}/.env}"
+WORKSPACES_DIR="${GITSEED_WORKSPACES_DIR:-$(dirname -- "$ENV_FILE")/data/workspaces}"
+
+mkdir -p "$WORKSPACES_DIR"
 
 rand_hex() {
     bytes="${1:-32}"
