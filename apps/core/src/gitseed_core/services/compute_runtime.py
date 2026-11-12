@@ -149,9 +149,24 @@ def _build_k8s_default_egress_network_policy(
     api_port = int(getattr(settings, "API_PORT", 8420) or 8420)
     proxy_port = int(getattr(settings, "EGRESS_PROXY_PORT", 3128) or 3128)
     proxy_url = str(getattr(settings, "RUNNER_EGRESS_PROXY_URL", "") or "").strip()
+    litellm_raw_url = str(
+        getattr(settings, "LITELLM_BASE_URL", "")
+        or (
+            settings.RUNNER_GATEWAY_URL
+            if getattr(settings, "LITELLM_URL", "") == "http://litellm:4000"
+            and getattr(settings, "RUNNER_GATEWAY_URL", "http://litellm:4000/v1")
+            != "http://litellm:4000/v1"
+            else getattr(settings, "LITELLM_URL", "")
+        )
+        or ""
+    ).strip()
+    try:
+        litellm_port = int(urlsplit(litellm_raw_url).port or 4000) if litellm_raw_url else 4000
+    except ValueError:
+        litellm_port = 4000
 
     cp_ports: list[dict[str, Any]] = []
-    for p in (api_port, 8000, 4000, proxy_port):
+    for p in (api_port, 8000, litellm_port, proxy_port):
         entry = {"protocol": "TCP", "port": p}
         if entry not in cp_ports:
             cp_ports.append(entry)
