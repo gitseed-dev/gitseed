@@ -33,7 +33,8 @@ x-gitseed-common: &gitseed-common
     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}
     - POSTGRES_DB=${POSTGRES_DB:-gitseed}
     - POSTGRES_PORT=${POSTGRES_PORT:-5432}
-    - REDIS_URL=${REDIS_URL:-redis://valkey:6379/0}
+    - VALKEY_PASSWORD=${VALKEY_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}
+    - REDIS_URL=${REDIS_URL:-redis://:${VALKEY_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}@valkey:6379/0}
     - ENVIRONMENT=${ENVIRONMENT:-development}
     - DEBUG=${DEBUG:-false}
   depends_on:
@@ -79,12 +80,18 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    command:
+      - valkey-server
+      - --requirepass
+      - ${VALKEY_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}
+    environment:
+      REDISCLI_AUTH: ${VALKEY_PASSWORD:?run 'make init' or ./scripts/init.sh to generate secrets}
     ports:
       - "127.0.0.1:${VALKEY_PORT:-6379}:6379"
     volumes:
       - valkey_data:/data
     healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
+      test: ["CMD", "valkey-cli", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5

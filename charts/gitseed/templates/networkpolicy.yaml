@@ -40,6 +40,7 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.api.port }}
+    {{- if .Values.litellm.enabled }}
     - to:
         - namespaceSelector:
             matchLabels:
@@ -50,6 +51,7 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.litellm.port }}
+    {{- end }}
     {{- if .Values.egressProxy.enabled }}
     # Route HTTP/HTTPS model & package egress through the L7 hostname-allowlisting egress-proxy
     - to:
@@ -133,6 +135,7 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.api.port }}
+    {{- if .Values.litellm.enabled }}
     - to:
         - namespaceSelector:
             matchLabels:
@@ -143,6 +146,7 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.litellm.port }}
+    {{- end }}
     {{- if .Values.egressProxy.enabled }}
     - to:
         - namespaceSelector:

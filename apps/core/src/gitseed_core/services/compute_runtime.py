@@ -284,12 +284,26 @@ async def _ensure_k8s_namespace_network_policy(
     target_ns: str,
     control_plane_ns: str,
 ) -> None:
-    """Idempotently apply default egress NetworkPolicy (`POST` ignoring `409 Conflict`), failing closed on RBAC/API errors."""
-    np_resp = await client.post(
-        f"{base_url}/apis/networking.k8s.io/v1/namespaces/{quote(target_ns, safe='')}/networkpolicies",
-        json=_build_k8s_default_egress_network_policy(target_ns, control_plane_ns),
+    """Idempotently apply default egress NetworkPolicy (`POST`, reconciling via `PUT` on `409 Conflict`), failing closed on RBAC/API errors."""
+    policy_payload = _build_k8s_default_egress_network_policy(target_ns, control_plane_ns)
+    collection_url = (
+        f"{base_url}/apis/networking.k8s.io/v1/namespaces/{quote(target_ns, safe='')}/networkpolicies"
     )
-    if np_resp.status_code not in (200, 201, 202, 409):
+    np_resp = await client.post(
+        collection_url,
+        json=policy_payload,
+    )
+    if np_resp.status_code == 409:
+        put_resp = await client.put(
+            f"{collection_url}/gitseed-default-egress",
+            json=policy_payload,
+        )
+        if put_resp.status_code not in (200, 201, 202):
+            raise RuntimeError(
+                f"Kubernetes NetworkPolicy update in {target_ns} failed with HTTP {put_resp.status_code}"
+            )
+        return
+    if np_resp.status_code not in (200, 201, 202):
         raise RuntimeError(
             f"Kubernetes NetworkPolicy apply in {target_ns} failed with HTTP {np_resp.status_code}"
         )

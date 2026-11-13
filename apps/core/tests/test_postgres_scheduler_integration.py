@@ -51,12 +51,11 @@ from sqlalchemy.ext.asyncio import (
 from sqlmodel import SQLModel, select
 
 
-@pytest.fixture(scope="module")
-def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
+@pytest.fixture(scope="module", autouse=True)
+def _windows_selector_event_loop_policy() -> None:
     """Use WindowsSelectorEventLoopPolicy only for psycopg async integration tests on Windows."""
-    if sys.platform == "win32":
-        return asyncio.WindowsSelectorEventLoopPolicy()
-    return asyncio.get_event_loop_policy()
+    if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def _start_ephemeral_postgres_container() -> tuple[str, str]:

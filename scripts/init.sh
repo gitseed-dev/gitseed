@@ -59,7 +59,7 @@ set_env_val() {
 is_placeholder() {
     val="$1"
     case "$val" in
-        ""|"changeme"|"secret"|"password"|"admin"|"gitseed-dev-secret-key-change-in-production"|"sk-gitseed-litellm-master-key"|"sk-gitseed-litellm-salt-key"|"gitseed_password"|"gitseed_admin")
+        ""|"changeme"|"secret"|"password"|"admin"|"gitseed-dev-secret-key-change-in-production"|"sk-gitseed-litellm-master-key"|"sk-gitseed-litellm-salt-key"|"gitseed_password"|"gitseed_valkey_password"|"gitseed_admin")
             return 0
             ;;
         *)
@@ -93,6 +93,21 @@ if is_placeholder "$cur_pg"; then
     pg_db="${pg_db:-gitseed}"
     if command -v docker >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' gitseed-postgresql 2>/dev/null || true)" = "true" ]; then
         docker exec gitseed-postgresql psql -U "$pg_user" -d "$pg_db" -c "ALTER USER \"${pg_user}\" WITH PASSWORD '${new_pg}';" >/dev/null 2>&1 || true
+    fi
+fi
+
+cur_valkey="$(get_env_val VALKEY_PASSWORD)"
+if is_placeholder "$cur_valkey"; then
+    new_valkey="$(rand_hex 24)"
+    set_env_val "VALKEY_PASSWORD" "$new_valkey"
+    cur_redis_url="$(get_env_val REDIS_URL)"
+    case "$cur_redis_url" in
+        ""|"redis://valkey:6379/0"|"redis://:gitseed_valkey_password@valkey:6379/0")
+            set_env_val "REDIS_URL" "redis://:${new_valkey}@valkey:6379/0"
+            ;;
+    esac
+    if command -v docker >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' gitseed-valkey 2>/dev/null || true)" = "true" ]; then
+        docker exec gitseed-valkey valkey-cli CONFIG SET requirepass "$new_valkey" >/dev/null 2>&1 || true
     fi
 fi
 

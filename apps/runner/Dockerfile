@@ -64,9 +64,8 @@ ARG REQUIRE_ANTIGRAVITY_CLI=false
 ARG INSTALL_GROK_CLI=${INCLUDE_PROPRIETARY_CLIS}
 # HTTPS installer script URLs for Antigravity (agy) and Grok (grok) binaries.
 # Antigravity defaults to Google's official Linux installer when INSTALL_ANTIGRAVITY=true.
-# TODO(pin): the upstream installer is unversioned; set ANTIGRAVITY_INSTALL_SHA256
-# (and GROK_CLI_INSTALL_SHA256) to the sha256 of a reviewed installer script to
-# make builds reproducible and fail closed if the script changes.
+# Note: The upstream installer endpoint is unversioned; pass --build-arg ANTIGRAVITY_INSTALL_SHA256=<sha256>
+# (or GROK_CLI_INSTALL_SHA256=<sha256>) to enforce strict SHA-256 verification and fail closed if the script changes.
 ARG ANTIGRAVITY_INSTALL_URL="https://antigravity.google/cli/install.sh"
 ARG ANTIGRAVITY_INSTALL_SHA256=""
 ARG GROK_CLI_INSTALL_URL=""
