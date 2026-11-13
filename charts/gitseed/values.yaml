@@ -102,6 +102,8 @@ scheduler:
   enabled: true
   replicaCount: 1
   pollSeconds: 3.0
+  # Optional custom pod affinity override (defaults to co-locating with `api` when ReadWriteOnce persistence is enabled)
+  affinity: {}
   resources:
     requests:
       cpu: 100m
@@ -200,6 +202,8 @@ externalDatabase:
   username: "gitseed"
   password: ""
   database: "gitseed"
+  # Optional separate database name for LiteLLM on an external Postgres server (defaults to litellm.databaseName)
+  litellmDatabase: ""
 
 # Bundled Valkey (Redis-compatible, BSD-3-Clause; disable and set externalRedis.url for external Redis)
 valkey:

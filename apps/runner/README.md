@@ -33,12 +33,12 @@ docker build -t gitseed/runner:dev ./apps/runner
 | `codex` | `codex` | Apache-2.0 | ✅ Pre-installed out of the box |
 | `gemini` | `gemini` | Apache-2.0 | ✅ Pre-installed out of the box |
 | `claude-code` | `claude` | Proprietary (Anthropic) | ✅ Pre-installed out of the box in local builds (`INCLUDE_PROPRIETARY_CLIS=true`, default); omitted in redistributed images |
-| `antigravity` | `agy` | Proprietary (Google) | First-class adapter; install via `--build-arg ANTIGRAVITY_INSTALL_URL=<url>` or custom binary layer (falls back to `gemini` in OAuth mode if `agy` is absent) |
+| `antigravity` | `agy` | Proprietary (Google) | ✅ Pre-installed out of the box in local builds (`INCLUDE_PROPRIETARY_CLIS=true`, default, via `https://antigravity.google/cli/install.sh`); omitted in redistributed images |
 | `grok-build` | `grok` | Proprietary (xAI) | First-class adapter; install via `--build-arg GROK_CLI_INSTALL_URL=<url>` or custom binary layer |
 
-The agent editor in the web UI checks which binaries your runner image actually contains and marks missing runtimes as **Not installed**. On Kubernetes, where the image can't be probed, set `RUNNER_RUNTIMES` on the API (e.g. `RUNNER_RUNTIMES=opencode,codex,gemini,claude-code`) to declare what your image contains.
+The agent editor in the web UI checks which binaries your runner image actually contains and marks missing runtimes as **Not installed**. On Kubernetes, where the image can't be probed, set `RUNNER_RUNTIMES` on the API (e.g. `RUNNER_RUNTIMES=opencode,codex,gemini,claude-code,antigravity`) to declare what your image contains.
 
-**`opencode`, `codex`, `gemini`, and `claude-code` are pre-installed out of the box** in standard self-built images (`docker compose up -d` or `make build`, where `INCLUDE_PROPRIETARY_CLIS=true` is the default). **`antigravity` (`agy`) and `grok-build` (`grok`) have first-class runtime adapters** and support custom binary installation via build-time installer URLs (`ANTIGRAVITY_INSTALL_URL` / `GROK_CLI_INSTALL_URL`) or a derived Dockerfile.
+**`opencode`, `codex`, `gemini`, `claude-code`, and `antigravity` (`agy`) are pre-installed out of the box** in standard self-built images (`docker compose up -d --build` or `make build`, where `INCLUDE_PROPRIETARY_CLIS=true` is the default). **`grok-build` (`grok`) has a first-class runtime adapter** and supports custom binary installation via a build-time installer URL (`GROK_CLI_INSTALL_URL`) or a derived Dockerfile.
 
 Images published for third-party redistribution must omit proprietary vendor CLIs:
 

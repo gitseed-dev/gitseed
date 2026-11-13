@@ -91,15 +91,19 @@ def get_receipt_signing_public_key_info(secret_key: str | None = None) -> dict[s
     active_key_id = compute_public_key_id(pub)
     previous_keys: list[dict[str, str]] = []
     seen_ids = {active_key_id}
-    raw_prev_csv = str(getattr(settings, "GITSEED_SECRET_PREVIOUS_KEYS", "") or "")
-    for raw_prev in raw_prev_csv.split(","):
-        candidate = raw_prev.strip()
-        if not candidate:
-            continue
-        entry = _public_key_entry_for_secret(candidate)
-        if entry["key_id"] not in seen_ids:
-            seen_ids.add(entry["key_id"])
-            previous_keys.append(entry)
+    raw_prev_csv_parts = [
+        str(getattr(settings, "GITSEED_RECEIPT_PREVIOUS_SIGNING_KEYS", "") or ""),
+        str(getattr(settings, "GITSEED_SECRET_PREVIOUS_KEYS", "") or ""),
+    ]
+    for raw_prev_csv in raw_prev_csv_parts:
+        for raw_prev in raw_prev_csv.split(","):
+            candidate = raw_prev.strip()
+            if not candidate:
+                continue
+            entry = _public_key_entry_for_secret(candidate)
+            if entry["key_id"] not in seen_ids:
+                seen_ids.add(entry["key_id"])
+                previous_keys.append(entry)
     return {
         "key_id": active_key_id,
         "algorithm": RECEIPT_ALGORITHM,
@@ -487,8 +491,14 @@ async def build_seed_governance_receipt(
     pr_url: str | None = getattr(seed, "pr_url", None) or getattr(seed, "pull_request_url", None)
 
     serialized_runs: list[dict[str, Any]] = []
+    snap_policy: dict[str, Any] | None = None
     for r in run_rows:
         out_dict = r.output if isinstance(getattr(r, "output", None), dict) else {}
+        raw_broker = out_dict.get("_broker")
+        if isinstance(raw_broker, dict) and isinstance(raw_broker.get("policy_snapshot"), dict):
+            snap_policy = raw_broker["policy_snapshot"]
+        elif isinstance(out_dict.get("_policy_snapshot"), dict):
+            snap_policy = out_dict["_policy_snapshot"]
         trusted_info = _extract_run_trusted(r)
         if trusted_info and trusted_info.get("branch"):
             branch_name = str(trusted_info["branch"])
@@ -562,6 +572,16 @@ async def build_seed_governance_receipt(
                 "decided_at": decided_ts,
             }
         )
+
+    if isinstance(snap_policy, dict):
+        if isinstance(snap_policy.get("min_approver_role"), str) and snap_policy["min_approver_role"].strip():
+            min_approver_role = snap_policy["min_approver_role"].strip()
+        if "prevent_self_approval" in snap_policy:
+            prevent_self_approval = bool(snap_policy["prevent_self_approval"])
+        if isinstance(snap_policy.get("blocked_paths"), list):
+            blocked_paths = [
+                str(p).strip() for p in snap_policy["blocked_paths"] if str(p).strip()
+            ]
 
     receipt_payload: dict[str, Any] = {
         "schema_version": RECEIPT_SCHEMA_VERSION,

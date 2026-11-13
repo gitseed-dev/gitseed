@@ -94,7 +94,9 @@ def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
     if not chosen_url and urls:
         for raw_url in urls:
             u = raw_url.rstrip(".,;:")
-            if not u.startswith(("http://localhost", "http://127.0.0.1")):
+            if not u.startswith(("http://localhost", "http://127.0.0.1")) and not any(
+                doc_seg in u.lower() for doc_seg in ("/docs", "/terms", "/privacy")
+            ):
                 chosen_url = u
                 break
 
@@ -157,6 +159,8 @@ env["NO_BROWSER"] = "true"
 env["DISPLAY"] = ""
 
 if provider in ("gemini", "antigravity"):
+    env["GEMINI_FORCE_FILE_STORAGE"] = "true"
+    env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] = "false"
     gemini_dir = home / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
     trusted_folders_path = gemini_dir / "trustedFolders.json"
@@ -181,6 +185,7 @@ if provider in ("gemini", "antigravity"):
     settings_path = gemini_dir / "settings.json"
     settings_path.write_text(json.dumps(default_gem_cfg, indent=2))
 if provider == "antigravity":
+    env["SSH_CONNECTION"] = "127.0.0.1 22 127.0.0.1 22"
     agy_dir = home / ".gemini" / "antigravity-cli"
     agy_dir.mkdir(parents=True, exist_ok=True)
     default_agy_cfg = {{
@@ -201,7 +206,12 @@ if provider == "antigravity":
     if shutil.which("agy"):
         cmd = ["agy"]
     else:
-        cmd = ["gemini"]
+        print(
+            "Google Antigravity CLI ('agy') is not installed in this runner image. "
+            "Rebuild gitseed/runner with INSTALL_ANTIGRAVITY=true (e.g. 'docker compose up -d --build').",
+            flush=True,
+        )
+        sys.exit(1)
 elif provider == "gemini":
     cmd = ["gemini"]
 elif provider == "anthropic":
@@ -216,6 +226,167 @@ elif provider == "xai":
         cmd = ["sleep", "300"]
 else:
     cmd = ["sleep", "300"]
+
+import configparser
+
+def init_headless_keyring():
+    if provider not in ("antigravity", "gemini"):
+        return
+    if not (shutil.which("dbus-daemon") and shutil.which("gnome-keyring-daemon")):
+        return
+    try:
+        xdg_dir = Path("/tmp/xdg-runtime-1000")
+        xdg_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(xdg_dir, 0o700)
+        env["XDG_RUNTIME_DIR"] = str(xdg_dir)
+
+        kr_dir = home / ".local" / "share" / "keyrings"
+        kr_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(kr_dir, 0o700)
+        default_kr = kr_dir / "default"
+        if not default_kr.exists():
+            default_kr.write_text("login\\n", encoding="utf-8")
+            os.chmod(default_kr, 0o600)
+
+        dbus_res = subprocess.run(
+            ["dbus-daemon", "--session", "--print-address=1", "--print-pid=1", "--fork"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+        if dbus_res.returncode == 0:
+            lines = [ln.strip() for ln in dbus_res.stdout.splitlines() if ln.strip()]
+            if lines:
+                env["DBUS_SESSION_BUS_ADDRESS"] = lines[0]
+
+        for gk_args in (["gnome-keyring-daemon", "--unlock"], ["gnome-keyring-daemon", "--start", "--components=secrets"]):
+            gk_res = subprocess.run(
+                gk_args,
+                input="\\n",
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=5,
+            )
+            for line in (gk_res.stdout or "").splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("'\\"")
+                    if k and not k.startswith("export "):
+                        env[k] = v
+                    elif k.startswith("export "):
+                        env[k[7:].strip()] = v
+
+        if shutil.which("secret-tool"):
+            subprocess.run(
+                ["secret-tool", "store", "--label=GitSeed Init", "service", "gitseed-init", "username", "init"],
+                input="1",
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=5,
+            )
+            subprocess.run(
+                ["secret-tool", "clear", "service", "gitseed-init", "username", "init"],
+                capture_output=True,
+                env=env,
+                timeout=5,
+            )
+    except Exception:
+        pass
+
+def sync_keyring_to_files():
+    if provider not in ("antigravity", "gemini"):
+        return
+    token_val = ""
+    items = []
+    seen_keys = set()
+    if shutil.which("secret-tool") and env.get("DBUS_SESSION_BUS_ADDRESS"):
+        for k1, v1, k2, v2 in (
+            ("service", "gemini", "username", "antigravity"),
+            ("service", "antigravity", "username", "antigravity"),
+            ("service", "gemini", "account", "antigravity"),
+            ("service", "antigravity", "account", "antigravity"),
+        ):
+            try:
+                res = subprocess.run(
+                    ["secret-tool", "lookup", k1, v1, k2, v2],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=3,
+                )
+                val = (res.stdout or "").strip()
+                if res.returncode == 0 and val:
+                    if not token_val:
+                        token_val = val
+                    sig = (k1, v1, k2, v2, val)
+                    if sig not in seen_keys:
+                        seen_keys.add(sig)
+                        items.append({{
+                            "label": "Google Antigravity Session",
+                            "attributes": {{k1: v1, k2: v2}},
+                            "secret": val,
+                        }})
+            except Exception:
+                pass
+
+    login_kr = home / ".local" / "share" / "keyrings" / "login.keyring"
+    if login_kr.is_file():
+        try:
+            cp = configparser.RawConfigParser(interpolation=None)
+            cp.read_string(login_kr.read_text(encoding="utf-8", errors="ignore"))
+            for sec in cp.sections():
+                if not sec.isdigit():
+                    continue
+                sec_secret = cp.get(sec, "secret", fallback="").strip()
+                if not sec_secret:
+                    continue
+                attrs = {{}}
+                for sub in cp.sections():
+                    if sub.startswith(f"{{sec}}:attribute"):
+                        a_name = cp.get(sub, "name", fallback="").strip()
+                        a_val = cp.get(sub, "value", fallback="").strip()
+                        if a_name:
+                            attrs[a_name] = a_val
+                if attrs.get("service") == "gitseed-init":
+                    continue
+                if not token_val:
+                    token_val = sec_secret
+                sig = (tuple(sorted(attrs.items())), sec_secret)
+                if sig not in seen_keys:
+                    seen_keys.add(sig)
+                    items.append({{
+                        "label": cp.get(sec, "display-name", fallback="Google Antigravity Session"),
+                        "attributes": attrs,
+                        "secret": sec_secret,
+                    }})
+        except Exception:
+            pass
+
+    if not token_val and not items:
+        return
+    try:
+        agy_cli_dir = home / ".gemini" / "antigravity-cli"
+        kr_out_dir = agy_cli_dir / "keyring"
+        kr_out_dir.mkdir(parents=True, exist_ok=True)
+        if token_val:
+            for out_file in (
+                kr_out_dir / "antigravity-oauth-token",
+                agy_cli_dir / "antigravity-oauth-token",
+            ):
+                out_file.write_text(token_val, encoding="utf-8")
+                os.chmod(out_file, 0o600)
+        if items and provider == "antigravity":
+            auth_json = agy_cli_dir / "auth.json"
+            auth_json.write_text(json.dumps({{"keyring_items": items}}, indent=2), encoding="utf-8")
+            os.chmod(auth_json, 0o600)
+    except Exception:
+        pass
+
+init_headless_keyring()
 
 print(f"Starting CLI authentication for {{provider}} ({{' '.join(cmd)}})...", flush=True)
 
@@ -242,6 +413,7 @@ start_ts = time.time()
 sent_folder_trust_enter = False
 sent_agy_oauth_enter = False
 accum_text = ""
+last_kr_sync_ts = 0.0
 
 try:
     while time.time() - start_ts < 600:
@@ -255,8 +427,9 @@ try:
                     accum_text += data.decode("utf-8", errors="ignore")
                     if (
                         provider in ("antigravity", "gemini")
-                        and "https://" not in accum_text
+                        and "accounts.google.com" not in accum_text
                         and "Enter the authorization code" not in accum_text
+                        and "Paste the authorization code" not in accum_text
                     ):
                         if not sent_folder_trust_enter and (
                             "Trust parent folder" in accum_text
@@ -286,12 +459,12 @@ try:
                         os.write(master_fd, b"\\r")
             except OSError:
                 pass
+        now_ts = time.time()
+        if now_ts - last_kr_sync_ts >= 1.0:
+            last_kr_sync_ts = now_ts
+            sync_keyring_to_files()
         if proc.poll() is not None:
-            if provider == "antigravity" and proc.returncode != 0 and cmd[0] == "agy" and shutil.which("gemini"):
-                print("\\nFalling back to Google OAuth sign-in flow...", flush=True)
-                cmd = ["gemini"]
-                master_fd, proc = spawn_in_pty(cmd)
-                continue
+            sync_keyring_to_files()
             if provider == "openai" and proc.returncode != 0 and "--device-auth" in cmd:
                 cmd = ["codex", "login"]
                 master_fd, proc = spawn_in_pty(cmd)
@@ -301,6 +474,7 @@ try:
                 master_fd, proc = spawn_in_pty(cmd)
                 continue
             break
+    sync_keyring_to_files()
     # Keep container briefly alive so Core can harvest credentials from /home/runner
     time.sleep(15)
 finally:
@@ -777,6 +951,8 @@ async def start_cli_auth_session(
         "TERM=xterm-256color",
         "BROWSER=echo",
         "NO_BROWSER=true",
+        "GEMINI_FORCE_FILE_STORAGE=true",
+        "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=false",
     ]
     host_config: dict[str, Any] = {
         "AutoRemove": False,
@@ -797,6 +973,7 @@ async def start_cli_auth_session(
                 f"http_proxy={proxy_url}",
                 "NO_PROXY=localhost,127.0.0.1",
                 "no_proxy=localhost,127.0.0.1",
+                "NODE_USE_ENV_PROXY=1",
             ]
         )
         if network_name:
@@ -1035,11 +1212,11 @@ async def submit_cli_auth_code(
     async with client:
         parsed_url = urlsplit(trimmed)
         if parsed_url.scheme == "http" and parsed_url.hostname in ("localhost", "127.0.0.1"):
-            # Hit the CLI's in-container localhost OAuth callback listener directly
+            # Hit the CLI's in-container localhost OAuth callback listener directly, or fall back to PTY stdin
             exec_cmd = [
                 "sh",
                 "-c",
-                'curl -sS --max-time 5 "$1" >/dev/null 2>&1 || true',
+                'curl -sS --max-time 5 "$1" >/dev/null 2>&1 || printf "%s\\n" "$1" > /tmp/.gitseed_stdin',
                 "sh",
                 trimmed,
             ]
@@ -1073,14 +1250,20 @@ async def submit_cli_auth_code(
                     timeout=8.0,
                 )
 
-    # Poll for up to 8 seconds for the CLI to exchange the code and write credentials
-    for _ in range(16):
+    # Poll for up to 12 seconds for the CLI to exchange the code and write credentials
+    for _ in range(24):
         await asyncio.sleep(0.5)
         status_res = await get_cli_auth_status(session, admin, backend_id)
         if status_res.get("authenticated"):
             return status_res
 
-    return await get_cli_auth_status(session, admin, backend_id)
+    final_status = await get_cli_auth_status(session, admin, backend_id)
+    if not final_status.get("authenticated") and not final_status.get("error"):
+        final_status["error"] = (
+            "Authorization code submitted, but credential exchange has not completed yet. "
+            "Check the terminal output above for errors or wait a few seconds for sign-in to finish."
+        )
+    return final_status
 
 
 async def cancel_cli_auth_session(

@@ -633,7 +633,7 @@ class TestCoreHardeningW2:
 
         # 2. Docker socket proxy and internal runner/sandbox networks configured
         assert "docker-socket-proxy:" in compose_text
-        assert "tecnativa/docker-socket-proxy:v0.3.0" in compose_text
+        assert "tecnativa/docker-socket-proxy:0.3.0" in compose_text
         assert "tcp://docker-socket-proxy:2375" in compose_text
         assert "egress-proxy:" in compose_text
         assert "http://egress-proxy:3128" in compose_text

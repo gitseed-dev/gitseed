@@ -756,3 +756,157 @@ def test_gitsafe_case_insensitive_blocks_vscode_symlinks_and_secret_scans(
         assert escaped == ["escape_link.txt"]
         assert not (stage_dir / "escape_link.txt").exists()
         assert (stage_dir / "src" / "ok.py").read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_google_cli_adapters_force_portable_plaintext_file_storage_in_oauth_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_dir = tmp_path / "home"
+    work_dir = tmp_path / "work"
+    home_dir.mkdir()
+    work_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    output_file = work_dir / ".gitseed" / "output.json"
+
+    for adapter_cls, runtime_name in (
+        (AntigravityAdapter, "antigravity"),
+        (GeminiAdapter, "gemini"),
+    ):
+        ctx: dict[str, Any] = {
+            "runtime": runtime_name,
+            "provider": runtime_name,
+            "model": "gemini-2.5-pro",
+            "gateway": {
+                "auth_mode": "cli_oauth",
+                "base_url": "http://litellm:4000/v1",
+                "api_key": "sk-unused",
+                "cli_auth_bundle": {
+                    ".gemini/oauth_creds.json": json.dumps(
+                        {"access_token": "ya29.test", "refresh_token": "1//refresh"}
+                    )
+                },
+            },
+        }
+        adapter = adapter_cls(ctx=ctx, working_dir=work_dir, output_file=output_file)
+        env = adapter.prepare_workspace()
+        assert env["GEMINI_FORCE_FILE_STORAGE"] == "true"
+        assert env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] == "false"
+
+
+def test_antigravity_adapter_never_falls_back_to_gemini_and_bridges_headless_keyring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify AntigravityAdapter always targets `agy` and bridges GNOME Keyring secrets across turns."""
+    from gitseed_runner import adapters as adapters_mod
+
+    home_dir = tmp_path / "home"
+    work_dir = tmp_path / "work"
+    dbus_state = tmp_path / "dbus_env.json"
+    xdg_dir = tmp_path / "xdg-runtime"
+    home_dir.mkdir()
+    work_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    monkeypatch.setattr(adapters_mod, "_HEADLESS_DBUS_STATE_FILE", dbus_state)
+    monkeypatch.setattr(adapters_mod, "_HEADLESS_XDG_RUNTIME_DIR", xdg_dir)
+    output_file = work_dir / ".gitseed" / "output.json"
+
+    ctx: dict[str, Any] = {
+        "runtime": "antigravity",
+        "provider": "antigravity",
+        "model": "gemini-3.1-pro",
+        "gateway": {
+            "auth_mode": "cli_oauth",
+            "cli_auth_bundle": {
+                ".gemini/antigravity-cli/keyring/antigravity-oauth-token": "1//agy-keyring-refresh-token",
+                ".gemini/antigravity-cli/auth.json": json.dumps(
+                    {
+                        "keyring_items": [
+                            {
+                                "label": "Google Antigravity Session",
+                                "attributes": {"service": "gemini", "username": "antigravity"},
+                                "secret": "1//agy-keyring-refresh-token",
+                            }
+                        ]
+                    }
+                ),
+            },
+        },
+    }
+    adapter = AntigravityAdapter(ctx=ctx, working_dir=work_dir, output_file=output_file)
+
+    # Even if `agy` is missing and `gemini` is present, AntigravityAdapter must NEVER fall back to `gemini`
+    with patch(
+        "gitseed_runner.adapters.shutil.which",
+        side_effect=lambda b: "/usr/local/bin/gemini" if b == "gemini" else None,
+    ):
+        assert adapter.binary_name == "agy"
+        assert adapter.build_command("Hello")[0] == "agy"
+        assert adapter.build_interactive_command()[0] == "agy"
+
+    # Simulate Linux headless D-Bus + GNOME Keyring + secret-tool lifecycle
+    recorded_cmds: list[tuple[list[str], str | None]] = []
+
+    def _fake_run(
+        argv: list[str], *, input: str | None = None, **_: Any
+    ) -> subprocess.CompletedProcess[str]:
+        recorded_cmds.append((list(argv), input))
+        if argv[0] == "dbus-daemon":
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="unix:path=/tmp/dbus-agy-test\n42424\n", stderr=""
+            )
+        if argv[0] == "gnome-keyring-daemon":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="GNOME_KEYRING_CONTROL=/tmp/keyring-agy-test\n",
+                stderr="",
+            )
+        if argv[:2] == ["secret-tool", "lookup"]:
+            if argv[2:] == ["service", "gemini", "username", "antigravity"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="1//agy-rotated-token-v2\n", stderr=""
+                )
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    with (
+        patch.object(adapters_mod, "_is_linux_or_posix", return_value=True),
+        patch(
+            "gitseed_runner.adapters.shutil.which",
+            side_effect=lambda b: f"/usr/bin/{b}"
+            if b in ("dbus-daemon", "gnome-keyring-daemon", "secret-tool", "agy")
+            else None,
+        ),
+        patch("gitseed_runner.adapters.subprocess.run", side_effect=_fake_run),
+    ):
+        env = adapter.prepare_workspace()
+        assert env["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/tmp/dbus-agy-test"
+        assert env["GNOME_KEYRING_CONTROL"] == "/tmp/keyring-agy-test"
+        assert dbus_state.is_file()
+
+        store_calls = [
+            (argv, stdin_val)
+            for argv, stdin_val in recorded_cmds
+            if argv[:2] == ["secret-tool", "store"] and "gitseed-init" not in argv
+        ]
+        assert any(
+            "gemini" in argv and "antigravity" in argv and stdin_val == "1//agy-keyring-refresh-token"
+            for argv, stdin_val in store_calls
+        )
+
+        # Collect updated bundle syncs rotated token from GNOME Keyring back to allowlisted files
+        updated_bundle = adapter.collect_updated_cli_auth_bundle(strict_runtime=True)
+        assert updated_bundle is not None
+        assert (
+            updated_bundle[".gemini/antigravity-cli/keyring/antigravity-oauth-token"]
+            == "1//agy-rotated-token-v2"
+        )
+        assert (
+            updated_bundle[".gemini/antigravity-cli/antigravity-oauth-token"]
+            == "1//agy-rotated-token-v2"
+        )
+        parsed_auth = json.loads(updated_bundle[".gemini/antigravity-cli/auth.json"])
+        assert parsed_auth["keyring_items"][0]["secret"] == "1//agy-rotated-token-v2"
+

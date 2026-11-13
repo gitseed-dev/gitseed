@@ -36,6 +36,8 @@ DEFAULT_EGRESS_ALLOWLIST: tuple[str, ...] = (
     "oauth2.googleapis.com",
     "accounts.google.com",
     "*.google.com",
+    "*.gstatic.com",
+    "*.googleusercontent.com",
     "antigravity.google",
     "*.antigravity.google",
     "api.x.ai",

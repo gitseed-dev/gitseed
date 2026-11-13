@@ -384,6 +384,7 @@ async def run_prepare_mode(
         **clone_kwargs,
     )
 
+    remote_seed_heads = _get_remote_seed_heads(repo_dirs, seed_branch)
     prep_error: str | None = None
     if repo_list and not repo_dirs and stage in ("execute", "review", "merge"):
         prep_error = (
@@ -395,10 +396,17 @@ async def run_prepare_mode(
         and repo_dirs
         and not has_remote_seed_branch(repo_dirs, project_slug, seed_number)
     ):
-        prep_error = (
-            f"Seed branch '{seed_branch}' does not exist on the remote repository. "
-            "Move the seed back to Execute to push the branch before reviewing."
-        )
+        if any(str(v).strip() for v in remote_seed_heads.values()):
+            prep_error = (
+                f"Failed to check out remote seed branch '{seed_branch}' in /workspace."
+            )
+        else:
+            prep_error = (
+                f"Seed branch '{seed_branch}' does not exist on the remote repository. "
+                "Move the seed back to Execute to push the branch before reviewing."
+            )
+    if prep_error:
+        logger.error("prepare: %s", prep_error)
 
     # Ensure every cloned repo has neutralized hooks/config and zero credentials on disk
     known_repo_dirs = {p.resolve() for p in repo_dirs.values()}
@@ -1024,6 +1032,19 @@ async def run_finalize_mode(
                 any_pushed = True
                 if primary_commit_sha is None or bool(repo.get("is_primary")):
                     primary_commit_sha = commit_res.commit_sha
+
+            if (
+                status == "succeeded"
+                and repo_dirs
+                and not any_pushed
+                and not any(str(v).strip() for v in remote_seed_heads.values())
+            ):
+                status = "failed"
+                exit_code = 1
+                error_msg = (
+                    f"Execute stage completed without creating or modifying any tracked "
+                    f"repository files to push to branch '{seed_branch}'."
+                )
 
             trusted_result["blocked_paths_violations"] = sorted(set(all_violations))
             trusted_result["secret_scan_findings"] = all_secret_findings

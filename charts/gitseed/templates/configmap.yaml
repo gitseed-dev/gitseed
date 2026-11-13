@@ -21,6 +21,7 @@ data:
   PUBLIC_WEB_URL: {{ .Values.web.publicUrl | quote }}
   SANDBOX_ORIGIN: {{ .Values.web.sandboxOrigin | quote }}
   CORS_ORIGINS: {{ .Values.web.corsOrigins | quote }}
+  GITSEED_MCP_ALLOWED_ORIGINS: {{ printf "%s,%s" .Values.web.publicUrl .Values.web.corsOrigins | quote }}
   SCHEDULER_POLL_SECONDS: {{ .Values.scheduler.pollSeconds | quote }}
 
   # Database & Cache (REDIS_URL is injected via Secret so Valkey/Redis credentials never enter ConfigMap)

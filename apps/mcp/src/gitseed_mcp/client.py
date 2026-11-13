@@ -542,6 +542,12 @@ class GitSeedApiClient:
             params={"repo_id": repo_id},
         )
 
+    async def get_seed_receipt(self, seed_id: str) -> Any:
+        return await self.request(
+            "GET",
+            f"/api/v1/seeds/{_encode_segment(seed_id)}/receipt",
+        )
+
     # ── Seed Approvals (Stage Gates) ──────────────────────────────────
 
     async def list_seed_approvals(self, seed_id: str) -> Any:

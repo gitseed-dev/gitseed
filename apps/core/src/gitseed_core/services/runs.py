@@ -270,6 +270,10 @@ async def advance_seed_after_succeeded_run(
         merged_data: dict[str, Any] = {"run_id": run.id}
         if merge_sha:
             merged_data["merge_commit_sha"] = merge_sha
+            run.output = {
+                **(run.output if isinstance(run.output, dict) else {}),
+                "merge_commit_sha": merge_sha,
+            }
         record(
             session,
             type=ActivityType.SEED_MERGED,

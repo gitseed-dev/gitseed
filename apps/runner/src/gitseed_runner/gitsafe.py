@@ -51,6 +51,7 @@ PRESERVED_GITSEED_PATHS: tuple[str, ...] = (".gitseed/run.json",)
 
 INTERNAL_EXCLUDED_PATHS: tuple[str, ...] = (
     ".gitseed/output.json",
+    ".gitseed/prompt.md",
     ".gitseed/deps.sha256",
     ".gitseed/attachments",
     ".gitseed/related",
@@ -636,10 +637,11 @@ def _copy_workspace_into_staging(
     """
     ws_root = workspace_repo_dir.resolve()
     staging_dir.mkdir(parents=True, exist_ok=True)
+    staging_root = staging_dir.resolve()
     gitlinks = allowed_gitlinks or set()
     escaped_symlinks: list[str] = []
 
-    def _is_safe_in_repo_symlink(link_path: Path) -> bool:
+    def _is_safe_in_repo_symlink(link_path: Path, root_dir: Path = ws_root) -> bool:
         try:
             raw_target = os.readlink(link_path)
         except OSError:
@@ -653,7 +655,7 @@ def _copy_workspace_into_staging(
             resolved_target = (link_path.parent / target_p).resolve()
         except OSError:
             return False
-        return resolved_target == ws_root or resolved_target.is_relative_to(ws_root)
+        return resolved_target == root_dir or resolved_target.is_relative_to(root_dir)
 
     for dirpath, dirnames, filenames in os.walk(ws_root, followlinks=False):
         rel_dir = os.path.relpath(dirpath, ws_root)
@@ -700,7 +702,9 @@ def _copy_workspace_into_staging(
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             try:
                 shutil.copy2(src_file, dst_file, follow_symlinks=False)
-                if dst_file.is_symlink() and not _is_safe_in_repo_symlink(src_file):
+                if dst_file.is_symlink() and not _is_safe_in_repo_symlink(
+                    dst_file, staging_root
+                ):
                     dst_file.unlink(missing_ok=True)
                     escaped_symlinks.append(rel_f_posix)
             except OSError as exc:
@@ -859,7 +863,97 @@ def apply_git_path_policy(
                             detected.add(raw_p.strip('"'))
         candidate_paths = sorted(detected)
 
-    violations = find_blocked_path_violations(candidate_paths, blocked_paths or [])
+    violations_set = set(find_blocked_path_violations(candidate_paths, blocked_paths or []))
+
+    def _is_blocked_relative_link_target(source_rel_posix: str, raw_target: str) -> bool:
+        cleaned_target = raw_target.strip().replace("\\", "/")
+        if not cleaned_target or cleaned_target.startswith("/") or re.match(r"^[A-Za-z]:", cleaned_target):
+            return True
+        parent_posix = PurePosixPath(source_rel_posix).parent.as_posix()
+        joined = f"{parent_posix}/{cleaned_target}" if parent_posix not in ("", ".") else cleaned_target
+        parts: list[str] = []
+        for seg in joined.split("/"):
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                if not parts:
+                    return True
+                parts.pop()
+            else:
+                parts.append(seg)
+        if not parts:
+            return False
+        resolved_rel = "/".join(parts)
+        return bool(find_blocked_path_violations([resolved_rel], blocked_paths or []))
+
+    # Inspect staged 120000 symlink entries in the git index
+    if candidate_paths and effective_git_dir.exists():
+        rc_idx, idx_out, _ = run_safe_git(
+            [
+                "-c",
+                "core.quotePath=false",
+                f"--git-dir={effective_git_dir}",
+                "ls-files",
+                "--stage",
+                "--",
+                *candidate_paths,
+            ],
+            repo_dir,
+        )
+        if rc_idx == 0 and idx_out:
+            for line in idx_out.splitlines():
+                meta_and_path = line.split("\t", 1)
+                if len(meta_and_path) != 2:
+                    continue
+                meta_parts = meta_and_path[0].split()
+                staged_rel = meta_and_path[1].strip().lstrip("/")
+                if (
+                    len(meta_parts) >= 2
+                    and meta_parts[0] == "120000"
+                    and staged_rel
+                    and staged_rel not in violations_set
+                ):
+                    rc_blob, blob_target, _ = run_safe_git(
+                        [f"--git-dir={effective_git_dir}", "cat-file", "-p", meta_parts[1]],
+                        repo_dir,
+                    )
+                    if rc_blob != 0 or _is_blocked_relative_link_target(staged_rel, blob_target):
+                        violations_set.add(staged_rel)
+
+    if effective_work_tree.is_dir():
+        wt_root = effective_work_tree.resolve()
+        for cand_p in candidate_paths:
+            norm_cand = cand_p.strip().lstrip("/")
+            if not norm_cand or norm_cand in violations_set:
+                continue
+            cand_fs = effective_work_tree / norm_cand
+            if not cand_fs.is_symlink():
+                continue
+            try:
+                raw_link_target = os.readlink(cand_fs)
+            except OSError:
+                violations_set.add(norm_cand)
+                continue
+            if _is_blocked_relative_link_target(norm_cand, raw_link_target):
+                violations_set.add(norm_cand)
+                continue
+            target_obj = Path(raw_link_target)
+            if target_obj.is_absolute() or (os.name == "nt" and target_obj.drive):
+                violations_set.add(norm_cand)
+                continue
+            try:
+                resolved_link = (cand_fs.parent / target_obj).resolve()
+            except OSError:
+                violations_set.add(norm_cand)
+                continue
+            if resolved_link != wt_root and not resolved_link.is_relative_to(wt_root):
+                violations_set.add(norm_cand)
+                continue
+            if resolved_link != wt_root:
+                rel_target_posix = resolved_link.relative_to(wt_root).as_posix()
+                if find_blocked_path_violations([rel_target_posix], blocked_paths or []):
+                    violations_set.add(norm_cand)
+    violations = sorted(violations_set)
     if not violations:
         return PathPolicyResult(ok=True)
 

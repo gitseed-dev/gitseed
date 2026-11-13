@@ -492,14 +492,15 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
         : 'GitHub'
   const totalFilesCount = changes?.total_files || files.length
 
-  /** Save the changed file's current contents (at the seed branch) to disk. */
+  /** Save the changed file's current contents (at the seed commit or branch) to disk. */
   const downloadFile = async (file: SeedChangeFile) => {
     const repoId = selectedRepoId ?? repos[0]?.id
     if (!project || repoId == null) return
     setDownloadingPath(file.path)
     setDownloadError(null)
     try {
-      const blob = await api.projects.getRepoBlob(project.id, repoId, { path: file.path, ref: browseTargetRef })
+      const targetDownloadRef = changes?.merge_commit_sha || commitBrowseRef || browseTargetRef
+      const blob = await api.projects.getRepoBlob(project.id, repoId, { path: file.path, ref: targetDownloadRef })
       if (blob.is_binary || blob.truncated || blob.content == null) {
         // Too large or binary for the inline API: hand off to the Git host instead
         const safeFileUrl = safeExternalUrl(file.web_url)

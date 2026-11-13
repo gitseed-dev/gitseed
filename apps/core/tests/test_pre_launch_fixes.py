@@ -84,6 +84,8 @@ def test_cli_auth_paths_parity_and_jetski_state_pbtxt_harvest() -> None:
     pty_script = _build_pty_auth_script("antigravity")
     assert "trustedFolders.json" in pty_script
     assert "onboardingComplete" in pty_script
+    assert 'env["GEMINI_FORCE_FILE_STORAGE"] = "true"' in pty_script
+    assert 'env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] = "false"' in pty_script
 
     # Non-JSON jetski_state.pbtxt and OpenCode wrapper keys survive refresh validation
     merged, updated_keys = _validate_and_merge_refreshed_cli_auth_bundle(
@@ -719,3 +721,158 @@ async def test_second_pass_xss_dotfiles_local_git_budget_and_network_policy(
     np = compute_runtime._build_k8s_default_egress_network_policy("ns-run", "ns-cp")
     ports = [p["port"] for p in np["spec"]["egress"][1]["ports"]]
     assert 4567 in ports and 4000 not in ports
+
+
+@pytest.mark.asyncio
+async def test_probe_discovery_and_personal_mode_explicit_sdlc_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gitseed_core.models.policy import Policy
+
+    from conftest import _exec_result, _make_session
+
+    # 1. discover_probe_metadata returns discovered models for healthy LM Studio probe
+    async def _fake_fetch_models(backend: Any, _secrets: dict[str, str]) -> list[dict[str, Any]]:
+        assert backend.provider == "lmstudio"
+        return [{"id": "qwen2.5-coder-7b-instruct", "owned_by": "lmstudio"}]
+
+    monkeypatch.setattr(backends_svc, "_fetch_backend_models", _fake_fetch_models)
+    models, repos = await backends_svc.discover_probe_metadata(
+        type=BackendType.INFERENCE,
+        provider="lmstudio",
+        endpoint="http://localhost:1234/v1",
+        config={},
+        secrets={},
+    )
+    assert repos == []
+    assert models == [
+        {"id": "qwen2.5-coder-7b-instruct", "owned_by": "lmstudio", "enabled": True}
+    ]
+
+    # 2. Personal Mode (cli_oauth) backend in single-user org with set_sdlc_default=True
+    #    calls provision_sdlc_agents_for_backend with assign_policies=True, force_switch=True
+    lm_backend = Backend(
+        id="bnd_lm",
+        name="LM Studio",
+        type=BackendType.INFERENCE,
+        provider="lmstudio",
+        endpoint="http://localhost:1234/v1",
+        config={
+            "auth_mode": "api_key",
+            "models": [{"id": "qwen2.5-coder-7b-instruct", "enabled": True}],
+            "is_sdlc_default": True,
+        },
+        enabled=True,
+    )
+    agy_backend = Backend(
+        id="bnd_agy",
+        name="Google Antigravity",
+        type=BackendType.INFERENCE,
+        provider="antigravity",
+        config={
+            "auth_mode": "cli_oauth",
+            "personal_mode": True,
+            "personal_mode_acknowledged": True,
+            "cli_auth_status": "authenticated",
+            "models": [{"id": "gemini-2.5-pro", "enabled": True}],
+            "auto_create_agents": True,
+            "set_sdlc_default": True,
+        },
+        secrets_encrypted=encrypt_secrets(
+            {"cli_auth_bundle": '{"oauth_creds.json": "{}"}'}
+        ),
+        enabled=True,
+    )
+
+    sess = _make_session()
+    sess.scalar = AsyncMock(return_value=1)  # single-user org
+    sess.execute = AsyncMock(return_value=_exec_result(scalars_all=[lm_backend, agy_backend]))
+    fake_policies = {
+        st: Policy(stage=st, agent_id=f"agt_{st.value}")
+        for st in SeedStage
+    }
+    monkeypatch.setattr(
+        backends_svc, "ensure_org_policies", AsyncMock(return_value=fake_policies)
+    )
+    provision_spy = AsyncMock(return_value=[])
+    monkeypatch.setattr(backends_svc, "provision_sdlc_agents_for_backend", provision_spy)
+
+    await backends_svc.maybe_auto_provision_sdlc_agents(sess, agy_backend)
+    provision_spy.assert_awaited_once_with(
+        sess,
+        agy_backend,
+        force_switch=True,
+        assign_policies=True,
+        overwrite_existing=True,
+    )
+
+    # 3. provision_sdlc_agents_for_backend preserves existing open-* agents when creating agy-*
+    open_ideator = Agent(
+        id="agt_open_ideate",
+        handle="open-ideator",
+        name="OpenCode Ideator",
+        kind=AgentKind.STAGE,
+        runtime=AgentRuntime.OPENCODE,
+        model="lmstudio/qwen2.5-coder-7b-instruct",
+        enabled=True,
+    )
+    added_agents: list[Agent] = []
+    sess2 = _make_session()
+    sess2.add = MagicMock(side_effect=lambda obj: added_agents.append(obj) if isinstance(obj, Agent) else None)
+    sess2.get = AsyncMock(return_value=open_ideator)
+    sess2.execute = AsyncMock(
+        side_effect=[
+            _exec_result(scalars_all=[lm_backend, agy_backend]),  # all_inference
+            _exec_result(scalars_all=[]),  # coordinator lookup
+            _exec_result(scalars_all=[]),  # agy-ideator lookup
+            _exec_result(scalars_all=[]),  # agy-planner lookup
+            _exec_result(scalars_all=[]),  # agy-coder lookup
+            _exec_result(scalars_all=[]),  # agy-reviewer lookup
+            _exec_result(scalars_all=[]),  # agy-merger lookup
+        ]
+    )
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        backends_svc, "ensure_org_policies", AsyncMock(return_value=fake_policies)
+    )
+    await backends_svc.provision_sdlc_agents_for_backend(
+        sess2, agy_backend, force_switch=True, assign_policies=True, overwrite_existing=True
+    )
+    assert open_ideator.handle == "open-ideator"
+    created_handles = {a.handle for a in added_agents}
+    assert {
+        "coordinator",
+        "agy-ideator",
+        "agy-planner",
+        "agy-coder",
+        "agy-reviewer",
+        "agy-merger",
+    }.issubset(created_handles)
+
+
+def test_antigravity_pty_auth_script_requires_agy_and_syncs_headless_keyring() -> None:
+    from gitseed_core.services.cli_auth import (
+        _build_pty_auth_script,
+        _extract_auth_url_and_code,
+    )
+
+    script = _build_pty_auth_script("antigravity")
+    compile(script, "<pty_auth_antigravity>", "exec")
+    assert 'env["SSH_CONNECTION"] = "127.0.0.1 22 127.0.0.1 22"' in script
+    agy_branch = script.split('if provider == "antigravity":\n    if shutil.which("agy"):')[1].split('elif provider == "gemini":')[0]
+    assert 'cmd = ["agy"]' in agy_branch
+    assert 'cmd = ["gemini"]' not in agy_branch
+    assert "sys.exit(1)" in agy_branch
+    assert "Falling back to Google OAuth sign-in flow" not in script
+    assert "gnome-keyring-daemon" in script
+    assert "secret-tool" in script
+    assert "sync_keyring_to_files()" in script
+
+    # Banner doc links (/docs, /terms) never shadow real OAuth URLs
+    url, _ = _extract_auth_url_and_code(
+        "Docs: https://antigravity.google/docs/cli\nSign in: https://accounts.google.com/o/oauth2/v2/auth?client_id=123"
+    )
+    assert url == "https://accounts.google.com/o/oauth2/v2/auth?client_id=123"
+    url_doc_only, _ = _extract_auth_url_and_code("Docs: https://antigravity.google/docs/cli")
+    assert url_doc_only is None
+

@@ -1725,6 +1725,27 @@ async def _run_prepared_stage_session(
                 re_out, _ = _load_and_validate_output_file(stage, output_file)
                 if re_out is not None:
                     validated_output = re_out
+                if (
+                    any((d / ".git").exists() for d in repo_dirs.values())
+                    and not has_workspace_code_changes(repo_dirs, initial_heads)
+                    and not has_remote_seed_branch(repo_dirs, project_slug, seed_number)
+                ):
+                    err_msg = (
+                        "Execute stage completed without creating or modifying any "
+                        "repository files in /workspace."
+                    )
+                    logger.error(err_msg)
+                    await _finish_agent_or_report(
+                        is_broker_agent_mode=is_broker_agent_mode,
+                        run_id=run_id,
+                        api_url=api_url,
+                        run_token=run_token,
+                        status="failed",
+                        exit_code=exit_code or 1,
+                        error=err_msg,
+                        log_tail=logs,
+                    )
+                    return 1
             else:
                 err_msg = (
                     "Strict CLI execution enabled: Execute stage completed without modifying "

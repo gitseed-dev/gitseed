@@ -908,6 +908,31 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_seed_receipt",
+        "annotations": {
+            "title": "Get Seed Governance Receipt",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "description": (
+            "Get the Ed25519-signed Governance Receipt (gitseed.receipt.v1) for a seed, "
+            "attesting to locked specification hashes, stage runs, policy checks, and approvals."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "seed_id": {
+                    "type": "string",
+                    "description": "Seed ID (sed_...) or slug#number reference.",
+                },
+            },
+            "required": ["seed_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "list_seed_approvals",
         "annotations": {
             "title": "List Seed Approvals",
@@ -2088,6 +2113,108 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
 ]
 
 TOOLS = TOOLS_CATALOG
+
+TOOLSETS: dict[str, frozenset[str]] = {
+    "core": frozenset(
+        {
+            "get_system_status",
+            "ask_coordinator",
+            "list_activity",
+        }
+    ),
+    "projects": frozenset(
+        {
+            "list_projects",
+            "get_project",
+            "create_project",
+            "update_project",
+            "list_project_repositories",
+            "get_project_policies",
+            "list_repository_branches",
+            "get_repository_tree",
+            "get_repository_blob",
+        }
+    ),
+    "seeds": frozenset(
+        {
+            "list_seeds",
+            "get_seed",
+            "create_seed",
+            "update_seed",
+            "start_seed",
+            "advance_seed",
+            "move_seed_back",
+            "stop_seed",
+            "resume_seed",
+            "approve_seed_checkpoint",
+            "close_seed",
+            "reopen_seed",
+            "get_seed_changes",
+            "get_seed_receipt",
+            "list_seed_approvals",
+            "submit_seed_approval",
+        }
+    ),
+    "tasks": frozenset(
+        {
+            "list_seed_tasks",
+            "create_seed_task",
+            "update_seed_task",
+            "delete_seed_task",
+            "list_seed_comments",
+            "create_seed_comment",
+            "update_seed_comment",
+            "delete_seed_comment",
+        }
+    ),
+    "runs": frozenset(
+        {
+            "list_runs",
+            "get_run",
+            "create_run",
+            "cancel_run",
+            "get_run_logs",
+            "get_sandbox_config",
+            "list_sandboxes",
+            "create_sandbox",
+            "get_sandbox",
+            "send_sandbox_input",
+            "stop_sandbox",
+        }
+    ),
+    "sessions": frozenset(
+        {
+            "list_sessions",
+            "list_agent_sessions",
+            "get_agent_session",
+            "create_agent_session",
+            "send_agent_session_message",
+            "stop_agent_session",
+            "delete_agent_session",
+        }
+    ),
+    "governance": frozenset(
+        {
+            "list_agents",
+            "get_agent",
+            "get_agent_benchmarks",
+            "list_skills",
+            "get_skill",
+            "list_org_policies",
+            "update_org_policy",
+            "update_project_policy",
+            "reset_project_policy",
+            "list_backends",
+            "get_backend",
+        }
+    ),
+}
+
+TOOLSET_BY_TOOL: dict[str, str] = {
+    tool_name: toolset_name
+    for toolset_name, members in TOOLSETS.items()
+    for tool_name in members
+}
 
 RESOURCES_CATALOG: list[dict[str, Any]] = [
     {

@@ -387,6 +387,7 @@ async def _spawn_sandbox_container(
                 "http_proxy": proxy_url,
                 "NO_PROXY": no_proxy_val,
                 "no_proxy": no_proxy_val,
+                "NODE_USE_ENV_PROXY": "1",
             }
         )
 

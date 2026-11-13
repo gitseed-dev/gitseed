@@ -84,6 +84,7 @@ from gitseed_core.services.gateway import (
     create_run_virtual_key,
     estimate_model_token_cost,
     finalize_run_litellm_key,
+    is_personal_mode_backend,
     merge_run_context_window,
     resolve_models_backend_for_run,
     revoke_run_virtual_key,
@@ -304,6 +305,24 @@ def _validate_credential_json_fields(
             raise Invalid(f"Disallowed credential field '{raw_k}' in '{source_name}'")
         if _is_primitive_or_str_list(val):
             continue
+        if (
+            depth == 0
+            and lower_k == "keyring_items"
+            and isinstance(val, list)
+            and len(val) <= 32
+            and all(
+                isinstance(entry, dict)
+                and isinstance(entry.get("label", ""), str)
+                and isinstance(entry.get("secret", ""), str)
+                and isinstance(entry.get("attributes", {}), dict)
+                and all(
+                    isinstance(ak, str) and isinstance(av, str)
+                    for ak, av in entry.get("attributes", {}).items()
+                )
+                for entry in val
+            )
+        ):
+            continue
         if isinstance(val, dict) and depth < 2:
             if lower_k in _ALLOWED_CREDENTIAL_WRAPPER_KEYS:
                 _validate_credential_json_fields(
@@ -326,6 +345,48 @@ def _validate_credential_json_fields(
         )
 
 
+_CLI_AUTH_IDENTITY_KEYS: frozenset[str] = frozenset(
+    {
+        "email",
+        "account_id",
+        "accountid",
+        "user_id",
+        "userid",
+        "sub",
+        "client_id",
+        "clientid",
+        "org_id",
+        "orgid",
+        "organization_id",
+        "organizationid",
+    }
+)
+
+
+def _extract_identity_bindings(
+    obj: dict[str, Any],
+    *,
+    prefix: str = "",
+    depth: int = 0,
+) -> dict[str, str]:
+    """Extract non-empty identity fields from a credential JSON object for continuity checks."""
+    bindings: dict[str, str] = {}
+    if depth > 2:
+        return bindings
+    for k, v in obj.items():
+        if not isinstance(k, str):
+            continue
+        low_k = k.strip().lower()
+        path_k = f"{prefix}.{low_k}" if prefix else low_k
+        if low_k in _CLI_AUTH_IDENTITY_KEYS and isinstance(v, str | int) and not isinstance(v, bool):
+            val_str = str(v).strip()
+            if val_str:
+                bindings[path_k] = val_str
+        elif isinstance(v, dict) and depth < 2:
+            bindings.update(_extract_identity_bindings(v, prefix=path_k, depth=depth + 1))
+    return bindings
+
+
 def _validate_and_merge_refreshed_cli_auth_bundle(
     raw_bundle: Any,
     *,
@@ -333,7 +394,7 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
     existing_raw_json: str | None,
     backend_provider: str | None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Enforce <=65,536-byte cap, dict type, provider preservation, and primitive credential fields."""
+    """Enforce <=65,536-byte cap, dict type, provider/identity continuity, and primitive credential fields."""
     if not isinstance(raw_bundle, dict):
         raise Invalid("cli_auth_bundle must be a JSON object")
     try:
@@ -370,6 +431,14 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
                 f"cli_auth_bundle provider '{inc_prov}' does not match existing provider '{expected_provider}'"
             )
 
+    prev_flat_identities = _extract_identity_bindings(
+        {
+            k: v
+            for k, v in prev_b.items()
+            if isinstance(k, str) and k.strip().lower() in _ALLOWED_FLAT_CREDENTIAL_KEYS
+        }
+    )
+
     flat_updates: dict[str, Any] = {}
     path_candidates: dict[str, Any] = {}
     for k, v in raw_bundle.items():
@@ -385,9 +454,26 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
                 raise Invalid(
                     f"Credential field '{k}' in cli_auth_bundle must be a string or primitive value"
                 )
+            if (
+                lower_k in prev_flat_identities
+                and isinstance(v, str | int)
+                and not isinstance(v, bool)
+                and str(v).strip() != prev_flat_identities[lower_k]
+            ):
+                raise Invalid(
+                    f"cli_auth_bundle cannot mutate bound identity field '{k}'"
+                )
             flat_updates[k] = v
         else:
             path_candidates[k] = v
+
+    prev_validated_paths: dict[str, str] = {}
+    if prev_b:
+        prev_validated_paths = validate_and_filter_cli_auth_bundle(
+            prev_b,
+            provider=backend_provider,
+            strict=False,
+        )
 
     validated_paths: dict[str, str] = {}
     if path_candidates:
@@ -402,16 +488,27 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
                 if not isinstance(parsed_doc, dict):
                     raise Invalid(f"Credential file '{norm_path}' must contain a JSON object")
                 _validate_credential_json_fields(norm_path, parsed_doc)
+                prev_raw_doc = prev_validated_paths.get(norm_path)
+                if prev_raw_doc:
+                    try:
+                        loaded_prev_doc = json.loads(prev_raw_doc)
+                    except Exception:
+                        loaded_prev_doc = None
+                    if isinstance(loaded_prev_doc, dict):
+                        prev_doc_ids = _extract_identity_bindings(loaded_prev_doc)
+                        inc_doc_ids = _extract_identity_bindings(parsed_doc)
+                        for id_field, expected_id_val in prev_doc_ids.items():
+                            if (
+                                id_field in inc_doc_ids
+                                and inc_doc_ids[id_field] != expected_id_val
+                            ):
+                                raise Invalid(
+                                    f"Credential file '{norm_path}' cannot mutate bound identity field '{id_field}'"
+                                )
 
     merged_bundle: dict[str, Any] = {}
     if prev_b:
-        merged_bundle.update(
-            validate_and_filter_cli_auth_bundle(
-                prev_b,
-                provider=backend_provider,
-                strict=False,
-            )
-        )
+        merged_bundle.update(prev_validated_paths)
         for pk, pv in prev_b.items():
             if (
                 isinstance(pk, str)
@@ -1351,15 +1448,27 @@ async def refresh_runner_cli_auth(
         )
 
     _enforce_endpoint_token_scope(raw_token, {"agent"})
+    if not settings.GITSEED_ALLOW_PERSONAL_CLI_OAUTH:
+        raise Forbidden(
+            "Personal Mode (subscription CLI OAuth) is disabled on this instance "
+            "(GITSEED_ALLOW_PERSONAL_CLI_OAUTH=false)."
+        )
     run, _, project, _ = await _authenticate_active_run(session, raw_token)
     runtime_str = str(run.runtime or "").strip().lower()
 
     models_backend, _ = await resolve_models_backend_for_run(session, run, project)
-    m_secrets = (
-        decrypt_secrets(models_backend.secrets_encrypted)
-        if models_backend is not None
-        else {}
+    if models_backend is None or not is_personal_mode_backend(models_backend):
+        raise Forbidden(
+            "CLI auth bundle refresh is only permitted for Personal Mode (cli_oauth) backends"
+        )
+    bound_bid = (
+        str(run.output.get("models_backend_id") or "").strip()
+        if isinstance(run.output, dict)
+        else ""
     )
+    if bound_bid and str(models_backend.id) != bound_bid:
+        raise Forbidden("Run backend mismatch during CLI auth bundle refresh")
+    m_secrets = decrypt_secrets(models_backend.secrets_encrypted)
     merged_bundle, updated_keys = _validate_and_merge_refreshed_cli_auth_bundle(
         raw_bundle,
         runtime=runtime_str,
@@ -1596,6 +1705,35 @@ async def complete_runner_execution(
     )
 
     pol = await get_effective_stage_policy(session, project.id, run.stage)
+    raw_proj_sbx = (
+        (getattr(project, "sandbox_config", None) or {}) if project is not None else {}
+    )
+    raw_proj_blocked = (
+        raw_proj_sbx.get("blocked_paths") if isinstance(raw_proj_sbx, dict) else []
+    )
+    snap_blocked_paths = (
+        [str(p).strip() for p in raw_proj_blocked if str(p).strip()]
+        if isinstance(raw_proj_blocked, list)
+        else []
+    )
+    raw_min_role = getattr(pol, "min_approver_role", None) if pol is not None else None
+    snap_min_role = str(
+        getattr(raw_min_role, "value", raw_min_role)
+        if raw_min_role is not None
+        else "developer"
+    )
+    snap_prevent_self = not bool(getattr(pol, "allow_self_approval", True))
+    if isinstance(raw_proj_sbx, dict):
+        if raw_proj_sbx.get("min_approver_role"):
+            snap_min_role = str(raw_proj_sbx["min_approver_role"])
+        if "prevent_self_approval" in raw_proj_sbx:
+            snap_prevent_self = bool(raw_proj_sbx["prevent_self_approval"])
+    broker_state["policy_snapshot"] = {
+        "stage": str(getattr(run.stage, "value", run.stage)),
+        "min_approver_role": snap_min_role,
+        "prevent_self_approval": snap_prevent_self,
+        "blocked_paths": snap_blocked_paths,
+    }
     ideate_pol = (
         pol
         if run.stage == SeedStage.IDEATE
@@ -1694,7 +1832,7 @@ async def complete_runner_execution(
         dict(raw_ctx_win) if isinstance(raw_ctx_win, dict) else None
     )
 
-    if payload.updated_cli_auth_bundle:
+    if payload.updated_cli_auth_bundle and settings.GITSEED_ALLOW_PERSONAL_CLI_OAUTH:
         try:
             try:
                 models_backend, _ = await resolve_models_backend_for_run(
@@ -1704,7 +1842,12 @@ async def complete_runner_execution(
                 models_backend, _ = await resolve_models_backend_for_run(
                     session, run, project
                 )
-            if models_backend is not None:
+            bound_bid = str(preserved_run_meta.get("models_backend_id") or "").strip()
+            if (
+                models_backend is not None
+                and is_personal_mode_backend(models_backend)
+                and (not bound_bid or str(models_backend.id) == bound_bid)
+            ):
                 m_secrets = decrypt_secrets(models_backend.secrets_encrypted)
                 merged_bundle, updated_keys = _validate_and_merge_refreshed_cli_auth_bundle(
                     payload.updated_cli_auth_bundle,

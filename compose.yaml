@@ -92,7 +92,7 @@ services:
       - gitseed-network
 
   docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:v0.3.0
+    image: tecnativa/docker-socket-proxy:0.3.0
     container_name: gitseed-docker-socket-proxy
     restart: unless-stopped
     security_opt:
@@ -212,7 +212,10 @@ services:
         INCLUDE_PROPRIETARY_CLIS: ${INCLUDE_PROPRIETARY_CLIS:-true}
         INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-${INCLUDE_PROPRIETARY_CLIS:-true}}
         INSTALL_ANTIGRAVITY: ${INSTALL_ANTIGRAVITY:-${INCLUDE_PROPRIETARY_CLIS:-true}}
+        REQUIRE_ANTIGRAVITY_CLI: ${REQUIRE_ANTIGRAVITY_CLI:-false}
         INSTALL_GROK_CLI: ${INSTALL_GROK_CLI:-${INCLUDE_PROPRIETARY_CLIS:-true}}
+        ANTIGRAVITY_INSTALL_URL: ${ANTIGRAVITY_INSTALL_URL:-https://antigravity.google/cli/install.sh}
+        GROK_CLI_INSTALL_URL: ${GROK_CLI_INSTALL_URL:-}
     entrypoint: ["true"]
     restart: "no"
 
@@ -263,6 +266,9 @@ services:
       - PUBLIC_WEB_URL=${PUBLIC_WEB_URL:-http://localhost:${WEB_PORT:-8421}}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:${WEB_PORT:-8421},http://127.0.0.1:${WEB_PORT:-8421}}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
+      - GITSEED_MCP_ALLOWED_ORIGINS=${GITSEED_MCP_ALLOWED_ORIGINS:-}
+      - GITSEED_MCP_TOOLSETS=${GITSEED_MCP_TOOLSETS:-}
+      - GITSEED_MCP_READ_ONLY=${GITSEED_MCP_READ_ONLY:-false}
     ports:
       - "${MCP_BIND_HOST:-127.0.0.1}:${MCP_PORT:-8422}:${MCP_PORT:-8422}"
     depends_on:

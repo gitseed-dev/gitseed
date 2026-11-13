@@ -230,7 +230,7 @@ def _configure_repo_after_checkout(
                     "fetch",
                     *depth_args,
                     "origin",
-                    f"refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
+                    f"+refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
                 ],
                 target_dir,
             )
@@ -240,16 +240,29 @@ def _configure_repo_after_checkout(
                     "fetch",
                     *depth_args,
                     "origin",
-                    f"refs/heads/{seed_branch}:refs/remotes/origin/{seed_branch}",
+                    f"+refs/heads/{seed_branch}:refs/remotes/origin/{seed_branch}",
                 ],
                 target_dir,
             )
             if fetch_res.returncode == 0:
-                _run_git(
-                    ["checkout", "-B", seed_branch, f"refs/remotes/origin/{seed_branch}"],
+                checkout_res = _run_git(
+                    ["checkout", "-f", "-B", seed_branch, f"refs/remotes/origin/{seed_branch}"],
                     target_dir,
                 )
-                if stage == "execute" and auto_rebase:
+                if checkout_res.returncode != 0:
+                    _run_git(["clean", "-fd", "-x", "-e", ".gitseed/deps.sha256"], target_dir)
+                    checkout_res = _run_git(
+                        ["checkout", "-f", "-B", seed_branch, f"refs/remotes/origin/{seed_branch}"],
+                        target_dir,
+                    )
+                    if checkout_res.returncode != 0:
+                        logger.warning(
+                            "Failed to check out '%s' from origin/%s: %s",
+                            seed_branch,
+                            seed_branch,
+                            (checkout_res.stderr or checkout_res.stdout or "").strip()[:240],
+                        )
+                if checkout_res.returncode == 0 and stage == "execute" and auto_rebase:
                     rebase_res = _run_git(
                         ["rebase", f"refs/remotes/origin/{default_branch}"],
                         target_dir,
@@ -262,7 +275,7 @@ def _configure_repo_after_checkout(
                             default_branch,
                         )
             elif stage == "execute":
-                _run_git(["checkout", "-B", seed_branch], target_dir)
+                _run_git(["checkout", "-f", "-B", seed_branch], target_dir)
     finally:
         # Strip credentials and neutralize hooks/config unconditionally
         neutralize_git_repo(
@@ -485,16 +498,23 @@ def clone_project_repositories(
                         "fetch",
                         *fetch_depth_args,
                         "origin",
-                        f"refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
+                        f"+refs/heads/{default_branch}:refs/remotes/origin/{default_branch}",
                     ],
                     target_dir,
                 )
                 if warm_fetch.returncode == 0:
                     _run_git(["reset", "--hard"], target_dir)
+                    if (
+                        (target_dir / ".gitseed" / "run.json").exists()
+                        and not _run_git(["ls-files", ".gitseed/run.json"], target_dir).stdout.strip()
+                    ):
+                        (target_dir / ".gitseed" / "run.json").unlink(missing_ok=True)
+                    for stale_meta in ("output.json", "prompt.md"):
+                        (target_dir / ".gitseed" / stale_meta).unlink(missing_ok=True)
                     _run_git(
                         [
                             "clean",
-                            "-fd",
+                            "-fdx",
                             "-e",
                             ".gitseed",
                             "-e",
@@ -507,7 +527,7 @@ def clone_project_repositories(
                         target_dir,
                     )
                     _run_git(
-                        ["checkout", "-B", default_branch, f"refs/remotes/origin/{default_branch}"],
+                        ["checkout", "-f", "-B", default_branch, f"refs/remotes/origin/{default_branch}"],
                         target_dir,
                     )
                     _configure_repo_after_checkout(

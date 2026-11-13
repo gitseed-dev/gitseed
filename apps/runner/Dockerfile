@@ -9,13 +9,13 @@
 #
 # Third-party agent CLIs:
 #   - Pre-installed out of the box: opencode, Codex (@openai/codex), Gemini CLI
-#     (@google/gemini-cli), and Claude Code (@anthropic-ai/claude-code, enabled by
-#     default via INCLUDE_PROPRIETARY_CLIS=true; disable with
-#     --build-arg INCLUDE_PROPRIETARY_CLIS=false when publishing redistributed images).
-#   - First-class adapters with custom binary / installer URL support:
-#     Google Antigravity (agy) and xAI Grok Build (grok) are proprietary vendor CLIs
-#     without public npm packages. Supply --build-arg ANTIGRAVITY_INSTALL_URL=<url>
-#     or --build-arg GROK_CLI_INSTALL_URL=<url> at build time, or layer the vendor
+#     (@google/gemini-cli), Claude Code (@anthropic-ai/claude-code), and Google
+#     Antigravity (agy) — proprietary vendor CLIs are enabled by default via
+#     INCLUDE_PROPRIETARY_CLIS=true and disabled cleanly with
+#     --build-arg INCLUDE_PROPRIETARY_CLIS=false when publishing redistributed images.
+#   - Bring-your-own binary / custom installer URL support:
+#     Override --build-arg ANTIGRAVITY_INSTALL_URL=<url> or pass
+#     --build-arg GROK_CLI_INSTALL_URL=<url> at build time, or layer vendor
 #     binaries onto gitseed/runner in a derived Dockerfile.
 #
 # ==============================================================================
@@ -52,10 +52,11 @@ ARG CLAUDE_CODE_VERSION=">=1.0.0 <3.0.0"
 ARG INCLUDE_PROPRIETARY_CLIS=true
 ARG INSTALL_CLAUDE_CODE=${INCLUDE_PROPRIETARY_CLIS}
 ARG INSTALL_ANTIGRAVITY=${INCLUDE_PROPRIETARY_CLIS}
+ARG REQUIRE_ANTIGRAVITY_CLI=false
 ARG INSTALL_GROK_CLI=${INCLUDE_PROPRIETARY_CLIS}
-# Optional HTTPS installer script URLs for bring-your-own Antigravity (agy) and Grok (grok) binaries.
-# Leave empty for standard builds or pass --build-arg ANTIGRAVITY_INSTALL_URL=... / GROK_CLI_INSTALL_URL=...
-ARG ANTIGRAVITY_INSTALL_URL=""
+# HTTPS installer script URLs for Antigravity (agy) and Grok (grok) binaries.
+# Antigravity defaults to Google's official Linux installer when INSTALL_ANTIGRAVITY=true.
+ARG ANTIGRAVITY_INSTALL_URL="https://antigravity.google/cli/install.sh"
 ARG GROK_CLI_INSTALL_URL=""
 ARG CODEX_VERSION=">=0.40.0 <2.0.0"
 ARG GEMINI_CLI_VERSION=">=0.10.0 <2.0.0"
@@ -63,6 +64,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:/home/runner/.local/bin:/usr/local/bin:$PATH" \
     HOME=/home/runner \
+    NODE_USE_ENV_PROXY=1 \
+    GEMINI_FORCE_FILE_STORAGE=true \
+    GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=false \
     GITSEED_WORKSPACE=/workspace \
     GITSEED_CTL_DIR=/gitseed-ctl \
     GITSEED_SECRETS_DIR=/gitseed-secrets \
@@ -75,8 +79,15 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git openssh-client ripgrep \
+    ca-certificates curl dbus git gnome-keyring libsecret-1-0 libsecret-tools libstdc++6 openssh-client ripgrep unzip xz-utils \
     && rm -rf /var/lib/apt/lists/* \
+    # Strip file capabilities (cap_ipc_lock+ep) from gnome-keyring-daemon so it executes
+    # under CapDrop: ALL + no-new-privileges:true inside unprivileged runner containers.
+    && if [ -f /usr/bin/gnome-keyring-daemon ]; then \
+         cp --no-preserve=xattr /usr/bin/gnome-keyring-daemon /usr/bin/gnome-keyring-daemon.nocap \
+         && mv /usr/bin/gnome-keyring-daemon.nocap /usr/bin/gnome-keyring-daemon \
+         && chmod 0755 /usr/bin/gnome-keyring-daemon; \
+       fi \
     && npm install -g \
     "opencode-ai@${OPENCODE_VERSION}" \
     "@openai/codex@${CODEX_VERSION}" \
@@ -87,22 +98,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm cache clean --force \
     && groupadd -g 1000 runner \
     && useradd -u 1000 -g runner -m -s /bin/bash runner \
-    && mkdir -p /workspace /gitseed-ctl /gitseed-secrets /home/runner/.local/bin /home/runner/.cache/packages \
-    # Antigravity (agy) and Grok Build (grok) have first-class runtime adapters; install
-    # them automatically when ANTIGRAVITY_INSTALL_URL / GROK_CLI_INSTALL_URL are provided,
-    # otherwise operators can layer vendor binaries onto a derived image.
+    && mkdir -p /workspace /gitseed-ctl /gitseed-secrets /home/runner/.local/bin /home/runner/.local/share/keyrings /home/runner/.cache/packages \
+    && chown -R 1000:1000 /workspace /gitseed-ctl /gitseed-secrets /home/runner \
+    # Install Google Antigravity (agy) and xAI Grok Build (grok) when enabled.
     && if [ "${INSTALL_ANTIGRAVITY}" = "true" ] && [ -n "${ANTIGRAVITY_INSTALL_URL}" ]; then \
-         curl -fsSL "${ANTIGRAVITY_INSTALL_URL}" -o /tmp/install-agy.sh \
-         && HOME=/home/runner bash /tmp/install-agy.sh \
-         && rm -f /tmp/install-agy.sh \
-         && if [ -f /home/runner/.local/bin/agy ]; then ln -sf /home/runner/.local/bin/agy /usr/local/bin/agy; fi \
-         && command -v agy >/dev/null 2>&1; \
+         if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "${ANTIGRAVITY_INSTALL_URL}" -o /tmp/install-agy.sh \
+            && chmod 0755 /tmp/install-agy.sh \
+            && su -s /bin/bash runner -c "HOME=/home/runner PATH=/home/runner/.local/bin:/usr/local/bin:/usr/bin:/bin bash /tmp/install-agy.sh" \
+            && rm -f /tmp/install-agy.sh \
+            && (for candidate in /home/runner/.local/bin/agy /home/runner/.antigravity/bin/agy; do \
+                  if [ -x "${candidate}" ]; then ln -sf "${candidate}" /usr/local/bin/agy; break; fi; \
+                done) \
+            && command -v agy >/dev/null 2>&1; then \
+           true; \
+         elif [ "${REQUIRE_ANTIGRAVITY_CLI}" = "true" ]; then \
+           echo "ERROR: Required Antigravity CLI installation from ${ANTIGRAVITY_INSTALL_URL} failed." >&2; exit 1; \
+         else \
+           rm -f /tmp/install-agy.sh; \
+           echo "WARN: Antigravity CLI installation from ${ANTIGRAVITY_INSTALL_URL} unavailable; continuing runner image build without agy (set REQUIRE_ANTIGRAVITY_CLI=true to fail hard)." >&2; \
+         fi; \
        fi \
     && if [ "${INSTALL_GROK_CLI}" = "true" ] && [ -n "${GROK_CLI_INSTALL_URL}" ]; then \
          curl -fsSL "${GROK_CLI_INSTALL_URL}" -o /tmp/install-grok.sh \
-         && HOME=/home/runner bash /tmp/install-grok.sh \
+         && chmod 0755 /tmp/install-grok.sh \
+         && su -s /bin/bash runner -c "HOME=/home/runner PATH=/home/runner/.local/bin:/usr/local/bin:/usr/bin:/bin bash /tmp/install-grok.sh" \
          && rm -f /tmp/install-grok.sh \
-         && if [ -f /home/runner/.local/bin/grok ]; then ln -sf /home/runner/.local/bin/grok /usr/local/bin/grok; fi \
+         && if [ -x /home/runner/.local/bin/grok ]; then ln -sf /home/runner/.local/bin/grok /usr/local/bin/grok; fi \
          && command -v grok >/dev/null 2>&1; \
        fi \
     && chown -R 1000:1000 /workspace /gitseed-ctl /gitseed-secrets /home/runner

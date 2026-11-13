@@ -47,6 +47,24 @@ spec:
             - name: redis
               containerPort: {{ .Values.valkey.port }}
               protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - valkey-cli --no-auth-warning -a "$VALKEY_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - valkey-cli --no-auth-warning -a "$VALKEY_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
           volumeMounts:
             - name: data
               mountPath: /data

@@ -1224,6 +1224,8 @@ export const api = {
         health: 'unknown' | 'healthy' | 'degraded' | 'unreachable'
         latency_ms: number | null
         error: string | null
+        models?: Array<{ id: string; owned_by?: string; enabled?: boolean }>
+        repositories?: Array<Record<string, unknown>>
       }>('/api/v1/backends/probe', {
         method: 'POST',
         body: payload,

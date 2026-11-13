@@ -27,6 +27,7 @@ from gitseed_core.services.local_git import (
     ensure_local_bare_repo,
     extract_repo_slug,
     resolve_local_bare_repo_path,
+    sync_bare_repo_to_workspace,
     sync_workspace_commits_to_bare_repo,
 )
 
@@ -268,6 +269,8 @@ async def local_git_rpc(
         check=False,
         timeout=120,
     )
+    if service == "git-receive-pack" and proc.returncode == 0:
+        await asyncio.to_thread(sync_bare_repo_to_workspace, bare_path)
     return Response(
         content=proc.stdout,
         media_type=f"application/x-{service}-result",

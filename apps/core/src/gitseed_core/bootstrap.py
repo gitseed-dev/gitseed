@@ -187,6 +187,7 @@ async def bootstrap_database() -> None:
         # 3. Ensure initial admin user exists if the user table is empty
         user_count = await session.scalar(select(func.count()).select_from(User))
         generated_password: str | None = None
+        created_admin = False
 
         if not user_count:
             raw_password = settings.GITSEED_ADMIN_PASSWORD
@@ -202,6 +203,7 @@ async def bootstrap_database() -> None:
                 password_hash=hash_password(raw_password),
             )
             session.add(admin)
+            created_admin = True
         else:
             admin_email = settings.GITSEED_ADMIN_EMAIL.strip().lower()
             bootstrap_admin = (
@@ -246,13 +248,23 @@ async def bootstrap_database() -> None:
 
         await session.commit()
 
-        if generated_password is not None:
-            logger.warning(
-                "\n"
-                "======================================================================\n"
-                "  GitSeed Initial Admin Created\n"
-                f"  Email:    {settings.GITSEED_ADMIN_EMAIL}\n"
-                f"  Password: {generated_password}\n"
-                "  (Set GITSEED_ADMIN_PASSWORD in .env to specify initial password)\n"
-                "======================================================================"
-            )
+        if created_admin:
+            if generated_password is not None:
+                logger.warning(
+                    "\n"
+                    "======================================================================\n"
+                    "  GitSeed Initial Admin Created\n"
+                    f"  Email:    {settings.GITSEED_ADMIN_EMAIL}\n"
+                    f"  Password: {generated_password}\n"
+                    "  (Set GITSEED_ADMIN_PASSWORD in .env to specify initial password)\n"
+                    "======================================================================"
+                )
+            else:
+                logger.info(
+                    "\n"
+                    "======================================================================\n"
+                    "  GitSeed Initial Admin Created\n"
+                    f"  Email:    {settings.GITSEED_ADMIN_EMAIL}\n"
+                    "  Password: (from GITSEED_ADMIN_PASSWORD in .env)\n"
+                    "======================================================================"
+                )

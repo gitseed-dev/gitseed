@@ -1932,6 +1932,22 @@ async def create_approval(
                 merged_data: dict[str, Any] = {"approval_id": approval.id}
                 if merge_sha:
                     merged_data["merge_commit_sha"] = merge_sha
+                    latest_merge_run = (
+                        await session.execute(
+                            select(Run)
+                            .where(
+                                Run.seed_id == seed.id,
+                                Run.stage == SeedStage.MERGE,
+                            )
+                            .order_by(col(Run.created_at).desc())
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if latest_merge_run is not None:
+                        latest_merge_run.output = {
+                            **(latest_merge_run.output if isinstance(latest_merge_run.output, dict) else {}),
+                            "merge_commit_sha": merge_sha,
+                        }
                 record(
                     session,
                     type=ActivityType.SEED_MERGED,

@@ -32,8 +32,6 @@ from gitseed_core.services.compute_runtime import _demux_docker_logs, _docker_cl
 logger = logging.getLogger(__name__)
 
 # Runtime id -> candidate binaries (any one present means the runtime is usable).
-# `antigravity` falls back to the Gemini CLI for CLI-login auth when `agy` is missing, but that is
-# a degraded mode, so only `agy` counts as "installed" here.
 RUNTIME_BINARIES: dict[str, tuple[str, ...]] = {
     AgentRuntime.OPENCODE.value: ("opencode",),
     AgentRuntime.CLAUDE_CODE.value: ("claude",),

@@ -182,12 +182,17 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
   const changesQuery = useQuery({
     queryKey: queryKeys.seedChanges(resolvedId, selectedRepoId),
     queryFn: () => api.seeds.getChanges(resolvedId, selectedRepoId),
-    enabled: Boolean(resolvedId && repos.length > 0),
+    enabled: Boolean(resolvedId),
     refetchInterval: (query) => {
+      if (seed?.status === 'merged' || seed?.status === 'closed') {
+        const hasLoadedDiff = (query.state.data?.files?.length ?? 0) > 0
+        return hasLoadedDiff ? false : 30000
+      }
       const prCiStatus = query.state.data?.pull_request_status?.ci_status
-      if (isAwaitingPrSync) return 4000
-      if (prCiStatus === 'pending' || isLiveSeed) return 6000
-      return 30000
+      if (isAwaitingPrSync || prCiStatus === 'pending' || isLiveSeed) {
+        return activeDetailTab === 'changes' ? 15000 : 30000
+      }
+      return activeDetailTab === 'changes' ? 45000 : false
     },
   })
 

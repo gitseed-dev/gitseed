@@ -17,6 +17,8 @@ from gitseed_mcp.server import (
     RESOURCES_CATALOG,
     TOOLS,
     TOOLS_CATALOG,
+    TOOLSET_BY_TOOL,
+    TOOLSETS,
     GitSeedMCPServer,
 )
 from gitseed_runner.adapters import create_runtime_adapter
@@ -202,6 +204,15 @@ def _make_mock_api_transport(
                     "head_branch": "seed/12-implement-mcp",
                     "files_changed": 4,
                     "diff": "+class GitSeedMCPServer:",
+                },
+            )
+        if path == "/api/v1/seeds/sed_1/receipt" and method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "gitseed.receipt.v1",
+                    "seed_id": "sed_1",
+                    "signature": {"algorithm": "ed25519", "key_id": "kid_test"},
                 },
             )
         if path == "/api/v1/seeds/sed_1/approvals" and method == "GET":
@@ -635,6 +646,10 @@ async def test_mcp_all_sdlc_tools_execution() -> None:
 
     changes = await call_tool("get_seed_changes", {"seed_id": "sed_1"})
     assert changes["files_changed"] == 4
+
+    receipt = await call_tool("get_seed_receipt", {"seed_id": "sed_1"})
+    assert receipt["schema_version"] == "gitseed.receipt.v1"
+    assert receipt["seed_id"] == "sed_1"
 
     # Stage Gate Approvals
     approvals = await call_tool("list_seed_approvals", {"seed_id": "sed_1"})
@@ -1136,7 +1151,9 @@ def test_runner_adapters_mcp_config_injection(
 @pytest.mark.asyncio
 async def test_mcp_tool_annotations_and_readme_sync() -> None:
     assert TOOLS is TOOLS_CATALOG
-    assert len(TOOLS) == 64
+    assert len(TOOLS) == 65
+    assert set(TOOLSET_BY_TOOL) == {t["name"] for t in TOOLS}
+    assert sum(len(members) for members in TOOLSETS.values()) == 65
 
     expected_destructive = {
         "update_org_policy",
@@ -1200,7 +1217,7 @@ async def test_mcp_tool_annotations_and_readme_sync() -> None:
     )
     assert isinstance(tools_resp, dict)
     listed_tools = tools_resp["result"]["tools"]
-    assert len(listed_tools) == 64
+    assert len(listed_tools) == 65
     for descriptor in listed_tools:
         assert "annotations" in descriptor
         assert isinstance(descriptor["annotations"]["readOnlyHint"], bool)
@@ -1224,7 +1241,7 @@ async def test_mcp_tool_annotations_and_readme_sync() -> None:
     assert not undocumented_tools, (
         f"Undocumented tools missing from apps/mcp/README.md: {sorted(undocumented_tools)}"
     )
-    assert len(readme_tool_names) == len(set(readme_tool_names)) == 64
+    assert len(readme_tool_names) == len(set(readme_tool_names)) == 65
 
 
 @pytest.mark.asyncio
@@ -1725,6 +1742,100 @@ def test_mcp_get_reconnect_does_not_clobber_replacement_session() -> None:
     _step_coro_sync(it2.aclose())
     assert sid not in app.state.sse_sessions
     assert app.state.streamable_sessions[sid]["queue"] is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_toolsets_read_only_and_origin_env_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify --read-only, --toolsets scoping, CLI flag wiring, and CORS_ORIGINS fallback."""
+    monkeypatch.setenv("GITSEED_MCP_ALLOWED_ORIGINS", "")
+    monkeypatch.setenv("CORS_ORIGINS", "https://app.gitseed.example/")
+    monkeypatch.setenv("PUBLIC_WEB_URL", "https://portal.gitseed.example/")
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://ops.gitseed.example")
+
+    fallback_cfg = MCPSettings()
+    assert "https://app.gitseed.example" in fallback_cfg.allowed_origins
+    assert "https://portal.gitseed.example" in fallback_cfg.allowed_origins
+    assert "https://ops.gitseed.example" in fallback_cfg.allowed_origins
+    assert fallback_cfg.is_origin_allowed("https://app.gitseed.example") is True
+    assert fallback_cfg.is_origin_allowed("https://attacker.example") is False
+
+    parsed_cli = build_arg_parser().parse_args(["--toolsets", "seeds,runs", "--read-only"])
+    assert parsed_cli.toolsets == "seeds,runs"
+    assert parsed_cli.read_only is True
+
+    recorded: list[dict[str, Any]] = []
+    ro_seeds_server = GitSeedMCPServer(
+        settings=MCPSettings(
+            GITSEED_API_URL="http://api:8420",
+            GITSEED_API_TOKEN="gsp_valid_token",
+            GITSEED_MCP_TOOLSETS="seeds",
+            GITSEED_MCP_READ_ONLY=True,
+        ),
+        http_transport=_make_mock_api_transport(recorded),
+    )
+
+    tools_resp = await ro_seeds_server.handle_payload(
+        {"jsonrpc": "2.0", "id": "ro-list", "method": "tools/list"}
+    )
+    assert isinstance(tools_resp, dict)
+    listed = tools_resp["result"]["tools"]
+    listed_names = {t["name"] for t in listed}
+    assert listed_names == {
+        "list_seeds",
+        "get_seed",
+        "get_seed_changes",
+        "get_seed_receipt",
+        "list_seed_approvals",
+    }
+    assert all(t["annotations"]["readOnlyHint"] is True for t in listed)
+
+    # Mutating tool inside seeds toolset is blocked in read-only mode without hitting upstream API
+    recorded.clear()
+    blocked_mut = await ro_seeds_server.handle_payload(
+        {
+            "jsonrpc": "2.0",
+            "id": "ro-mut",
+            "method": "tools/call",
+            "params": {
+                "name": "create_seed",
+                "arguments": {"project_id": "gitseed", "title": "Should fail"},
+            },
+        }
+    )
+    assert isinstance(blocked_mut, dict)
+    assert blocked_mut["result"]["isError"] is True
+    assert "disabled by server configuration" in blocked_mut["result"]["content"][0]["text"]
+    assert recorded == []
+
+    # Read-only tool outside seeds toolset is also blocked
+    blocked_other = await ro_seeds_server.handle_payload(
+        {
+            "jsonrpc": "2.0",
+            "id": "ro-other",
+            "method": "tools/call",
+            "params": {"name": "list_agents", "arguments": {}},
+        }
+    )
+    assert isinstance(blocked_other, dict)
+    assert blocked_other["result"]["isError"] is True
+    assert recorded == []
+
+    # Allowed read-only tool in seeds toolset succeeds
+    ok_receipt = await ro_seeds_server.handle_payload(
+        {
+            "jsonrpc": "2.0",
+            "id": "ro-ok",
+            "method": "tools/call",
+            "params": {"name": "get_seed_receipt", "arguments": {"seed_id": "sed_1"}},
+        }
+    )
+    assert isinstance(ok_receipt, dict)
+    assert ok_receipt["result"]["isError"] is False
+    assert len(recorded) == 1
+    assert recorded[0]["path"] == "/api/v1/seeds/sed_1/receipt"
+
 
 
 

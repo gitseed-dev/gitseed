@@ -216,6 +216,11 @@ async def test_backends_routes(
         "probe_backend_config",
         AsyncMock(return_value=(BackendHealth.HEALTHY, 42, None)),
     )
+    monkeypatch.setattr(
+        backends_api.backends_service,
+        "discover_probe_metadata",
+        AsyncMock(return_value=([], [])),
+    )
     resp = await client.post(
         "/api/v1/backends/probe",
         json={"type": "git", "provider": "github", "secrets": {"token": "ghp_123"}},

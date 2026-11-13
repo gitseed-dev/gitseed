@@ -51,6 +51,7 @@ from gitseed_core.security import create_run_token
 from gitseed_core.services import events as events_service
 from gitseed_core.services.activity import record
 from gitseed_core.services.compute_runtime import (
+    RunnerPreparePhaseError,
     _attach_run_log_tail,
     _demux_docker_logs,
     _docker_client_for_backend,
@@ -93,7 +94,7 @@ logger = logging.getLogger("uvicorn.error")
 _SCHEDULER_ADVISORY_LOCK_ID = 748291042
 _RUNNING_STATUSES = (RunStatus.STARTING, RunStatus.RUNNING)
 _LAST_EXTERNAL_PR_CHECK_AT: datetime | None = None
-_EXTERNAL_PR_CHECK_INTERVAL = timedelta(seconds=5)
+_EXTERNAL_PR_CHECK_INTERVAL = timedelta(seconds=45)
 _LAST_PR_READINESS_CACHE: dict[str, tuple[str | None, str | None, bool]] = {}
 
 __all__ = [
@@ -939,13 +940,85 @@ async def _dispatch_queued_runs(session: AsyncSession) -> int:
                 await _stop_run_containers(compute_backend, None, locked_run.id)
             with suppress(Exception):
                 await session.refresh(locked_run)
+            with suppress(Exception):
+                await session.refresh(cand_seed)
+
+            broker_state: dict[str, Any] = (
+                dict(locked_run.output["_broker"])
+                if isinstance(locked_run.output, dict)
+                and isinstance(locked_run.output.get("_broker"), dict)
+                else {}
+            )
+            recorded_prep_error = str(broker_state.get("prepare_error") or "").strip()
+            is_prepare_failure = isinstance(exc, RunnerPreparePhaseError) or bool(
+                recorded_prep_error
+            )
+
+            if is_prepare_failure:
+                fail_now = datetime.now(UTC)
+                prep_log_tail = (
+                    exc.log_tail if isinstance(exc, RunnerPreparePhaseError) else ""
+                )
+                effective_err = recorded_prep_error
+                if not effective_err and prep_log_tail:
+                    err_lines = [
+                        ln.strip()
+                        for ln in prep_log_tail.splitlines()
+                        if "[ERROR]" in ln or "prepare:" in ln
+                    ]
+                    if err_lines:
+                        effective_err = err_lines[-1]
+                if not effective_err:
+                    effective_err = str(exc)
+
+                _attach_run_log_tail(locked_run, prep_log_tail or effective_err)
+                await finalize_run_litellm_key(
+                    session, locked_run, cand_seed, cand_project, delete_key=True
+                )
+                locked_run.status = RunStatus.FAILED
+                if locked_run.started_at is None:
+                    locked_run.started_at = now
+                locked_run.finished_at = fail_now
+                locked_run.exit_code = (
+                    exc.exit_code if isinstance(exc, RunnerPreparePhaseError) else 1
+                )
+                locked_run.error = effective_err
+                locked_run.updated_at = fail_now
+                if locked_run.stage == SeedStage.EXECUTE:
+                    await reset_orphaned_running_tasks(
+                        session, cand_seed.id, exclude_run_id=locked_run.id, now=fail_now
+                    )
+                if "does not exist on the remote repository" in effective_err:
+                    cand_seed.status = SeedStatus.FAILED
+                    cand_seed.blocked_reason = None
+                    cand_seed.updated_at = fail_now
+                else:
+                    await _reconcile_seed_after_run_failure(
+                        session, cand_seed, locked_run, pol, fail_now
+                    )
+                record(
+                    session,
+                    type=ActivityType.RUN_FAILED,
+                    actor_type=ActorType.SYSTEM,
+                    actor_id=None,
+                    project_id=cand_project.id,
+                    seed_id=cand_seed.id,
+                    data={
+                        "run_id": locked_run.id,
+                        "stage": str(locked_run.stage),
+                        "attempt": locked_run.attempt,
+                        "error": effective_err,
+                    },
+                )
+                await session.commit()
+                continue
+
             # Revert to queued if image/socket isn't ready yet so it doesn't burn attempts,
             # and reset single-use prepare flags in case prepare ran before spawn failed.
             if isinstance(locked_run.output, dict) and isinstance(
                 locked_run.output.get("_broker"), dict
             ):
                 updated_output = dict(locked_run.output)
-                broker_state = dict(updated_output["_broker"])
                 broker_state.pop("prepare_context_used", None)
                 broker_state.pop("prepare_complete_used", None)
                 updated_output["_broker"] = broker_state
@@ -976,7 +1049,6 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                 .where(
                     col(Seed.stage).in_(
                         [
-                            SeedStage.EXECUTE.value,
                             SeedStage.REVIEW.value,
                             SeedStage.MERGE.value,
                         ]
@@ -986,8 +1058,6 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                             SeedStatus.AWAITING_APPROVAL.value,
                             SeedStatus.QUEUED.value,
                             SeedStatus.RUNNING.value,
-                            SeedStatus.FAILED.value,
-                            SeedStatus.STOPPED.value,
                         ]
                     ),
                 )

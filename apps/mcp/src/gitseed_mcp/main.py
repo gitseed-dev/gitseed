@@ -25,7 +25,6 @@ from gitseed_mcp.server import (
     RESOURCE_TEMPLATES_CATALOG,
     RESOURCES_CATALOG,
     SUPPORTED_PROTOCOL_VERSIONS,
-    TOOLS_CATALOG,
     GitSeedMCPServer,
 )
 
@@ -181,7 +180,7 @@ def create_app(
                 "health": "/healthz",
             },
             "capabilities": {
-                "tools": len(TOOLS_CATALOG),
+                "tools": len(mcp_server.visible_tools()),
                 "resources": len(RESOURCES_CATALOG),
                 "resourceTemplates": len(RESOURCE_TEMPLATES_CATALOG),
                 "prompts": len(PROMPTS_CATALOG),
@@ -633,6 +632,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Default GitSeed Personal Access Token (gsp_...) for stdio transport.",
     )
+    parser.add_argument(
+        "--toolsets",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated toolsets to expose "
+            "(core,projects,seeds,tasks,runs,sessions,governance). Defaults to all."
+        ),
+    )
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        default=False,
+        help="Expose only read-only MCP tools and block mutating tool calls.",
+    )
     return parser
 
 
@@ -649,6 +663,10 @@ def cli(argv: list[str] | None = None) -> None:
         overrides["GITSEED_API_URL"] = args.api_url
     if args.token is not None:
         overrides["GITSEED_API_TOKEN"] = args.token
+    if args.toolsets is not None:
+        overrides["GITSEED_MCP_TOOLSETS"] = args.toolsets
+    if args.read_only:
+        overrides["GITSEED_MCP_READ_ONLY"] = True
 
     settings = base_settings.model_copy(update=overrides) if overrides else base_settings
 

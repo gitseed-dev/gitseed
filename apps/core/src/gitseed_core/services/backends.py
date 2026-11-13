@@ -958,6 +958,66 @@ async def probe_backend_config(
     return health, latency_ms, error_msg
 
 
+async def discover_probe_metadata(
+    *,
+    type: BackendType,
+    provider: str,
+    endpoint: str | None = None,
+    config: dict[str, Any] | None = None,
+    secrets: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Discover models (for Inference) or repositories (for Git) after a successful connection probe."""
+    normalized_provider = provider.strip().lower()
+    auth_mode = str((config or {}).get("auth_mode") or "api_key").strip().lower()
+    try:
+        cleaned_secrets = _validate_provider_and_secrets(
+            type, normalized_provider, secrets or {}, auth_mode=auth_mode
+        )
+        cleaned_endpoint = _validate_backend_endpoint(
+            type, normalized_provider, endpoint
+        )
+    except Invalid:
+        return [], []
+
+    cfg = dict(config or {})
+    temp_backend = Backend(
+        name="probe",
+        type=type,
+        provider=normalized_provider,
+        endpoint=cleaned_endpoint,
+        config=cfg,
+    )
+
+    if type == BackendType.INFERENCE:
+        try:
+            discovered_models = await _fetch_backend_models(temp_backend, cleaned_secrets)
+            if discovered_models:
+                existing_models = cfg.get("models")
+                legacy_models = cfg.get("discovered_models")
+                merged_models = _merge_discovered_models(
+                    existing_models if isinstance(existing_models, list) else [],
+                    legacy_models if isinstance(legacy_models, list) else [],
+                    discovered_models,
+                )
+                return merged_models, []
+        except Exception:
+            pass
+    elif type == BackendType.GIT:
+        try:
+            discovered_repos = await _fetch_git_repositories(temp_backend, cleaned_secrets)
+            if discovered_repos:
+                existing_repos = cfg.get("repositories")
+                merged_repos = _merge_discovered_repos(
+                    existing_repos if isinstance(existing_repos, list) else [],
+                    discovered_repos,
+                )
+                return [], merged_repos
+        except Exception:
+            pass
+
+    return [], []
+
+
 def _merge_discovered_repos(
     existing: list[Any],
     discovered: list[dict[str, Any]],
@@ -1414,7 +1474,10 @@ async def test_backend_connection(
     backend.health_latency_ms = latency_ms
     backend.health_error = error_msg
 
-    if backend.type == BackendType.GIT and health == BackendHealth.HEALTHY:
+    if backend.type == BackendType.GIT and health in (
+        BackendHealth.HEALTHY,
+        BackendHealth.DEGRADED,
+    ):
         try:
             discovered = await _fetch_git_repositories(backend, secrets_map)
             if discovered:
@@ -1427,7 +1490,10 @@ async def test_backend_connection(
                 backend.config = cfg
         except Exception:
             pass
-    elif backend.type == BackendType.INFERENCE and health == BackendHealth.HEALTHY:
+    elif backend.type == BackendType.INFERENCE and health in (
+        BackendHealth.HEALTHY,
+        BackendHealth.DEGRADED,
+    ):
         try:
             discovered_models = await _fetch_backend_models(backend, secrets_map)
             if discovered_models:
@@ -2443,7 +2509,7 @@ async def provision_sdlc_agents_for_backend(
             and force_switch
             and target_agent is None
             and current_stage_agent is not None
-            and current_stage_agent.handle != target_handle
+            and current_stage_agent.handle == role_slug
             and not (
                 is_personal
                 and getattr(current_stage_agent, "models_backend_id", None) not in (None, backend.id)
@@ -2557,10 +2623,14 @@ async def maybe_auto_provision_sdlc_agents(
         if b.id != backend.id
     )
 
-    if is_personal and (
-        len(other_ready_inference) > 0
-        or has_other_explicit_default
-        or not any_missing_stage_agent
+    if (
+        is_personal
+        and not explicit_set_default
+        and (
+            len(other_ready_inference) > 0
+            or has_other_explicit_default
+            or not any_missing_stage_agent
+        )
     ):
         await provision_sdlc_agents_for_backend(
             session,

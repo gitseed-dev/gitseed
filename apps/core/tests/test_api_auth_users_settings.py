@@ -245,12 +245,34 @@ async def test_bootstrap_database_empty_and_existing(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(bootstrap_mod, "engine", SimpleNamespace(begin=_engine_begin))
     monkeypatch.setattr(bootstrap_mod, "AsyncSessionLocal", _session_ctx)
+    warn_spy = MagicMock()
+    info_spy = MagicMock()
+    monkeypatch.setattr(bootstrap_mod.logger, "warning", warn_spy)
+    monkeypatch.setattr(bootstrap_mod.logger, "info", info_spy)
     await bootstrap_mod.bootstrap_database()
     assert any(isinstance(x, OrgSettings) for x in added)
     assert any(isinstance(x, User) for x in added)
     assert any(isinstance(x, Backend) for x in added)
     assert sum(1 for x in added if isinstance(x, Agent)) == 0
     session.commit.assert_awaited_once()
+    assert warn_spy.call_count == 1
+    assert "GitSeed Initial Admin Created" in warn_spy.call_args[0][0]
+    info_spy.assert_not_called()
+
+    # 1b. Empty database with GITSEED_ADMIN_PASSWORD configured: logs confirmation banner without leaking password
+    session.scalar = AsyncMock(side_effect=[0, 1, 1])
+    session.commit.reset_mock()
+    warn_spy.reset_mock()
+    monkeypatch.setattr(
+        bootstrap_mod.settings, "GITSEED_ADMIN_PASSWORD", "super-secret-env-pass-999"
+    )
+    await bootstrap_mod.bootstrap_database()
+    warn_spy.assert_not_called()
+    assert info_spy.call_count == 1
+    banner_msg = info_spy.call_args[0][0]
+    assert "GitSeed Initial Admin Created" in banner_msg
+    assert "(from GITSEED_ADMIN_PASSWORD in .env)" in banner_msg
+    assert "super-secret-env-pass-999" not in banner_msg
 
     # 2. Verify provider-prefixed 5-stage agent provisioning (e.g. claude-ideator .. claude-merger, grok-ideator ..)
     claude_b = Backend(name="Claude", type=BackendType.INFERENCE, provider="anthropic")

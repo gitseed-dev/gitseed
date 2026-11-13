@@ -32,6 +32,19 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.scheduler.affinity }}
+      affinity:
+        {{- toYaml .Values.scheduler.affinity | nindent 8 }}
+      {{- else if and .Values.api.persistence.enabled (eq (default .Values.persistence.artifacts.accessMode .Values.api.persistence.accessMode) "ReadWriteOnce") }}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "gitseed.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: api
+              topologyKey: kubernetes.io/hostname
+      {{- end }}
       containers:
         - name: scheduler
           image: {{ include "gitseed.image" . | quote }}

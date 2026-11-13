@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
+from gitseed_common.enums import SeedStage
 
 from gitseed_core.config import settings
 from gitseed_core.models.backend import Backend
@@ -30,6 +31,21 @@ from gitseed_core.security import (
 )
 
 logger = logging.getLogger("uvicorn.error")
+
+
+class RunnerPreparePhaseError(RuntimeError):
+    """Raised when the runner `prepare` container exits with a non-zero exit code."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int = 1,
+        log_tail: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.log_tail = log_tail
 
 INCLUSTER_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 INCLUSTER_NAMESPACE_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -537,9 +553,14 @@ async def _spawn_k8s_runner_job(
 
     sbx_cfg = project.sandbox_config if isinstance(project.sandbox_config, dict) else {}
     is_second_opinion = isinstance(run.output, dict) and bool(
-        run.output.get("second_opinion")
+        run.output.get("second_opinion") or run.output.get("multi_opinion")
     )
-    enable_warm_ws = bool(sbx_cfg.get("enable_warm_workspace", True)) and not is_second_opinion
+    is_isolated_stage = run.stage in (SeedStage.REVIEW, SeedStage.MERGE)
+    enable_warm_ws = (
+        bool(sbx_cfg.get("enable_warm_workspace", True))
+        and not is_second_opinion
+        and not is_isolated_stage
+    )
     ws_subpath: str | None = None
     ws_volume: dict[str, Any] = {"name": "workspace", "emptyDir": {}}
     if cfg.get("workspace_pvc"):
@@ -1181,6 +1202,7 @@ def _build_role_environments(
             target_env["http_proxy"] = proxy_url
             target_env["NO_PROXY"] = no_proxy_val
             target_env["no_proxy"] = no_proxy_val
+            target_env["NODE_USE_ENV_PROXY"] = "1"
 
     return prepare_env, agent_env, finalize_env
 
@@ -1262,9 +1284,14 @@ async def spawn_docker_runner_container(
 
     enable_cache = bool(sbx_cfg.get("enable_dependency_cache", True))
     is_second_opinion = isinstance(run.output, dict) and bool(
-        run.output.get("second_opinion")
+        run.output.get("second_opinion") or run.output.get("multi_opinion")
     )
-    enable_warm_ws = bool(sbx_cfg.get("enable_warm_workspace", True)) and not is_second_opinion
+    is_isolated_stage = run.stage in (SeedStage.REVIEW, SeedStage.MERGE)
+    enable_warm_ws = (
+        bool(sbx_cfg.get("enable_warm_workspace", True))
+        and not is_second_opinion
+        and not is_isolated_stage
+    )
     ws_vol_name = (
         f"gitseed-ws-{seed.id.lower()}"
         if enable_warm_ws
@@ -1419,8 +1446,20 @@ async def spawn_docker_runner_container(
                             or 0
                         )
                         if prep_exit != 0:
-                            raise RuntimeError(
-                                f"Runner prepare phase failed with exit code {prep_exit}"
+                            prep_logs = ""
+                            try:
+                                log_resp = await client.get(
+                                    f"{base_url}/containers/{quote(cid, safe='')}/logs"
+                                    "?stdout=true&stderr=true&tail=200"
+                                )
+                                if log_resp.status_code == 200:
+                                    prep_logs = _demux_docker_logs(log_resp.content)
+                            except Exception:
+                                pass
+                            raise RunnerPreparePhaseError(
+                                f"Runner prepare phase failed with exit code {prep_exit}",
+                                exit_code=prep_exit,
+                                log_tail=prep_logs,
                             )
                 except Exception as exc:
                     for prev_id in spawned_ids:
@@ -1464,7 +1503,10 @@ async def stop_runner_agent_phase(
                     f"?labelSelector=job-name%3D{quote(name, safe='')}"
                 )
                 if pods_resp.status_code != 200:
-                    return
+                    raise RuntimeError(
+                        f"Failed to verify Kubernetes agent container termination for run '{run_id}' "
+                        f"(HTTP {pods_resp.status_code}); refusing to finalize"
+                    )
                 items = (pods_resp.json() or {}).get("items") or []
                 if not items or not isinstance(items[0], dict):
                     return
@@ -1510,14 +1552,34 @@ async def stop_runner_agent_phase(
                 insp = await client.get(
                     f"{base_url}/containers/{quote(target, safe='')}/json"
                 )
-                if insp.status_code == 200 and bool(
-                    ((insp.json() or {}).get("State") or {}).get("Running")
-                ):
+                if insp.status_code == 404:
+                    continue
+                if insp.status_code != 200:
+                    raise RuntimeError(
+                        f"Failed to inspect Docker agent container '{target}' for run '{run_id}' "
+                        f"(HTTP {insp.status_code}); refusing to finalize"
+                    )
+                if bool(((insp.json() or {}).get("State") or {}).get("Running")):
                     await client.post(
                         f"{base_url}/containers/{quote(target, safe='')}/kill"
                     )
+                    insp2 = await client.get(
+                        f"{base_url}/containers/{quote(target, safe='')}/json"
+                    )
+                    if insp2.status_code != 404 and (
+                        insp2.status_code != 200
+                        or bool(((insp2.json() or {}).get("State") or {}).get("Running"))
+                    ):
+                        raise RuntimeError(
+                            f"Agent container '{target}' for run '{run_id}' is still running; "
+                            "refusing to finalize while /workspace is writable"
+                        )
+    except RuntimeError:
+        raise
     except Exception as exc:
-        logger.debug("Stopping runner agent phase for %s ignored error: %s", run_id, exc)
+        raise RuntimeError(
+            f"Cannot verify agent container termination for run '{run_id}': {exc}"
+        ) from exc
 
 
 async def stop_and_remove_docker_container(
@@ -1604,8 +1666,83 @@ async def stop_and_remove_docker_container(
 async def remove_docker_seed_workspace_volume(
     backend: Backend, seed_id: str | None
 ) -> None:
-    """Remove the warm per-seed workspace volume (`gitseed-ws-<seed_id>`) once a seed is merged or closed."""
-    if not seed_id or backend.provider.lower() in ("kubernetes", "k8s"):
+    """Remove the warm per-seed workspace (`gitseed-ws-<seed_id>` or K8s PVC `ws-<seed_id>`) once merged/closed."""
+    if not seed_id:
+        return
+    if backend.provider.lower() in ("kubernetes", "k8s"):
+        cfg = backend.config if isinstance(backend.config, dict) else {}
+        pvc_name = str(cfg.get("workspace_pvc") or "").strip()
+        if not pvc_name or not re.fullmatch(r"[A-Za-z0-9_-]+", seed_id):
+            return
+        try:
+            client, base_url, default_ns = _k8s_client_for_backend(backend)
+            target_ns = resolve_k8s_target_namespace(
+                backend, default_ns, workload="runner"
+            )
+            job_name = _safe_k8s_job_name(f"ws-cleanup-{seed_id.lower()}")
+            cleanup_image = str(
+                cfg.get("runner_image") or settings.RUNNER_IMAGE or "alpine:3.21"
+            ).strip()
+            job_manifest: dict[str, Any] = {
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {
+                    "name": job_name,
+                    "namespace": target_ns,
+                    "labels": {
+                        "app.kubernetes.io/managed-by": "gitseed",
+                        "app.gitseed.managed": "true",
+                        "app.gitseed.seed_id": seed_id,
+                        "app.gitseed.role": "ws-cleanup",
+                    },
+                },
+                "spec": {
+                    "ttlSecondsAfterFinished": 60,
+                    "activeDeadlineSeconds": 60,
+                    "backoffLimit": 0,
+                    "template": {
+                        "spec": {
+                            "restartPolicy": "Never",
+                            "automountServiceAccountToken": False,
+                            "containers": [
+                                {
+                                    "name": "cleanup",
+                                    "image": cleanup_image,
+                                    "command": [
+                                        "rm",
+                                        "-rf",
+                                        "--",
+                                        f"/workspaces/ws-{seed_id}",
+                                    ],
+                                    "securityContext": {
+                                        "allowPrivilegeEscalation": False,
+                                        "capabilities": {"drop": ["ALL"]},
+                                    },
+                                    "volumeMounts": [
+                                        {
+                                            "name": "workspace",
+                                            "mountPath": "/workspaces",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "volumes": [
+                                {
+                                    "name": "workspace",
+                                    "persistentVolumeClaim": {"claimName": pvc_name},
+                                }
+                            ],
+                        }
+                    },
+                },
+            }
+            async with client:
+                await client.post(
+                    f"{base_url}/apis/batch/v1/namespaces/{quote(target_ns, safe='')}/jobs",
+                    json=job_manifest,
+                )
+        except Exception as exc:
+            logger.debug("K8s PVC seed workspace cleanup for %s ignored error: %s", seed_id, exc)
         return
     vol_name = f"gitseed-ws-{seed_id.lower()}"
     try:

@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from gitseed_common.enums import BackendType
+from gitseed_common.enums import BackendHealth, BackendType
 from gitseed_common.schemas import (
     BackendResponse,
     CliAuthInputRequest,
@@ -104,10 +104,24 @@ async def probe_backend_config(
         config=payload.config,
         secrets=payload.secrets,
     )
+    discovered_models: list[dict[str, Any]] = []
+    discovered_repos: list[dict[str, Any]] = []
+    if health in (BackendHealth.HEALTHY, BackendHealth.DEGRADED):
+        discover_fn = getattr(backends_service, "discover_probe_metadata", None)
+        if callable(discover_fn):
+            discovered_models, discovered_repos = await discover_fn(
+                type=payload.type,
+                provider=payload.provider,
+                endpoint=payload.endpoint,
+                config=payload.config,
+                secrets=payload.secrets,
+            )
     return ProbeBackendResponse(
         health=health,
         latency_ms=latency_ms,
         error=error_msg,
+        models=discovered_models,
+        repositories=discovered_repos,
     )
 
 

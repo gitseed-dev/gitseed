@@ -61,7 +61,7 @@ helm upgrade --install gitseed ./charts/gitseed \
 | **Web UI** | `http://localhost:8421` | React 19 control plane dashboard, live run logs, diff viewer, `SessionDock`, and `⌘K` `@coordinator` |
 | **VS Code Sandbox Origin** | `http://127.0.0.1:8423` | Dedicated cookie-less `SANDBOX_ORIGIN` listener serving `/api/v1/vscode/*` isolated from Web UI cookies |
 | **Control Plane API** | `http://localhost:8420` | FastAPI REST service (`/api/v1/*`), short-lived SSE streams, WebSocket PTY, and OpenAPI docs (`/docs`) |
-| **MCP Server** | `http://127.0.0.1:8422/mcp` | Loopback-bound Streamable HTTP & SSE MCP endpoint (64 annotated tools; `Bearer` + `Origin` protected) |
+| **MCP Server** | `http://127.0.0.1:8422/mcp` | Loopback-bound Streamable HTTP & SSE MCP endpoint (65 annotated tools; `Bearer` + `Origin` protected) |
 | **LiteLLM Gateway** | `http://localhost:4000` | Unified OpenAI-compatible proxy for cloud and local LLM backends with enforced per-run virtual keys |
 | **PostgreSQL 16** | `localhost:5432` | Primary relational store for control plane & LiteLLM |
 | **Valkey** | `localhost:6379` | High-performance in-memory store for rate limits and pub/sub state |
@@ -130,7 +130,7 @@ Every stage agent (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`, `@c
 > [!IMPORTANT]
 > **Personal Mode (`cli_oauth`) is strictly single-user and owner-bound.** Consumer subscriptions (Claude Pro/Max, ChatGPT Plus/Pro, personal Google accounts) are licensed to one individual. GitSeed binds each Personal Mode backend to `owner_user_id` so other users cannot attach, run, or inspect it, and administrators can disable Personal Mode instance-wide with `GITSEED_ALLOW_PERSONAL_CLI_OAUTH=false`. For shared team projects or scheduled CI pipelines, use **API keys** via LiteLLM or local open-weight models.
 
-> **Runtime availability**: `opencode`, `claude-code`, `codex`, and `gemini` are pre-installed out of the box when building `gitseed/runner` locally (`docker compose up -d --build`, where `INCLUDE_PROPRIETARY_CLIS=true` by default; pass `--build-arg INCLUDE_PROPRIETARY_CLIS=false` when building strictly FOSS-only or redistributed images). `antigravity` (`agy`) and `grok-build` (`grok`) ship with built-in runtime adapters in `gitseed_runner` ready for custom layered binaries or `ANTIGRAVITY_INSTALL_URL` / `GROK_CLI_INSTALL_URL` image builds. See [`apps/runner/README.md`](./apps/runner/README.md#third-party-agent-clis).
+> **Runtime availability**: `opencode`, `claude-code`, `codex`, `antigravity` (`agy`), and `gemini` are pre-installed out of the box when building `gitseed/runner` locally (`docker compose up -d --build`, where `INCLUDE_PROPRIETARY_CLIS=true` by default; pass `--build-arg INCLUDE_PROPRIETARY_CLIS=false` when building strictly FOSS-only or redistributed images). `grok-build` (`grok`) ships with a built-in runtime adapter in `gitseed_runner` ready for custom layered binaries or `GROK_CLI_INSTALL_URL` image builds. See [`apps/runner/README.md`](./apps/runner/README.md#third-party-agent-clis).
 
 ---
 
@@ -209,7 +209,7 @@ claude mcp add gitseed \
 # URL: http://127.0.0.1:8422/mcp (Header: Authorization: Bearer gsp_...)
 ```
 
-Every MCP tool includes explicit `ToolAnnotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so MCP clients can automatically allow read-only queries while prompting before state mutations. See [`apps/mcp/README.md`](./apps/mcp/README.md) for all 64 available MCP tools, resources, and prompts.
+Every MCP tool includes explicit `ToolAnnotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), plus optional `--toolsets` and `--read-only` scoping so MCP clients can automatically allow read-only queries while prompting before state mutations. See [`apps/mcp/README.md`](./apps/mcp/README.md) for all 65 available MCP tools, resources, and prompts.
 
 ---
 
@@ -232,7 +232,7 @@ flowchart TB
     subgraph Surfaces["Operator & IDE Surfaces"]
         Web["apps/web<br/>React 19 Control Plane UI (:8421)"]
         CLI["apps/cli<br/>gitseed Terminal CLI & TUI"]
-        MCP["apps/mcp<br/>64-Tool MCP Server (:8422)"]
+        MCP["apps/mcp<br/>65-Tool MCP Server (:8422)"]
     end
 
     subgraph ControlPlane["GitSeed Control Plane (apps/core)"]
@@ -272,7 +272,7 @@ flowchart TB
 | [`apps/runner`](./apps/runner/README.md) | `gitseed-runner` | 3-phase container supervisor (`prepare`, `agent`, `finalize`) executing `opencode`, `claude-code`, `codex`, `antigravity`, `gemini`, and `grok-build` with clean-room git finalization. |
 | [`apps/web`](./apps/web/README.md) | `web` | React 19 + TypeScript + Vite + Tailwind CSS v4 frontend with Kanban & table views, live stage timelines, diff review, governance receipts, and persistent `SessionDock`. |
 | [`apps/cli`](./apps/cli/README.md) | `gitseed-cli` | `gitseed` terminal CLI and split-pane `gitseed tui` for managing seeds, verifying signed receipts (`gitseed receipt verify`), streaming logs, approving gates, and running sessions. |
-| [`apps/mcp`](./apps/mcp/README.md) | `gitseed-mcp` | `gitseed-mcp` server exposing 64 annotated tools (`readOnlyHint`, `destructiveHint`), 5 resources, 2 resource templates, and 4 workflow prompts over `stdio`, Streamable HTTP, and SSE. |
+| [`apps/mcp`](./apps/mcp/README.md) | `gitseed-mcp` | `gitseed-mcp` server exposing 65 annotated tools (`readOnlyHint`, `destructiveHint`, `--toolsets`, `--read-only`), 5 resources, 2 resource templates, and 4 workflow prompts over `stdio`, Streamable HTTP, and SSE. |
 | [`packages/common`](./packages/common/README.md) | `gitseed-common` | Shared Pydantic v2 schemas, stage output contracts (`STAGE_OUTPUT_SCHEMAS`), `GovernanceReceipt` (`gitseed.receipt.v1`), and domain enums. |
 | [`charts/gitseed`](./charts/gitseed/README.md) | Helm Chart | Production Kubernetes Helm chart with dedicated sandbox namespace isolation, RBAC, and NetworkPolicies. |
 

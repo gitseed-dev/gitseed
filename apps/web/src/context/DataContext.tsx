@@ -107,12 +107,24 @@ function mergeSeedsById(primary: Seed[], extra: Seed[]): Seed[] {
   })
 }
 
-const PROJECT_METADATA_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
-  VIEWS.DASHBOARD,
+const PROJECT_MEMBERS_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
+  VIEWS.PROJECTS,
+  VIEWS.SEEDS,
+  VIEWS.USERS,
+])
+
+const PROJECT_POLICIES_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
   VIEWS.PROJECTS,
   VIEWS.SEEDS,
   VIEWS.SESSIONS,
   VIEWS.USERS,
+])
+
+const PROJECT_REPOS_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
+  VIEWS.PROJECTS,
+  VIEWS.SEEDS,
+  VIEWS.SESSIONS,
+  VIEWS.BACKENDS,
 ])
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -526,8 +538,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setOrgDefaultAmbientBg,
   ])
 
-  const needsProjectMetadata =
-    PROJECT_METADATA_VIEWS.has(activeView) || isProfileDrawerOpen
   const activeSeedProjectId = useMemo(() => {
     if (activeView !== VIEWS.SEEDS || !activeDetailId) return null
     const direct = allSeeds.find((s) => s.id === activeDetailId)
@@ -540,9 +550,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return null
   }, [activeView, activeDetailId, allSeeds, projects])
 
-  const shouldEnableProjectMetadata = useCallback(
-    (project: Project): boolean => {
-      if (!isAuthenticated || !needsProjectMetadata) return false
+  const shouldEnableProjectQuery = useCallback(
+    (project: Project, allowedViews: ReadonlySet<ViewType>): boolean => {
+      if (
+        !isAuthenticated ||
+        (!allowedViews.has(activeView) && !isProfileDrawerOpen)
+      ) {
+        return false
+      }
       if (
         project.archived_at &&
         project.id !== selectedProject &&
@@ -554,6 +569,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (
         activeView === VIEWS.PROJECTS ||
         activeView === VIEWS.USERS ||
+        activeView === VIEWS.BACKENDS ||
         isProfileDrawerOpen
       ) {
         return true
@@ -570,7 +586,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     },
     [
       isAuthenticated,
-      needsProjectMetadata,
       selectedProject,
       activeDetailId,
       activeView,
@@ -583,7 +598,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     queries: projects.map((project) => ({
       queryKey: queryKeys.projectMembers(project.id),
       queryFn: () => api.projects.listMembers(project.id),
-      enabled: shouldEnableProjectMetadata(project),
+      enabled: shouldEnableProjectQuery(project, PROJECT_MEMBERS_VIEWS),
       staleTime: 300_000,
       refetchOnWindowFocus: false,
     })),
@@ -593,7 +608,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     queries: projects.map((project) => ({
       queryKey: queryKeys.projectPolicies(project.id),
       queryFn: () => api.projects.listPolicies(project.id),
-      enabled: shouldEnableProjectMetadata(project),
+      enabled: shouldEnableProjectQuery(project, PROJECT_POLICIES_VIEWS),
       staleTime: 300_000,
       refetchOnWindowFocus: false,
     })),
@@ -603,7 +618,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     queries: projects.map((project) => ({
       queryKey: queryKeys.projectRepos(project.id),
       queryFn: () => api.projects.listRepos(project.id),
-      enabled: shouldEnableProjectMetadata(project),
+      enabled: shouldEnableProjectQuery(project, PROJECT_REPOS_VIEWS),
       staleTime: 300_000,
       refetchOnWindowFocus: false,
     })),
