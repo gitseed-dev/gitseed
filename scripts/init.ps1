@@ -66,6 +66,7 @@ $Placeholders = @(
     "sk-gitseed-litellm-master-key",
     "sk-gitseed-litellm-salt-key",
     "gitseed_password",
+    "gitseed_valkey_password",
     "gitseed_admin"
 )
 
@@ -90,6 +91,21 @@ if ($Placeholders -contains $CurPg) {
         $running = docker inspect -f '{{.State.Running}}' gitseed-postgresql 2>$null
         if ($running -eq "true") {
             docker exec gitseed-postgresql psql -U $PgUser -d $PgDb -c "ALTER USER `"$PgUser`" WITH PASSWORD '$NewPg';" *> $null
+        }
+    } catch {}
+}
+$CurValkey = Get-EnvVal "VALKEY_PASSWORD"
+if ($Placeholders -contains $CurValkey) {
+    $NewValkey = New-RandomHex 24
+    Set-EnvVal "VALKEY_PASSWORD" $NewValkey
+    $CurRedisUrl = Get-EnvVal "REDIS_URL"
+    if ($CurRedisUrl -in @("", "redis://valkey:6379/0", "redis://:gitseed_valkey_password@valkey:6379/0")) {
+        Set-EnvVal "REDIS_URL" "redis://:$NewValkey@valkey:6379/0"
+    }
+    try {
+        $runningValkey = docker inspect -f '{{.State.Running}}' gitseed-valkey 2>$null
+        if ($runningValkey -eq "true") {
+            docker exec gitseed-valkey valkey-cli CONFIG SET requirepass $NewValkey *> $null
         }
     } catch {}
 }

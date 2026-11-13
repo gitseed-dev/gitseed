@@ -253,6 +253,7 @@ class GitSeedApiClient:
         min_approver_role: str | None = None,
         allow_auto_approve: bool | None = None,
         allow_self_approval: bool | None = None,
+        allow_second_opinions: bool | None = None,
         max_attempts: int | None = None,
         timeout_minutes: int | None = None,
         min_acceptance_criteria: int | None = None,
@@ -269,6 +270,7 @@ class GitSeedApiClient:
                 "min_approver_role": min_approver_role,
                 "allow_auto_approve": allow_auto_approve,
                 "allow_self_approval": allow_self_approval,
+                "allow_second_opinions": allow_second_opinions,
                 "max_attempts": max_attempts,
                 "timeout_minutes": timeout_minutes,
                 "min_acceptance_criteria": min_acceptance_criteria,
@@ -295,6 +297,7 @@ class GitSeedApiClient:
         min_approver_role: str | None = None,
         allow_auto_approve: bool | None = None,
         allow_self_approval: bool | None = None,
+        allow_second_opinions: bool | None = None,
         max_attempts: int | None = None,
         timeout_minutes: int | None = None,
         min_acceptance_criteria: int | None = None,
@@ -311,6 +314,7 @@ class GitSeedApiClient:
                 "min_approver_role": min_approver_role,
                 "allow_auto_approve": allow_auto_approve,
                 "allow_self_approval": allow_self_approval,
+                "allow_second_opinions": allow_second_opinions,
                 "max_attempts": max_attempts,
                 "timeout_minutes": timeout_minutes,
                 "min_acceptance_criteria": min_acceptance_criteria,
@@ -419,6 +423,7 @@ class GitSeedApiClient:
         staged: bool | None = None,
         autonomy: str = "supervised",
         budget_cap: float | None = None,
+        ideate_agent_ids: list[str] | None = None,
     ) -> Any:
         body = _clean_params(
             {
@@ -434,6 +439,7 @@ class GitSeedApiClient:
                 "staged": staged,
                 "autonomy": autonomy,
                 "budget_cap": budget_cap,
+                "ideate_agent_ids": ideate_agent_ids,
             }
         )
         return await self.request("POST", "/api/v1/seeds", json_body=body)

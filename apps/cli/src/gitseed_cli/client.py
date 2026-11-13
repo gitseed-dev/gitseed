@@ -555,6 +555,7 @@ class GitSeedClient:
         *,
         seed_id: str | None = None,
         project_id: str | None = None,
+        task_id: str | None = None,
         agent_id: str | None = None,
         stage: str | None = None,
         status: str | None = None,
@@ -567,6 +568,7 @@ class GitSeedClient:
             params={
                 "seed_id": seed_id,
                 "project_id": project_id,
+                "task_id": task_id,
                 "agent_id": agent_id,
                 "stage": stage,
                 "status": status,

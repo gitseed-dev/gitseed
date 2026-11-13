@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -48,11 +49,15 @@ def _clear_supervisor_log_buffer() -> Any:
 
 
 def _git_test(repo: Path, *args: str) -> str:
+    empty_cfg = (repo.parent if repo.name != repo.anchor else repo) / ".gitseed_empty_gitconfig"
+    if not empty_cfg.exists():
+        empty_cfg.parent.mkdir(parents=True, exist_ok=True)
+        empty_cfg.write_text("", encoding="utf-8")
     env = os.environ.copy()
     env.update(
         {
             "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_GLOBAL": str(empty_cfg),
             "GIT_AUTHOR_NAME": "Test User",
             "GIT_AUTHOR_EMAIL": "test@gitseed.local",
             "GIT_COMMITTER_NAME": "Test User",
@@ -72,8 +77,10 @@ def _git_test(repo: Path, *args: str) -> str:
         env=env,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {args} failed ({proc.returncode}): {proc.stderr}")
     return proc.stdout.strip()
 
 
@@ -141,7 +148,7 @@ def test_clean_commit_revert_policy_and_preserve_run_json(tmp_path: Path) -> Non
     base_sha = _init_repo_with_base_commit(ws_repo)
 
     clean_repo = tmp_path / "clean_repo"
-    _git_test(tmp_path, "clone", "--no-checkout", str(ws_repo), str(clean_repo))
+    shutil.copytree(ws_repo / ".git", clean_repo / ".git")
 
     # Agent modifies ci.yml, adds new blocked file, writes .gitseed/run.json + output.json
     (ws_repo / ".github" / "workflows" / "ci.yml").write_text("tampered\n", encoding="utf-8")

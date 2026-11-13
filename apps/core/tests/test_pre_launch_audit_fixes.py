@@ -582,8 +582,122 @@ async def test_compute_runtime_fail_closed_stop_and_k8s_pvc_cleanup(
     monkeypatch.setattr(compute_runtime, "_k8s_client_for_backend", _recording_k8s_client)
     await compute_runtime.remove_docker_seed_workspace_volume(k8s_backend, "sed_abc123")
     assert len(posted_jobs) == 1
-    cleanup_spec = posted_jobs[0]["spec"]["template"]["spec"]["containers"][0]
+    pod_tpl_spec = posted_jobs[0]["spec"]["template"]["spec"]
+    assert pod_tpl_spec["securityContext"]["runAsNonRoot"] is True
+    assert pod_tpl_spec["securityContext"]["runAsUser"] == 1000
+    assert pod_tpl_spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+    cleanup_spec = pod_tpl_spec["containers"][0]
     assert cleanup_spec["command"] == ["rm", "-rf", "--", "/workspaces/ws-sed_abc123"]
+    assert cleanup_spec["securityContext"]["runAsNonRoot"] is True
+    assert cleanup_spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+
+
+def test_valkey_password_and_redis_url_weak_secret_validation() -> None:
+    """insecure_secret_problems flags default VALKEY_PASSWORD and REDIS_URL placeholders."""
+    base_kwargs: dict[str, Any] = {
+        "_env_file": None,
+        "GITSEED_SECRET_KEY": "a" * 48,
+        "LITELLM_MASTER_KEY": "sk-" + "b" * 40,
+        "POSTGRES_PASSWORD": "d" * 32,
+        "GITSEED_ALLOW_INSECURE_DEFAULTS": True,
+    }
+    cfg_weak_valkey = Settings(
+        **base_kwargs,
+        VALKEY_PASSWORD="gitseed_valkey_password",
+    )
+    assert any("VALKEY_PASSWORD" in p for p in insecure_secret_problems(cfg_weak_valkey))
+
+    cfg_weak_redis_url = Settings(
+        **base_kwargs,
+        REDIS_URL="redis://:gitseed_valkey_password@valkey:6379/0",
+    )
+    assert any("REDIS_URL" in p for p in insecure_secret_problems(cfg_weak_redis_url))
+
+    cfg_short_redis_url = Settings(
+        **base_kwargs,
+        REDIS_URL="redis://:shortpass@valkey:6379/0",
+    )
+    assert any("REDIS_URL" in p for p in insecure_secret_problems(cfg_short_redis_url))
+
+    cfg_strong_valkey = Settings(
+        **base_kwargs,
+        VALKEY_PASSWORD="v" * 32,
+        REDIS_URL=f"redis://:{'v' * 32}@valkey:6379/0",
+    )
+    assert insecure_secret_problems(cfg_strong_valkey) == []
+
+
+@pytest.mark.asyncio
+async def test_k8s_workload_namespace_handles_cluster_403_and_comment_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_ensure_k8s_namespace reconciles NetworkPolicy when cluster namespace GET returns 403, and @agent comment in REVIEW triggers remediation."""
+    from gitseed_core.services import seeds as seeds_svc
+
+    from conftest import _make_user
+
+    # 1. When cluster-scoped GET /api/v1/namespaces/<ns> returns 403 (workload RBAC mode),
+    #    _ensure_k8s_namespace reconciles the namespace-scoped NetworkPolicy and returns target_ns.
+    np_calls: list[str] = []
+
+    def _workload_rbac_handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET" and req.url.path == "/api/v1/namespaces/gitseed-sandboxes":
+            return httpx.Response(403, json={"reason": "Forbidden"})
+        if (
+            req.method == "POST"
+            and req.url.path
+            == "/apis/networking.k8s.io/v1/namespaces/gitseed-sandboxes/networkpolicies"
+        ):
+            np_calls.append(req.url.path)
+            return httpx.Response(201, json={"metadata": {"name": "gitseed-default-egress"}})
+        return httpx.Response(500)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_workload_rbac_handler)) as client:
+        resolved_ns = await compute_runtime._ensure_k8s_namespace(
+            client,
+            "https://k8s.local",
+            "gitseed-sandboxes",
+            "gitseed-runners",
+            workload="sandbox",
+        )
+    assert resolved_ns == "gitseed-sandboxes"
+    assert len(np_calls) == 1
+
+    # 2. Commenting `@agent` on a seed awaiting approval in REVIEW triggers remediation back to EXECUTE.
+    project = _make_project("prj_cmt_rem")
+    seed = _make_seed("sed_cmt_rem", project.id)
+    seed.stage = SeedStage.REVIEW
+    seed.status = SeedStatus.AWAITING_APPROVAL
+    admin = _make_user("usr_admin123456")
+
+    session = _make_session()
+    session.get = AsyncMock(return_value=seed)
+    monkeypatch.setattr(
+        seeds_svc,
+        "_require_seed_developer",
+        AsyncMock(return_value=(project, seeds_svc.ProjectRole.MAINTAINER)),
+    )
+    monkeypatch.setattr(
+        seeds_svc,
+        "get_effective_stage_policy",
+        AsyncMock(return_value=_make_policy(SeedStage.REVIEW, project.id)),
+    )
+    monkeypatch.setattr(
+        seeds_svc,
+        "_extract_latest_review_feedback",
+        AsyncMock(return_value=("Needs null check", ["Add guard in handler"])),
+    )
+    rem_spy = AsyncMock()
+    monkeypatch.setattr(
+        seeds_svc, "create_remediation_task_and_return_to_execute", rem_spy
+    )
+
+    await seeds_svc.create_comment(
+        session, admin, seed.id, body="@agent please fix the null check"
+    )
+    rem_spy.assert_awaited_once()
+    assert rem_spy.await_args.kwargs["from_stage"] == SeedStage.REVIEW
+    assert rem_spy.await_args.kwargs["operator_comment"] == "@agent please fix the null check"
 
 
 @pytest.mark.asyncio

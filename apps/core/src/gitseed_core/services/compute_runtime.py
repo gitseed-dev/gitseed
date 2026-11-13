@@ -11,6 +11,7 @@ import os
 import re
 import ssl
 import tempfile
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -298,6 +299,19 @@ async def _ensure_k8s_namespace_network_policy(
             f"{collection_url}/gitseed-default-egress",
             json=policy_payload,
         )
+        if put_resp.status_code == 422:
+            get_np = await client.get(f"{collection_url}/gitseed-default-egress")
+            if get_np.status_code == 200:
+                try:
+                    rv = (get_np.json().get("metadata") or {}).get("resourceVersion")
+                except Exception:
+                    rv = None
+                if rv:
+                    policy_payload["metadata"]["resourceVersion"] = str(rv)
+                    put_resp = await client.put(
+                        f"{collection_url}/gitseed-default-egress",
+                        json=policy_payload,
+                    )
         if put_resp.status_code not in (200, 201, 202):
             raise RuntimeError(
                 f"Kubernetes NetworkPolicy update in {target_ns} failed with HTTP {put_resp.status_code}"
@@ -329,10 +343,11 @@ async def _ensure_k8s_namespace(
         return fallback_ns
     try:
         get_resp = await client.get(f"{base_url}/api/v1/namespaces/{quote(target_ns, safe='')}")
-        if get_resp.status_code == 200:
-            await _ensure_k8s_namespace_network_policy(
-                client, base_url, target_ns, control_plane_ns
-            )
+        if get_resp.status_code in (200, 403):
+            if enforce_shared_network_policy:
+                await _ensure_k8s_namespace_network_policy(
+                    client, base_url, target_ns, control_plane_ns
+                )
             return target_ns
         if get_resp.status_code == 404:
             labels: dict[str, str] = {
@@ -842,6 +857,9 @@ async def spawn_k8s_pod(
     }
 
     client, base_url, default_ns = _k8s_client_for_backend(backend)
+    fallback_ns = resolve_k8s_target_namespace(
+        backend, default_ns, workload=workload, project_slug=None
+    )
     desired_ns = resolve_k8s_target_namespace(
         backend, default_ns, workload=workload, project_slug=project_slug
     )
@@ -850,7 +868,7 @@ async def spawn_k8s_pod(
             client,
             base_url,
             desired_ns,
-            default_ns,
+            fallback_ns,
             project_slug=project_slug,
             workload=workload,
             enforce_shared_network_policy=bool(cfg.get("network_policy", True)),
@@ -1683,7 +1701,10 @@ async def stop_and_remove_docker_container(
 
 
 async def remove_docker_seed_workspace_volume(
-    backend: Backend, seed_id: str | None
+    backend: Backend,
+    seed_id: str | None,
+    *,
+    project_slug: str | None = None,
 ) -> None:
     """Remove the warm per-seed workspace (`gitseed-ws-<seed_id>` or K8s PVC `ws-<seed_id>`) once merged/closed."""
     if not seed_id:
@@ -1696,33 +1717,44 @@ async def remove_docker_seed_workspace_volume(
         try:
             client, base_url, default_ns = _k8s_client_for_backend(backend)
             target_ns = resolve_k8s_target_namespace(
-                backend, default_ns, workload="runner"
+                backend, default_ns, workload="runner", project_slug=project_slug
             )
             job_name = _safe_k8s_job_name(f"ws-cleanup-{seed_id.lower()}")
             cleanup_image = str(
                 cfg.get("runner_image") or settings.RUNNER_IMAGE or "alpine:3.21"
             ).strip()
+            cleanup_labels = {
+                "app.kubernetes.io/managed-by": "gitseed",
+                "app.gitseed.managed": "true",
+                "app.gitseed.workload": "runner",
+                "app.gitseed.seed_id": seed_id,
+                "app.gitseed.role": "ws-cleanup",
+            }
             job_manifest: dict[str, Any] = {
                 "apiVersion": "batch/v1",
                 "kind": "Job",
                 "metadata": {
                     "name": job_name,
                     "namespace": target_ns,
-                    "labels": {
-                        "app.kubernetes.io/managed-by": "gitseed",
-                        "app.gitseed.managed": "true",
-                        "app.gitseed.seed_id": seed_id,
-                        "app.gitseed.role": "ws-cleanup",
-                    },
+                    "labels": cleanup_labels,
                 },
                 "spec": {
                     "ttlSecondsAfterFinished": 60,
                     "activeDeadlineSeconds": 60,
                     "backoffLimit": 0,
                     "template": {
+                        "metadata": {
+                            "labels": dict(cleanup_labels),
+                        },
                         "spec": {
                             "restartPolicy": "Never",
                             "automountServiceAccountToken": False,
+                            "securityContext": {
+                                "runAsNonRoot": True,
+                                "runAsUser": 1000,
+                                "runAsGroup": 1000,
+                                "seccompProfile": {"type": "RuntimeDefault"},
+                            },
                             "containers": [
                                 {
                                     "name": "cleanup",
@@ -1735,6 +1767,10 @@ async def remove_docker_seed_workspace_volume(
                                     ],
                                     "securityContext": {
                                         "allowPrivilegeEscalation": False,
+                                        "runAsNonRoot": True,
+                                        "runAsUser": 1000,
+                                        "runAsGroup": 1000,
+                                        "seccompProfile": {"type": "RuntimeDefault"},
                                         "capabilities": {"drop": ["ALL"]},
                                     },
                                     "volumeMounts": [
@@ -1756,6 +1792,10 @@ async def remove_docker_seed_workspace_volume(
                 },
             }
             async with client:
+                with suppress(Exception):
+                    await client.delete(
+                        f"{base_url}/apis/batch/v1/namespaces/{quote(target_ns, safe='')}/jobs/{quote(job_name, safe='')}?propagationPolicy=Background"
+                    )
                 await client.post(
                     f"{base_url}/apis/batch/v1/namespaces/{quote(target_ns, safe='')}/jobs",
                     json=job_manifest,

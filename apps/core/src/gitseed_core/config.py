@@ -1,6 +1,6 @@
 import logging
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,12 +15,14 @@ _KNOWN_INSECURE_SECRET_KEYS = frozenset(
 _DEFAULT_LITELLM_MASTER_KEY = "sk-gitseed-litellm-master-key"
 _DEFAULT_LITELLM_SALT_KEY = "sk-gitseed-litellm-salt-key"
 _DEFAULT_POSTGRES_PASSWORD = "gitseed_password"
+_DEFAULT_VALKEY_PASSWORD = "gitseed_valkey_password"
 # Values that shipped as defaults in compose/.env.example/Helm or are trivially guessable.
 _KNOWN_WEAK_VALUES = frozenset(
     {
         _DEFAULT_LITELLM_MASTER_KEY,
         _DEFAULT_LITELLM_SALT_KEY,
         _DEFAULT_POSTGRES_PASSWORD,
+        _DEFAULT_VALKEY_PASSWORD,
         "postgres",
         "password",
         "changeme",
@@ -72,6 +74,7 @@ def insecure_secret_problems(cfg: Any) -> list[str]:
         # The salt key is only consumed by LiteLLM itself; validate it when present.
         "LITELLM_SALT_KEY": (str(cfg.LITELLM_SALT_KEY or "").strip(), False),
         "POSTGRES_PASSWORD": (str(cfg.POSTGRES_PASSWORD or "").strip(), True),
+        "VALKEY_PASSWORD": (str(getattr(cfg, "VALKEY_PASSWORD", "") or "").strip(), False),
     }
     for name, (value, required) in service_secrets.items():
         if not value:
@@ -82,6 +85,23 @@ def insecure_secret_problems(cfg: Any) -> list[str]:
             problems.append(
                 f"{name} uses a known default or is shorter than {_MIN_SERVICE_SECRET_LENGTH} characters"
             )
+    redis_url = str(getattr(cfg, "REDIS_URL", "") or "").strip()
+    redis_pass = ""
+    if redis_url:
+        try:
+            redis_pass = unquote(urlsplit(redis_url).password or "").strip()
+        except Exception:
+            redis_pass = ""
+    if _DEFAULT_VALKEY_PASSWORD in redis_url.lower() or (
+        redis_pass
+        and (
+            redis_pass.lower() in _KNOWN_WEAK_VALUES
+            or len(redis_pass) < _MIN_SERVICE_SECRET_LENGTH
+        )
+    ):
+        problems.append(
+            f"REDIS_URL uses a known default or password shorter than {_MIN_SERVICE_SECRET_LENGTH} characters"
+        )
     return problems
 
 
@@ -233,6 +253,7 @@ class Settings(BaseSettings):
 
     # Valkey (Redis-compatible)
     VALKEY_PORT: int = 6379
+    VALKEY_PASSWORD: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Optional Mobile Push Relay (APNs / FCM bridge for GitSeed Mobile & Wearable clients)

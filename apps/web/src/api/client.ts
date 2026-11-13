@@ -572,6 +572,8 @@ export const api = {
         agent_id?: string | null
         runtime?: AgentRuntime | null
         model?: string | null
+        inference_backend_id?: string | null
+        models_backend_id?: string | null
         provider_backend_id?: string | null
         title?: string | null
         initial_prompt?: string | null

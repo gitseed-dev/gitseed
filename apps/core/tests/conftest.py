@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -289,6 +290,16 @@ def _make_sandbox(
         started_at=now,
         expires_at=now + timedelta(minutes=30),
     )
+
+
+def pytest_asyncio_loop_factories(
+    config: pytest.Config, item: pytest.Item
+) -> dict[str, Callable[[], asyncio.AbstractEventLoop]]:
+    """Use SelectorEventLoop on Windows for real psycopg async PostgreSQL integration tests."""
+    del config
+    if sys.platform == "win32" and "test_postgres_scheduler_integration" in item.nodeid:
+        return {"selector": asyncio.SelectorEventLoop}
+    return {"default": asyncio.new_event_loop}
 
 
 @pytest.fixture(autouse=True)

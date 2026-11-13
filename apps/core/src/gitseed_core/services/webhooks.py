@@ -61,6 +61,7 @@ from gitseed_core.services.net_safety import (
 from gitseed_core.services.policies import first_enabled_stage
 from gitseed_core.services.projects import require_project_maintainer
 from gitseed_core.services.seeds import (
+    _extract_latest_review_feedback,
     _mentions_stage_agent,
     create_remediation_task_and_return_to_execute,
     resolve_should_stage_seed,
@@ -1064,13 +1065,16 @@ async def _sync_webhook_comment_to_seed(
             action_taken = "live_steering_queued"
         elif seed.status in (SeedStatus.AWAITING_APPROVAL, SeedStatus.FAILED):
             if seed.stage in (SeedStage.REVIEW, SeedStage.MERGE):
+                review_summary, review_findings = (
+                    await _extract_latest_review_feedback(session, seed.id)
+                )
                 await create_remediation_task_and_return_to_execute(
                     session,
                     seed,
                     from_stage=seed.stage,
                     operator_comment=formatted_body,
-                    review_summary=None,
-                    review_findings=[],
+                    review_summary=review_summary,
+                    review_findings=review_findings,
                     actor_type=ActorType.SYSTEM,
                     actor_id=actor_id,
                     now=now,
@@ -1079,6 +1083,7 @@ async def _sync_webhook_comment_to_seed(
             else:
                 seed.status = SeedStatus.QUEUED
                 seed.blocked_reason = None
+                seed.stage_entered_at = now
                 seed.updated_at = now
                 action_taken = "stage_requeued"
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -79,7 +80,7 @@ def test_c1_build_safe_git_env_strips_run_token_and_secrets(
 
 
 @pytest.mark.skipif(
-    subprocess.run(["uname"], capture_output=True, text=True).stdout.strip() == "Windows",
+    sys.platform == "win32",
     reason="POSIX quotes in filenames",
 )
 def test_h1_quoted_pathname_blocked_paths_and_size_cap_enforced(tmp_path: Path) -> None:

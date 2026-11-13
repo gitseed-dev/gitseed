@@ -2343,10 +2343,14 @@ async def create_comment(
                     or actor_role == ProjectRole.MAINTAINER
                 )
                 if can_request_changes:
+                    original_stage = seed.stage
+                    approval_snapshot = await build_stage_approval_snapshot(
+                        session, seed, original_stage
+                    )
                     approval = Approval(
                         seed_id=seed.id,
-                        stage=seed.stage,
-                        snapshot=_build_stage_snapshot(seed),
+                        stage=original_stage,
+                        snapshot=approval_snapshot,
                         decision=ApprovalDecision.CHANGES_REQUESTED,
                         comment=cleaned_body,
                         automatic=False,
@@ -2356,9 +2360,6 @@ async def create_comment(
                     )
                     session.add(approval)
                     await session.flush()
-                    seed.status = SeedStatus.QUEUED
-                    seed.blocked_reason = None
-                    seed.updated_at = now
                     record(
                         session,
                         type=ActivityType.APPROVAL_CHANGES_REQUESTED,
@@ -2367,14 +2368,35 @@ async def create_comment(
                         project_id=seed.project_id,
                         seed_id=seed.id,
                         data={
-                            "stage": str(seed.stage),
+                            "stage": str(original_stage),
                             "approval_id": approval.id,
                             "via": "comment_mention",
                         },
                     )
+                    if original_stage in (SeedStage.REVIEW, SeedStage.MERGE):
+                        review_summary, review_findings = (
+                            await _extract_latest_review_feedback(session, seed.id)
+                        )
+                        await create_remediation_task_and_return_to_execute(
+                            session,
+                            seed,
+                            from_stage=original_stage,
+                            operator_comment=cleaned_body,
+                            review_summary=review_summary,
+                            review_findings=review_findings,
+                            actor_type=ActorType.USER,
+                            actor_id=actor.id,
+                            now=now,
+                        )
+                    else:
+                        seed.status = SeedStatus.QUEUED
+                        seed.blocked_reason = None
+                        seed.stage_entered_at = now
+                        seed.updated_at = now
             elif seed.status == SeedStatus.FAILED:
                 seed.status = SeedStatus.QUEUED
                 seed.blocked_reason = None
+                seed.stage_entered_at = now
                 seed.updated_at = now
 
     await session.commit()

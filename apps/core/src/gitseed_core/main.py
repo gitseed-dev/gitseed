@@ -163,6 +163,8 @@ async def _run_egress_proxy_main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if len(sys.argv) > 1 and sys.argv[1] == "egress-proxy":
         asyncio.run(_run_egress_proxy_main())
     else:

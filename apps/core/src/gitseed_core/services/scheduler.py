@@ -451,7 +451,11 @@ async def _cleanup_finished_run_containers(session: AsyncSession) -> None:
             _attach_run_log_tail(run, logs)
             await _stop_run_containers(backend, run.container_id, run.id)
             if seed is not None and seed.status in (SeedStatus.MERGED, SeedStatus.CLOSED):
-                await remove_docker_seed_workspace_volume(backend, seed.id)
+                await remove_docker_seed_workspace_volume(
+                    backend,
+                    seed.id,
+                    project_slug=project.slug if project is not None else None,
+                )
         run.container_id = None
         run.updated_at = datetime.now(UTC)
 

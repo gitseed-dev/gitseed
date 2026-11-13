@@ -820,7 +820,10 @@ async def run_finalize_mode(
 
     status = str(agent_result.get("status") or "failed")
     raw_exit_code = agent_result.get("exit_code")
-    exit_code = int(raw_exit_code) if isinstance(raw_exit_code, (int, str)) else 1
+    exit_code = 1
+    if isinstance(raw_exit_code, (int, str)) and not isinstance(raw_exit_code, bool):
+        with suppress(TypeError, ValueError):
+            exit_code = int(raw_exit_code)
     error_msg: str | None = (
         str(agent_result["error"]) if agent_result.get("error") else None
     )

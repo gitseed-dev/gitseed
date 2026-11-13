@@ -291,6 +291,7 @@ async def _tool_update_org_policy(
         min_approver_role=_optional_str(args, "min_approver_role"),
         allow_auto_approve=_optional_bool(args, "allow_auto_approve"),
         allow_self_approval=_optional_bool(args, "allow_self_approval"),
+        allow_second_opinions=_optional_bool(args, "allow_second_opinions"),
         max_attempts=_optional_int(args, "max_attempts"),
         timeout_minutes=_optional_int(args, "timeout_minutes"),
         min_acceptance_criteria=_optional_int(args, "min_acceptance_criteria"),
@@ -314,6 +315,7 @@ async def _tool_update_project_policy(
         min_approver_role=_optional_str(args, "min_approver_role"),
         allow_auto_approve=_optional_bool(args, "allow_auto_approve"),
         allow_self_approval=_optional_bool(args, "allow_self_approval"),
+        allow_second_opinions=_optional_bool(args, "allow_second_opinions"),
         max_attempts=_optional_int(args, "max_attempts"),
         timeout_minutes=_optional_int(args, "timeout_minutes"),
         min_acceptance_criteria=_optional_int(args, "min_acceptance_criteria"),
@@ -409,6 +411,7 @@ async def _tool_create_seed(
         staged=_optional_bool(args, "staged"),
         autonomy=_optional_str(args, "autonomy") or SeedAutonomy.SUPERVISED.value,
         budget_cap=_optional_float(args, "budget_cap"),
+        ideate_agent_ids=_optional_str_list(args, "ideate_agent_ids"),
     )
 
 

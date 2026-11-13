@@ -253,6 +253,7 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
                 },
                 "allow_auto_approve": {"type": "boolean"},
                 "allow_self_approval": {"type": "boolean"},
+                "allow_second_opinions": {"type": "boolean"},
                 "max_attempts": {"type": "integer"},
                 "timeout_minutes": {"type": "integer"},
                 "min_acceptance_criteria": {"type": "integer"},
@@ -302,6 +303,7 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
                 },
                 "allow_auto_approve": {"type": "boolean"},
                 "allow_self_approval": {"type": "boolean"},
+                "allow_second_opinions": {"type": "boolean"},
                 "max_attempts": {"type": "integer"},
                 "timeout_minutes": {"type": "integer"},
                 "min_acceptance_criteria": {"type": "integer"},
@@ -619,6 +621,13 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
                 "budget_cap": {
                     "type": "number",
                     "description": "Optional per-seed spend limit in USD.",
+                },
+                "ideate_agent_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional list of 2-3 stage Agent IDs for parallel multi-opinion ideation."
+                    ),
                 },
             },
             "required": ["project_id", "title"],

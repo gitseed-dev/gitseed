@@ -80,7 +80,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /app/data && chown -R gitseed:gitseed /app/data
 
 WORKDIR /app
-COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
+COPY --from=caddy /usr/bin/caddy /tmp/caddy
+RUN cp --no-preserve=xattr /tmp/caddy /usr/bin/caddy \
+    && chmod 0755 /usr/bin/caddy \
+    && rm -f /tmp/caddy
 COPY --from=py-build /app/.venv /app/.venv
 COPY --from=web-build /src/apps/web/dist /app/web
 COPY apps/web/Caddyfile /app/Caddyfile
