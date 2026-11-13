@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import typer
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -17,7 +16,7 @@ from gitseed_cli.config import (
     save_config,
     store_token,
 )
-from gitseed_cli.formatting import console, dump_json
+from gitseed_cli.formatting import console, dump_json, escape
 
 config_app = typer.Typer(
     name="config",

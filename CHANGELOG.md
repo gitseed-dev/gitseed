@@ -26,9 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Automated PR/MR creation, CI check/pipeline inspection, review comment sync, and API merge across **GitHub** (including 1-Click GitHub App Manifest flow), **GitLab**, and **Bitbucket**.
   - Inbound GitHub/GitLab webhooks for issue-to-Seed triggers, PR `@agent` comment steering, and self-healing CI failure remediation.
   - Zero-remote **Local Folder** Git Smart HTTP bare repository hosting with refname validation and sanitized `post-receive` working-tree auto-stash and fast-forward sync.
-- **Developer CLI, Interactive TUI & 64-Tool MCP Server (`gitseed-cli`, `gitseed-mcp`)**:
+- **Developer CLI, Interactive TUI & 65-Tool MCP Server (`gitseed-cli`, `gitseed-mcp`)**:
   - `gitseed` CLI and split-pane terminal UI (`gitseed tui`) for seed management, offline Ed25519 receipt verification (`gitseed receipt verify`), log streaming, approvals, and `@coordinator` queries.
-  - `gitseed-mcp` server exposing 64 annotated tools (`readOnlyHint`, `destructiveHint`), 5 resources, 2 resource templates, and 4 prompts over `stdio`, Streamable HTTP (`POST /mcp`), and SSE.
+  - `gitseed-mcp` server exposing 65 annotated tools (`readOnlyHint`, `destructiveHint`, `openWorldHint`), 5 resources, 2 resource templates, and 4 prompts over `stdio`, Streamable HTTP (`POST /mcp`), and SSE.
 - **Security, Cryptography & Kubernetes Production Hardening**:
   - Fail-closed startup secret validation (`make init`), `HKDF-SHA256` Fernet key derivation with `MultiFernet` zero-downtime key rotation (`GITSEED_SECRET_PREVIOUS_KEYS`), and Ed25519 receipt signing key rotation support.
   - Restricted `docker-socket-proxy` isolation, SSRF-hardened `egress-proxy` (blocking RFC 1918 private networks, loopback, and `169.254.169.254/32` cloud metadata after DNS resolution), Kubernetes `NetworkPolicy` egress isolation, `automountServiceAccountToken: false`, `PidsLimit: 512`, `CapDrop: ALL`, and `no-new-privileges`.

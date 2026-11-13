@@ -30,6 +30,7 @@ from gitseed_common.enums import (
     ActorType,
     BackendHealth,
     BackendType,
+    OrgRole,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
@@ -40,7 +41,7 @@ from gitseed_core.models.project import Project, ProjectBackend, ProjectReposito
 from gitseed_core.models.user import User
 from gitseed_core.services import projects as projects_service
 from gitseed_core.services.activity import record
-from gitseed_core.services.errors import Invalid, NotFound
+from gitseed_core.services.errors import Forbidden, Invalid, NotFound
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -117,7 +118,7 @@ def _allowed_workspace_roots() -> list[Path]:
         if cleaned:
             roots.append(Path(cleaned).expanduser().resolve())
     if not roots:
-        roots.append(Path.home().resolve())
+        roots.append((Path.home() / "GitSeed" / "workspaces").resolve())
     return roots
 
 
@@ -849,7 +850,10 @@ def ensure_local_bare_repo(
 
 
 async def ensure_local_git_backend(
-    session: AsyncSession, actor: User | None = None
+    session: AsyncSession,
+    actor: User | None = None,
+    *,
+    respect_disabled: bool = False,
 ) -> Backend:
     """Find or create the built-in `Local Git` backend."""
     stmt = (
@@ -863,6 +867,8 @@ async def ensure_local_git_backend(
     existing = (await session.execute(stmt)).scalars().first()
     current_root = str(local_repos_root())
     if existing is not None:
+        if respect_disabled and not existing.enabled:
+            return existing
         needs_update = (
             not existing.enabled
             or existing.health != BackendHealth.HEALTHY
@@ -923,33 +929,13 @@ async def maybe_auto_attach_existing_local_workspace(
         if has_seed is None:
             return None
 
-    backend = await ensure_local_git_backend(session, actor=None)
+    backend = await ensure_local_git_backend(session, actor=None, respect_disabled=True)
+    if not backend.enabled:
+        return None
     if getattr(project, "backends_restricted", False):
-        # Clear accidental backends_restricted when no Compute/Inference backends are explicitly bound
-        non_git_allow = (
-            await session.execute(
-                select(ProjectBackend.backend_id)
-                .join(Backend, col(Backend.id) == col(ProjectBackend.backend_id))
-                .where(
-                    ProjectBackend.project_id == project.id,
-                    col(Backend.type).in_([BackendType.COMPUTE, BackendType.INFERENCE]),
-                )
-                .limit(1)
-            )
-        ).first()
-        if non_git_allow is None:
-            project.backends_restricted = False
         existing_allow = await session.get(ProjectBackend, (project.id, backend.id))
         if existing_allow is None:
-            session.add(
-                ProjectBackend(
-                    project_id=project.id,
-                    backend_id=backend.id,
-                    created_by=project.created_by,
-                    created_at=datetime.now(UTC),
-                )
-            )
-            await session.flush()
+            return None
 
     ws_arg = str(candidate_ws) if candidate_ws.exists() else None
     _, resolved_ws = ensure_local_bare_repo(
@@ -971,13 +957,23 @@ async def maybe_auto_attach_existing_local_workspace(
     if existing_repo is not None:
         return existing_repo
 
+    existing_primary = (
+        await session.execute(
+            select(ProjectRepository).where(
+                ProjectRepository.project_id == project.id,
+                col(ProjectRepository.is_primary).is_(True),
+            )
+        )
+    ).scalars().first()
+    make_primary = existing_primary is None
+
     now = datetime.now(UTC)
     repo = ProjectRepository(
         project_id=project.id,
         backend_id=backend.id,
         full_name=full_name,
         default_branch="main",
-        is_primary=True,
+        is_primary=make_primary,
         created_by=project.created_by,
         created_at=now,
         updated_at=now,
@@ -994,7 +990,7 @@ async def maybe_auto_attach_existing_local_workspace(
             "repository_id": repo.id,
             "backend_id": backend.id,
             "full_name": repo.full_name,
-            "is_primary": True,
+            "is_primary": make_primary,
             "local": True,
             "workspace_path": resolved_ws,
         },
@@ -1021,21 +1017,12 @@ async def init_project_local_repository(
 
     # Ensure the backend is allowed on this project when backends_restricted is enabled
     if project.backends_restricted:
-        non_git_allow = (
-            await session.execute(
-                select(ProjectBackend.backend_id)
-                .join(Backend, col(Backend.id) == col(ProjectBackend.backend_id))
-                .where(
-                    ProjectBackend.project_id == project.id,
-                    col(Backend.type).in_([BackendType.COMPUTE, BackendType.INFERENCE]),
-                )
-                .limit(1)
-            )
-        ).first()
-        if non_git_allow is None:
-            project.backends_restricted = False
         existing_allow = await session.get(ProjectBackend, (project.id, backend.id))
         if existing_allow is None:
+            if actor.org_role != OrgRole.ADMIN:
+                raise Forbidden(
+                    "Local Git backend is not in the project's allowed backends list"
+                )
             session.add(
                 ProjectBackend(
                     project_id=project.id,
@@ -1046,9 +1033,19 @@ async def init_project_local_repository(
             )
             await session.flush()
 
-    default_ws = workspace_path
-    if not default_ws:
-        default_ws = str(default_project_workspace_path(project.slug))
+    canonical_default_ws = default_project_workspace_path(project.slug)
+    if workspace_path and workspace_path.strip():
+        validated_custom = validate_workspace_path(workspace_path)
+        if (
+            validated_custom != canonical_default_ws.resolve()
+            and actor.org_role != OrgRole.ADMIN
+        ):
+            raise Forbidden(
+                "Only organization administrators can attach custom local workspace paths"
+            )
+        default_ws = str(validated_custom)
+    else:
+        default_ws = str(canonical_default_ws)
 
     bare_path, resolved_ws = ensure_local_bare_repo(
         project.slug,

@@ -4,6 +4,10 @@
 
 {$SITE_ADDRESS::8421} {
 	encode zstd gzip
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
 
 	@vscode path /api/v1/vscode /api/v1/vscode/*
 	respond @vscode "Use dedicated SANDBOX_ORIGIN port" 403

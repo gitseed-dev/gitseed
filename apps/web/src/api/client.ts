@@ -111,13 +111,18 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     serializedBody = JSON.stringify(body)
   }
 
+  const effectiveSignal =
+    init.signal && typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([init.signal, controller.signal])
+      : (init.signal ?? controller.signal)
+
   try {
     const res = await fetch(path, {
       ...init,
       credentials: 'include',
       headers,
       body: serializedBody,
-      signal: init.signal ?? controller.signal,
+      signal: effectiveSignal,
     })
 
     if (res.status === 204) {

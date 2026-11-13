@@ -37,6 +37,8 @@ _BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = t
         "240.0.0.0/4",
         "::/128",
         "::1/128",
+        "64:ff9b::/96",  # RFC 6052 NAT64 well-known prefix
+        "64:ff9b:1::/48",  # RFC 8215 NAT64 local-use prefix
         "fc00::/7",  # unique local (incl. fd00:ec2::254 metadata)
         "fe80::/10",
         "ff00::/8",
@@ -48,11 +50,20 @@ class UnsafeDestinationError(ValueError):
     """Raised when a destination host/URL resolves to a non-public address."""
 
 
+_NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+
+
 def _normalize_ip(ip: IPAddress) -> IPAddress:
     if isinstance(ip, ipaddress.IPv6Address):
-        mapped = ip.ipv4_mapped or ip.sixtofour
+        mapped = ip.ipv4_mapped or ip.sixtofour or ip.teredo and ip.teredo[1]
         if mapped is not None:
             return mapped
+        if ip in _NAT64_WELL_KNOWN:
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        ip_int = int(ip)
+        if ip_int > 1 and (ip_int >> 32) == 0:
+            # Deprecated IPv4-compatible IPv6 address (::a.b.c.d)
+            return ipaddress.IPv4Address(ip_int & 0xFFFFFFFF)
     return ip
 
 

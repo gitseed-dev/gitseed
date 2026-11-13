@@ -14,12 +14,12 @@ from rich import box
 from rich.console import ConsoleRenderable, Group
 from rich.layout import Layout
 from rich.markdown import Markdown
-from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+from gitseed_cli.formatting import escape, sanitize_terminal
 from gitseed_cli.tui.state import AUTONOMY_CHOICES, TUIState, compute_list_viewport
 
 STAGE_ORDER: tuple[str, ...] = (
@@ -529,7 +529,7 @@ def _render_inspector_tab_content(state: TUIState, seed: SeedResponse) -> Consol
         return t_table
 
     if tab == "logs":
-        log_text = state.active_run_log or "No run log output available."
+        log_text = sanitize_terminal(state.active_run_log or "No run log output available.")
         lines = log_text.splitlines()
         total = len(lines)
         start = min(state.scroll_offset, max(0, total - 1)) if total > 0 else 0

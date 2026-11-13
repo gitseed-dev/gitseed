@@ -1442,12 +1442,16 @@ async def merge_provider_pull_request(
                             headers=headers,
                         )
                     elif str(pr.get("state") or "").lower() == "open" and pr_number:
+                        merge_body: dict[str, Any] = {
+                            "commit_title": f"Merge PR #{pr_number} ({merge_label}) into {default_branch}",
+                        }
+                        head_obj = pr.get("head")
+                        if isinstance(head_obj, dict) and isinstance(head_obj.get("sha"), str) and head_obj["sha"].strip():
+                            merge_body["sha"] = head_obj["sha"].strip()
                         pr_merge_resp = await client.put(
                             f"{api_base}/repos/{repo.full_name}/pulls/{pr_number}/merge",
                             headers=headers,
-                            json={
-                                "commit_title": f"Merge PR #{pr_number} ({merge_label}) into {default_branch}",
-                            },
+                            json=merge_body,
                         )
                         if pr_merge_resp.status_code in (200, 201) and isinstance(
                             pr_merge_resp.json(), dict
@@ -1460,7 +1464,7 @@ async def merge_provider_pull_request(
                                 f"{api_base}/repos/{repo.full_name}/git/refs/heads/{encoded_branch}",
                                 headers=headers,
                             )
-                        elif pr_merge_resp.status_code in (405, 409, 422):
+                        else:
                             err_msg = (
                                 pr_merge_resp.json().get("message")
                                 if isinstance(pr_merge_resp.json(), dict)

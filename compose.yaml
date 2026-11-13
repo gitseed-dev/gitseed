@@ -151,7 +151,10 @@ services:
       runner-image:
         condition: service_completed_successfully
     ports:
-      - "${API_PORT:-8420}:${API_PORT:-8420}"
+      # Published on loopback by default. Set BIND_HOST=0.0.0.0 (or a LAN IP)
+      # in .env to expose on the network; prefer a TLS reverse proxy instead.
+      # The web/Caddy container reaches the API over gitseed-network, not this port.
+      - "${BIND_HOST:-127.0.0.1}:${API_PORT:-8420}:${API_PORT:-8420}"
     volumes:
       - artifacts_data:/app/data
       - ${LOCAL_WORKSPACES_HOST_DIR:-./data/workspaces}:/workspaces
@@ -209,13 +212,18 @@ services:
       context: ./apps/runner
       dockerfile: Dockerfile
       args:
+        # The Dockerfile defaults to INCLUDE_PROPRIETARY_CLIS=false so images
+        # built for redistribution do not bundle proprietary CLIs. The local
+        # Compose quickstart opts in explicitly (image stays on this machine).
         INCLUDE_PROPRIETARY_CLIS: ${INCLUDE_PROPRIETARY_CLIS:-true}
         INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-${INCLUDE_PROPRIETARY_CLIS:-true}}
         INSTALL_ANTIGRAVITY: ${INSTALL_ANTIGRAVITY:-${INCLUDE_PROPRIETARY_CLIS:-true}}
         REQUIRE_ANTIGRAVITY_CLI: ${REQUIRE_ANTIGRAVITY_CLI:-false}
         INSTALL_GROK_CLI: ${INSTALL_GROK_CLI:-${INCLUDE_PROPRIETARY_CLIS:-true}}
         ANTIGRAVITY_INSTALL_URL: ${ANTIGRAVITY_INSTALL_URL:-https://antigravity.google/cli/install.sh}
+        ANTIGRAVITY_INSTALL_SHA256: ${ANTIGRAVITY_INSTALL_SHA256:-}
         GROK_CLI_INSTALL_URL: ${GROK_CLI_INSTALL_URL:-}
+        GROK_CLI_INSTALL_SHA256: ${GROK_CLI_INSTALL_SHA256:-}
     entrypoint: ["true"]
     restart: "no"
 
@@ -304,8 +312,10 @@ services:
       - SANDBOX_PORT=${SANDBOX_PORT:-8423}
       - API_UPSTREAM=api:${API_PORT:-8420}
     ports:
-      - "${WEB_PORT:-8421}:${WEB_PORT:-8421}"
-      - "${SANDBOX_PORT:-8423}:${SANDBOX_PORT:-8423}"
+      # Loopback by default; see BIND_HOST in .env.example to expose on a LAN
+      # or behind a reverse proxy running on another host.
+      - "${BIND_HOST:-127.0.0.1}:${WEB_PORT:-8421}:${WEB_PORT:-8421}"
+      - "${BIND_HOST:-127.0.0.1}:${SANDBOX_PORT:-8423}:${SANDBOX_PORT:-8423}"
     depends_on:
       api:
         condition: service_healthy

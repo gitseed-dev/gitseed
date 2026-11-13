@@ -141,22 +141,26 @@ jobs:
           fi
 
       - name: Lint & package Helm chart
+        env:
+          CHART_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           helm lint charts/gitseed
           helm template gitseed charts/gitseed >/dev/null
           mkdir -p dist-charts
           helm package charts/gitseed \
-            --version "${{ steps.meta.outputs.version }}" \
-            --app-version "${{ steps.meta.outputs.version }}" \
+            --version "${CHART_VERSION}" \
+            --app-version "${CHART_VERSION}" \
             --destination dist-charts
 
       - name: Push Helm chart to GHCR OCI registry
         if: ${{ steps.meta.outputs.push == 'true' }}
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+          CHART_VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          echo "${GHCR_TOKEN}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm push "dist-charts/gitseed-${{ steps.meta.outputs.version }}.tgz" oci://ghcr.io/gitseed-dev/charts
+          echo "${GHCR_TOKEN}" | helm registry login ghcr.io -u "${GHCR_ACTOR}" --password-stdin
+          helm push "dist-charts/gitseed-${CHART_VERSION}.tgz" oci://ghcr.io/gitseed-dev/charts
 
   python-build:
     name: Build Python Packages (common, cli, mcp)

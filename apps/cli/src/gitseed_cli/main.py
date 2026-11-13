@@ -5,7 +5,6 @@ from typing import Any
 
 import typer
 from gitseed_common import __version__
-from rich.markup import escape
 from typer.core import TyperGroup
 
 from gitseed_cli.client import CLIError
@@ -15,7 +14,7 @@ from gitseed_cli.commands.resources import register_resource_commands
 from gitseed_cli.commands.sandbox import sandbox_app, session_app
 from gitseed_cli.commands.workflow import register_workflow_commands
 from gitseed_cli.config import RuntimeOptions, get_opts, make_client
-from gitseed_cli.formatting import err_console
+from gitseed_cli.formatting import err_console, escape
 from gitseed_cli.tui import VIEWS, run_tui
 
 _GLOBAL_VALUE_FLAGS = {

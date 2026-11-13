@@ -1,6 +1,7 @@
 import ipaddress
 import json
 import os
+import re
 import secrets as py_secrets
 import shutil
 import time
@@ -1214,25 +1215,49 @@ async def _fetch_git_repositories(
 async def _require_git_backend_operator(
     session: AsyncSession,
     actor: User | None,
+    *,
+    backend_id: str | None = None,
 ) -> None:
-    """Ensure the caller is an org admin or a project maintainer on at least one active project."""
+    """Ensure the caller is an org admin or a project maintainer permitted to use `backend_id`."""
     if actor is None or actor.org_role == OrgRole.ADMIN:
         return
     stmt = (
-        select(ProjectMember.id)
-        .join(Project, col(Project.id) == col(ProjectMember.project_id))
+        select(Project)
+        .join(ProjectMember, col(Project.id) == col(ProjectMember.project_id))
         .where(
             ProjectMember.user_id == actor.id,
             ProjectMember.role == ProjectRole.MAINTAINER,
             col(Project.archived_at).is_(None),
         )
-        .limit(1)
     )
-    is_maintainer = (await session.execute(stmt)).scalar_one_or_none() is not None
-    if not is_maintainer:
+    exec_res = await session.execute(stmt)
+    scalars_obj = exec_res.scalars() if hasattr(exec_res, "scalars") else None
+    projects = (
+        list(scalars_obj.all())
+        if scalars_obj is not None and hasattr(scalars_obj, "all")
+        else []
+    )
+    first_row = exec_res.scalar_one_or_none() if not projects else projects[0]
+    if first_row is None and not projects:
         raise Forbidden(
             "Organization admin or project maintainer privileges required to manage Git backend repositories"
         )
+    if backend_id and projects and all(isinstance(p, Project) for p in projects):
+        from gitseed_core.models.project import ProjectBackend
+
+        allowed_somewhere = False
+        for proj in projects:
+            if not getattr(proj, "backends_restricted", False):
+                allowed_somewhere = True
+                break
+            grant = await session.get(ProjectBackend, (proj.id, backend_id))
+            if grant is not None:
+                allowed_somewhere = True
+                break
+        if not allowed_somewhere:
+            raise Forbidden(
+                "This Git backend is not allowed on any project you maintain"
+            )
 
 
 async def discover_backend_repositories(
@@ -1242,7 +1267,7 @@ async def discover_backend_repositories(
     actor: User | None = None,
 ) -> Backend:
     """Discover repositories from a Git backend and merge into backend.config['repositories']."""
-    await _require_git_backend_operator(session, actor)
+    await _require_git_backend_operator(session, actor, backend_id=backend_id)
     backend = await get_backend(session, backend_id)
     if backend.type != BackendType.GIT:
         raise Invalid("Repository discovery is only supported for Git backends")
@@ -1275,7 +1300,7 @@ async def create_remote_repository(
     auto_init: bool = True,
 ) -> tuple[Backend, dict[str, Any]]:
     """Create a new remote repository on a Git backend provider and merge it into backend.config['repositories']."""
-    await _require_git_backend_operator(session, actor)
+    await _require_git_backend_operator(session, actor, backend_id=backend_id)
     backend = await get_backend(session, backend_id)
     if backend.type != BackendType.GIT:
         raise Invalid("Remote repository creation is only supported for Git backends")
@@ -1931,12 +1956,16 @@ async def complete_github_app_manifest_callback(
     if target is None:
         raise NotFound("No pending GitHub App setup matched this state token")
 
+    clean_code = (code or "").strip()
+    if not clean_code or not re.fullmatch(r"[A-Za-z0-9._-]+", clean_code):
+        raise Invalid("Invalid GitHub App manifest conversion code")
+
     api_base = _github_api_base_from_endpoint(target.endpoint)
     web_base = _github_web_base_from_endpoint(target.endpoint)
 
-    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=False) as client:
         resp = await client.post(
-            f"{api_base}/app-manifests/{code.strip()}/conversions",
+            f"{api_base}/app-manifests/{clean_code}/conversions",
             headers={
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
@@ -2081,8 +2110,32 @@ async def complete_github_app_setup(
         for b in candidates:
             saved_state = str((b.config or {}).get("manifest_state") or "").strip()
             if saved_state and py_secrets.compare_digest(saved_state, clean_state):
-                target = b
-                break
+                secrets_map = decrypt_secrets(b.secrets_encrypted)
+                app_id = str((b.config or {}).get("app_id") or "").strip()
+                private_key = secrets_map.get("private_key", "").strip()
+                if app_id and private_key:
+                    try:
+                        jwt_token = create_github_app_jwt(app_id, private_key)
+                        api_base = _github_api_base_from_endpoint(b.endpoint)
+                        async with httpx.AsyncClient(
+                            timeout=6.0, follow_redirects=False
+                        ) as client:
+                            resp = await client.get(
+                                f"{api_base}/app/installations/{installation_id.strip()}",
+                                headers={
+                                    "Accept": "application/vnd.github+json",
+                                    "Authorization": f"Bearer {jwt_token}",
+                                    "X-GitHub-Api-Version": "2022-11-28",
+                                },
+                            )
+                            if 200 <= resp.status_code < 300:
+                                target = b
+                                break
+                    except Exception:
+                        continue
+                else:
+                    target = b
+                    break
 
     if target is None:
         # Match by verifying which GitHub App owns this installation_id via JWT

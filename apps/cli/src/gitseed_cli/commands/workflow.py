@@ -12,12 +12,11 @@ from gitseed_common.schemas import (
     CreateSeedCommentRequest,
 )
 from rich.markdown import Markdown
-from rich.markup import escape
 from rich.panel import Panel
 
 from gitseed_cli.client import CLIError, GitSeedClient
 from gitseed_cli.config import get_opts, make_client
-from gitseed_cli.formatting import console, dump_json
+from gitseed_cli.formatting import console, dump_json, escape, sanitize_terminal
 
 _MENTION_RE = re.compile(r"(?:^|(?<=\s))@([a-z][a-z0-9-]{1,31})\b", re.IGNORECASE)
 
@@ -486,7 +485,7 @@ def register_workflow_commands(app: typer.Typer) -> None:
             return
         console.print(
             Panel(
-                Markdown(resp.reply),
+                Markdown(sanitize_terminal(resp.reply)),
                 title=f"@{escape(str(resp.agent_handle))} ({escape(str(resp.model))})",
                 expand=False,
             )

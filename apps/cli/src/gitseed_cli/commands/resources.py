@@ -13,7 +13,6 @@ import click
 import typer
 from gitseed_common.enums import RUN_ACTIVE_STATUSES, SeedAutonomy, SeedStage
 from gitseed_common.schemas import CreateSeedRequest, RunResponse
-from rich.markup import escape
 from rich.panel import Panel
 
 from gitseed_cli.client import CLIError, GitSeedClient
@@ -23,6 +22,7 @@ from gitseed_cli.formatting import (
     describe_seed,
     dump_json,
     err_console,
+    escape,
     extract_log_tail_delta,
     print_agents_table,
     print_backends_table,
@@ -39,6 +39,7 @@ from gitseed_cli.formatting import (
     print_tokens_table,
     print_users_table,
     render_seed_diff,
+    sanitize_terminal,
 )
 from gitseed_cli.manifest import (
     ParsedManifest,
@@ -324,7 +325,7 @@ def register_resource_commands(app: typer.Typer) -> None:
             md_text = _export_resource_markdown(
                 client, res, resource_id, project_override=effective_project
             )
-            sys.stdout.write(md_text)
+            sys.stdout.write(sanitize_terminal(md_text))
             return
 
         if res == "project":
@@ -1041,7 +1042,7 @@ def register_resource_commands(app: typer.Typer) -> None:
             current_chunk = _fetch_run_log_output(client, run, tail=tail)
             new_part = extract_log_tail_delta(printed_text, current_chunk)
             if new_part:
-                console.print(new_part, end="", markup=False, highlight=False)
+                console.print(sanitize_terminal(new_part), end="", markup=False, highlight=False)
             if current_chunk:
                 printed_text = current_chunk
 

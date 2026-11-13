@@ -72,9 +72,19 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+def _resolve_cors_origins(raw_origins: str) -> list[str]:
+    """Parse `CORS_ORIGINS` while stripping wildcard `*` when `allow_credentials=True`."""
+    origins = [
+        o.strip()
+        for o in (raw_origins or "").split(",")
+        if o.strip() and o.strip() != "*"
+    ]
+    return origins or ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()],
+    allow_origins=_resolve_cors_origins(settings.CORS_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

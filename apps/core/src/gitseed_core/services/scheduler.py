@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections import defaultdict, deque
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -96,6 +97,7 @@ _RUNNING_STATUSES = (RunStatus.STARTING, RunStatus.RUNNING)
 _LAST_EXTERNAL_PR_CHECK_AT: datetime | None = None
 _EXTERNAL_PR_CHECK_INTERVAL = timedelta(seconds=45)
 _LAST_PR_READINESS_CACHE: dict[str, tuple[str | None, str | None, bool]] = {}
+_PR_LAST_CHECKED_AT: dict[str, float] = {}
 
 __all__ = [
     "_attach_run_log_tail",
@@ -383,7 +385,29 @@ async def _reconcile_seed_after_run_failure(
     is_second_opinion = isinstance(run.output, dict) and bool(
         run.output.get("second_opinion")
     )
-    if not is_second_opinion and run.attempt < pol.max_attempts:
+    recent_failures: int | None = None
+    try:
+        reset_ts = await _latest_stage_reset_timestamp(session, seed)
+        if reset_ts is None or isinstance(reset_ts, datetime):
+            fail_stmt = select(func.count()).select_from(Run).where(
+                Run.seed_id == seed.id,
+                Run.stage == run.stage,
+                col(Run.status).in_([RunStatus.FAILED, RunStatus.TIMED_OUT]),
+            )
+            if run.task_id is not None:
+                fail_stmt = fail_stmt.where(Run.task_id == run.task_id)
+            else:
+                fail_stmt = fail_stmt.where(col(Run.task_id).is_(None))
+            if reset_ts is not None:
+                fail_stmt = fail_stmt.where(col(Run.created_at) >= reset_ts)
+            raw_cnt = await session.scalar(fail_stmt)
+            if isinstance(raw_cnt, int) and not isinstance(raw_cnt, bool):
+                recent_failures = raw_cnt
+    except Exception:
+        recent_failures = None
+
+    effective_failures = recent_failures if recent_failures is not None else run.attempt
+    if not is_second_opinion and effective_failures < pol.max_attempts:
         seed.status = SeedStatus.QUEUED
         seed.blocked_reason = None
     else:
@@ -481,7 +505,7 @@ async def _project_has_connected_repository(
         from gitseed_core.services.local_git import maybe_auto_attach_existing_local_workspace
 
         attached = await maybe_auto_attach_existing_local_workspace(
-            session, project, create_if_missing=True
+            session, project, create_if_missing=False
         )
         if attached is not None:
             return True
@@ -1062,13 +1086,15 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                     ),
                 )
                 .order_by(col(Seed.updated_at).desc())
-                .limit(15)
+                .limit(50)
             )
         )
         .scalars()
         .all()
     )
-    for seed in review_or_merge_seeds:
+    review_or_merge_seeds.sort(key=lambda s: _PR_LAST_CHECKED_AT.get(s.id, 0.0))
+    for seed in review_or_merge_seeds[:15]:
+        _PR_LAST_CHECKED_AT[seed.id] = time.monotonic()
         project = await session.get(Project, seed.project_id)
         if project is None or project.archived_at is not None:
             continue
@@ -1079,6 +1105,7 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                     session, seed, project, pr_info=pr_info
                 )
                 _LAST_PR_READINESS_CACHE.pop(seed.id, None)
+                _PR_LAST_CHECKED_AT.pop(seed.id, None)
                 continue
 
             if (
@@ -1104,20 +1131,21 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                 seed.stage == SeedStage.MERGE
                 and seed.status == SeedStatus.AWAITING_APPROVAL
                 and pr_info.get("state") == "open"
-                and pr_info.get("ready_to_merge", True)
+                and pr_info.get("ready_to_merge", False)
             ):
                 auto_merged = await maybe_auto_merge_ready_pr(
                     session, seed, project, pr_info=pr_info
                 )
                 if auto_merged:
                     _LAST_PR_READINESS_CACHE.pop(seed.id, None)
+                    _PR_LAST_CHECKED_AT.pop(seed.id, None)
                     continue
 
             if pr_info.get("pull_request_url") or pr_info.get("state"):
                 state_tuple = (
                     str(pr_info.get("ci_status") or "none"),
                     str(pr_info.get("review_status") or "none"),
-                    bool(pr_info.get("ready_to_merge", True)),
+                    bool(pr_info.get("ready_to_merge", False)),
                 )
                 prev_tuple = _LAST_PR_READINESS_CACHE.get(seed.id)
                 if prev_tuple != state_tuple:

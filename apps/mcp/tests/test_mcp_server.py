@@ -1157,6 +1157,7 @@ async def test_mcp_tool_annotations_and_readme_sync() -> None:
 
     expected_destructive = {
         "update_org_policy",
+        "update_project_policy",
         "reset_project_policy",
         "delete_seed_task",
         "delete_seed_comment",

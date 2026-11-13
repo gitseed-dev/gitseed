@@ -89,6 +89,7 @@ class GitSeedApiClient:
 
         try:
             client = self._get_http_client()
+            client.cookies.clear()
             response = await client.request(
                 method=method.upper(),
                 url=url,
@@ -96,6 +97,7 @@ class GitSeedApiClient:
                 params=cleaned_params,
                 json=json_body,
             )
+            client.cookies.clear()
         except httpx.HTTPError as exc:
             raise GitSeedApiError(
                 f"Failed to reach GitSeed API at {self.base_url}: {exc}"

@@ -229,6 +229,10 @@ def _enforce_sandbox_origin(headers: Any) -> None:
         raise Forbidden("VS Code proxy request host does not match configured SANDBOX_ORIGIN")
 
 
+_VSCODE_PROXY_TOKEN_HKDF_INFO = b"gitseed-vscode-proxy-token-v1"
+_VSCODE_UPSTREAM_TOKEN_HKDF_INFO = b"gitseed-vscode-upstream-token-v1"
+
+
 def mint_vscode_token(
     session_key: str,
     container_id: str = "",
@@ -237,6 +241,8 @@ def mint_vscode_token(
     now: int | None = None,
 ) -> str:
     """Mint an expiring, HMAC-authenticated VS Code proxy token (`<exp_hex>.<hmac_hex>`)."""
+    from gitseed_core.security import derive_domain_hmac_key
+
     effective_ttl = (
         int(ttl_seconds)
         if ttl_seconds is not None and int(ttl_seconds) > 0
@@ -246,7 +252,7 @@ def mint_vscode_token(
     exp_ts = cur_ts + effective_ttl
     exp_hex = f"{exp_ts:x}"
     sig_hex = hmac.new(
-        settings.GITSEED_SECRET_KEY.encode("utf-8"),
+        derive_domain_hmac_key(_VSCODE_PROXY_TOKEN_HKDF_INFO),
         f"vscode:{session_key}:{container_id}:{exp_hex}".encode(),
         hashlib.sha256,
     ).hexdigest()[:48]
@@ -262,11 +268,14 @@ def verify_vscode_token(
     now: int | None = None,
 ) -> bool:
     """Verify an expiring `<exp_hex>.<hmac_hex>` VS Code proxy token in constant time."""
+    from gitseed_core.security import derive_domain_hmac_key
+
     cand = (candidate_token or "").strip()
     if not cand:
         return False
     if expected_token is not None and not secrets.compare_digest(expected_token, cand):
         return False
+    hmac_key = derive_domain_hmac_key(_VSCODE_PROXY_TOKEN_HKDF_INFO)
     if "." in cand:
         exp_hex, sig_hex = cand.split(".", 1)
         if not exp_hex or not sig_hex:
@@ -279,7 +288,7 @@ def verify_vscode_token(
         if cur_ts > exp_ts:
             return False
         expected_sig = hmac.new(
-            settings.GITSEED_SECRET_KEY.encode("utf-8"),
+            hmac_key,
             f"vscode:{session_key}:{container_id}:{exp_hex}".encode(),
             hashlib.sha256,
         ).hexdigest()[:48]
@@ -287,7 +296,7 @@ def verify_vscode_token(
     if expected_token is not None:
         return True
     legacy_mac = hmac.new(
-        settings.GITSEED_SECRET_KEY.encode("utf-8"),
+        hmac_key,
         f"vscode:{session_key}:{container_id}".encode(),
         hashlib.sha256,
     ).digest()
@@ -300,8 +309,10 @@ _derive_vscode_token = mint_vscode_token
 
 def derive_vscode_upstream_token(session_key: str, container_id: str) -> str:
     """Derive a per-container connection token gating `openvscode-server` on the bridge network."""
+    from gitseed_core.security import derive_domain_hmac_key
+
     return hmac.new(
-        settings.GITSEED_SECRET_KEY.encode("utf-8"),
+        derive_domain_hmac_key(_VSCODE_UPSTREAM_TOKEN_HKDF_INFO),
         f"vscode-upstream:{session_key}:{container_id}".encode(),
         hashlib.sha256,
     ).hexdigest()[:48]

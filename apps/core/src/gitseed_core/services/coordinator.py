@@ -849,6 +849,7 @@ async def chat_with_coordinator(
     llm_timeout = 180.0 if is_brainstorm else 90.0
     failure_reason: str | None = None
     timed_out = False
+    gateway_rejected = False
     no_proposals_note = (
         "\n\n_No seed proposals came back this time. Click **Propose seeds** again, "
         "or describe the idea in a bit more detail._"
@@ -890,6 +891,8 @@ async def chat_with_coordinator(
                         )
                     failure_reason = "the model returned an empty reply"
             else:
+                if resp.status_code in (400, 401, 402, 403, 429):
+                    gateway_rejected = True
                 failure_reason = f"model gateway returned HTTP {resp.status_code}"
                 logger.warning(
                     "Coordinator chat via LiteLLM failed (HTTP %s, model %s): %s",
@@ -906,10 +909,10 @@ async def chat_with_coordinator(
         logger.warning("Coordinator chat via LiteLLM failed: %s", exc)
 
     # Direct upstream fallback if the LiteLLM proxy is unreachable or errored. Not after a
-    # timeout: the same model would just be slow again and double the wait.
+    # timeout or explicit gateway rejection (400/401/402/403/429 budget/rate-limit).
     try:
-        if timed_out:
-            raise RuntimeError("skipped after timeout")
+        if timed_out or gateway_rejected:
+            raise RuntimeError("skipped after timeout or gateway rejection")
         secrets_map = decrypt_secrets(backend.secrets_encrypted)
         api_key = secrets_map.get("api_key", "").strip()
         provider = backend.provider.lower()

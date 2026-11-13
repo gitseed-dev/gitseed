@@ -185,8 +185,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return
     }
 
-    const es = new EventSource('/api/v1/events/stream', { withCredentials: true })
-
+    let es: EventSource | null = null
+    let reconnectTimer: number | null = null
+    let reconnectAttempt = 0
+    let disposed = false
     let flushTimer: number | null = null
     let invalidateActivity = false
     let invalidateSeeds = false
@@ -267,8 +269,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    const onConnected = () => setSseConnected(true)
-    const onError = () => setSseConnected(false)
+    const onConnected = () => {
+      reconnectAttempt = 0
+      setSseConnected(true)
+    }
 
     const onGitseedEvent = (ev: MessageEvent) => {
       try {
@@ -358,17 +362,45 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    es.addEventListener('connected', onConnected)
-    es.addEventListener('gitseed_event', onGitseedEvent as EventListener)
-    es.onerror = onError
+    const connectStream = () => {
+      if (disposed) return
+      if (es) {
+        es.removeEventListener('connected', onConnected)
+        es.removeEventListener('gitseed_event', onGitseedEvent as EventListener)
+        es.close()
+      }
+      const nextEs = new EventSource('/api/v1/events/stream', { withCredentials: true })
+      es = nextEs
+      nextEs.addEventListener('connected', onConnected)
+      nextEs.addEventListener('gitseed_event', onGitseedEvent as EventListener)
+      nextEs.onerror = () => {
+        setSseConnected(false)
+        if (!disposed && nextEs.readyState === EventSource.CLOSED && reconnectTimer === null) {
+          const delayMs = Math.min(30000, 2000 * 2 ** Math.min(reconnectAttempt, 4))
+          reconnectAttempt += 1
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null
+            connectStream()
+          }, delayMs)
+        }
+      }
+    }
+
+    connectStream()
 
     return () => {
+      disposed = true
       if (flushTimer !== null) {
         window.clearTimeout(flushTimer)
       }
-      es.removeEventListener('connected', onConnected)
-      es.removeEventListener('gitseed_event', onGitseedEvent as EventListener)
-      es.close()
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer)
+      }
+      if (es) {
+        es.removeEventListener('connected', onConnected)
+        es.removeEventListener('gitseed_event', onGitseedEvent as EventListener)
+        es.close()
+      }
       setSseConnected(false)
     }
   }, [isAuthenticated, queryClient])

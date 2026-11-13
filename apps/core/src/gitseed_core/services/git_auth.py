@@ -95,7 +95,16 @@ async def resolve_git_backend_token(
     *,
     write_access: bool = False,
 ) -> str:
-    """Resolve an access token for any Git backend, minting an installation token for `github-app`."""
+    """Resolve an access token for any Git backend.
+
+    - `github-app`: mints a short-lived installation token scoped to `repo_full_names`
+      with `contents:read` (when `write_access=False`) or `contents:write` (when `write_access=True`).
+    - `local`: mints a short-lived HMAC token scoped to `local-git:read` or `local-git:write`
+      and the explicit repository slugs.
+    - PAT backends (`github`, `gitlab`, `bitbucket`): prefers `secrets["read_token"]` when
+      `write_access=False` if a separate read-only token is configured; otherwise returns
+      `secrets["token"]`.
+    """
     if backend is None:
         return ""
     resolved_secrets = (
@@ -126,5 +135,7 @@ async def resolve_git_backend_token(
             write_access=write_access,
         )
         return (tok or "").strip()
+    if not write_access and resolved_secrets.get("read_token"):
+        return str(resolved_secrets["read_token"]).strip()
     return (resolved_secrets.get("token") or "").strip()
 

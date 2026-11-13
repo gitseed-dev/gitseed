@@ -328,7 +328,12 @@ async def issue_git_push_token(
             f"Git push credentials require a 'finalize' scoped run token (got '{token_scope}')"
         )
 
-    run = await session.get(Run, run_id)
+    try:
+        run = await session.get(
+            Run, run_id, with_for_update=True, populate_existing=True
+        )
+    except TypeError:
+        run = await session.get(Run, run_id)
     if run is None or run.status not in (RunStatus.STARTING, RunStatus.RUNNING):
         raise Unauthorized(
             f"Run '{run_id}' is not active (status={run.status if run else 'missing'})"
@@ -954,6 +959,10 @@ async def check_seed_pull_request_status(
                         _PR_STATUS_CACHE[cache_key] = (time.time() + ttl, dict(bb_res))
                     return bb_res
 
+    result["ready_to_merge"] = False
+    result["block_reason"] = (
+        "Could not verify Pull Request merge readiness on remote Git provider."
+    )
     return result
 
 
@@ -1215,7 +1224,12 @@ async def merge_seed_branch_into_default(
         for repo in repo_rows:
             backend = await session.get(Backend, repo.backend_id)
             if backend is None or not backend.enabled:
-                continue
+                logger.warning(
+                    "Cannot merge %s: backend %s is missing or disabled",
+                    repo.full_name,
+                    repo.backend_id,
+                )
+                return None
             secrets_map = decrypt_secrets(backend.secrets_encrypted)
             token = await resolve_git_backend_token(
                 backend,
@@ -1224,7 +1238,12 @@ async def merge_seed_branch_into_default(
                 write_access=True,
             )
             if not token:
-                continue
+                logger.warning(
+                    "Cannot merge %s: no write token available on backend %s",
+                    repo.full_name,
+                    backend.id,
+                )
+                return None
 
             provider = (backend.provider or "github").strip().lower()
             default_branch = (repo.default_branch or "main").strip()
@@ -1244,6 +1263,7 @@ async def merge_seed_branch_into_default(
             if merged_via_api:
                 continue
 
+            cli_sha: str | None = None
             try:
                 auth_url = _build_authenticated_git_url(backend, repo.full_name, token)
                 cli_sha = await asyncio.to_thread(
@@ -1261,6 +1281,8 @@ async def merge_seed_branch_into_default(
                     seed_branch,
                     _scrub_url_credentials(str(exc)),
                 )
+            if not cli_sha:
+                return None
 
     if primary_merge_sha:
         merge_run = (
@@ -1481,15 +1503,18 @@ async def maybe_auto_merge_ready_pr(
         return False
 
     info = dict(pr_info) if pr_info else await check_seed_pull_request_status(session, seed, project)
-    if info.get("state") != "open" or not info.get("ready_to_merge", True):
+    if info.get("state") != "open" or not info.get("ready_to_merge", False):
         return False
 
     pol = await get_effective_stage_policy(session, seed.project_id, SeedStage.MERGE)
     can_auto_complete = (
-        not pol.requires_approval
-        or (
-            seed.autonomy == SeedAutonomy.AUTONOMOUS
-            and pol.allow_auto_approve
+        seed.autonomy != SeedAutonomy.MANUAL
+        and (
+            not pol.requires_approval
+            or (
+                seed.autonomy == SeedAutonomy.AUTONOMOUS
+                and pol.allow_auto_approve
+            )
         )
     )
     if not can_auto_complete:
@@ -1502,11 +1527,19 @@ async def maybe_auto_merge_ready_pr(
         if seed.stage_entered_at is not None:
             app_stmt = app_stmt.where(col(Approval.created_at) >= seed.stage_entered_at)
         approvals = list((await session.execute(app_stmt)).scalars().all())
-        distinct_approvers = {a.decided_by for a in approvals if a.decided_by}
+        distinct_approvers = {
+            a.decided_by
+            for a in approvals
+            if a.decided_by and not getattr(a, "automatic", False)
+        }
         if len(distinct_approvers) >= max(1, pol.min_approvers):
             can_auto_complete = True
 
     if not can_auto_complete:
+        return False
+
+    merge_sha = await merge_seed_branch_into_default(session, seed)
+    if not merge_sha:
         return False
 
     now = datetime.now(UTC)
@@ -1533,7 +1566,6 @@ async def maybe_auto_merge_ready_pr(
         session.add(auto_approval)
         await session.flush()
 
-    merge_sha = await merge_seed_branch_into_default(session, seed)
     seed.stage = SeedStage.MERGE
     seed.status = SeedStatus.MERGED
     seed.blocked_reason = None

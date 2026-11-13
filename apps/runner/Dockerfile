@@ -8,15 +8,23 @@
 # isolated non-root container connected only to the gitseed-runners network.
 #
 # Third-party agent CLIs:
-#   - Pre-installed out of the box: opencode, Codex (@openai/codex), Gemini CLI
-#     (@google/gemini-cli), Claude Code (@anthropic-ai/claude-code), and Google
-#     Antigravity (agy) — proprietary vendor CLIs are enabled by default via
-#     INCLUDE_PROPRIETARY_CLIS=true and disabled cleanly with
-#     --build-arg INCLUDE_PROPRIETARY_CLIS=false when publishing redistributed images.
+#   - Always installed (open-source licenses): opencode, Codex (@openai/codex),
+#     Gemini CLI (@google/gemini-cli).
+#   - Proprietary vendor CLIs — Claude Code (@anthropic-ai/claude-code), Google
+#     Antigravity (agy), xAI Grok Build (grok) — are OFF by default
+#     (INCLUDE_PROPRIETARY_CLIS=false) so images you build and push to a
+#     registry do not redistribute them. Opt in for local/private images with
+#     --build-arg INCLUDE_PROPRIETARY_CLIS=true (the Compose quickstart and
+#     `make build` do this explicitly for the locally built image).
 #   - Bring-your-own binary / custom installer URL support:
 #     Override --build-arg ANTIGRAVITY_INSTALL_URL=<url> or pass
 #     --build-arg GROK_CLI_INSTALL_URL=<url> at build time, or layer vendor
 #     binaries onto gitseed/runner in a derived Dockerfile.
+#   - Installer integrity: the Antigravity/Grok installers are fetched over
+#     HTTPS from the vendor at build time and are NOT version-pinned by
+#     default. Pin them by passing --build-arg ANTIGRAVITY_INSTALL_SHA256=<sha>
+#     / GROK_CLI_INSTALL_SHA256=<sha> (the build fails on mismatch), or point
+#     the *_INSTALL_URL args at a vetted, versioned copy you host yourself.
 #
 # ==============================================================================
 
@@ -49,15 +57,20 @@ LABEL org.opencontainers.image.source="https://github.com/gitseed-dev/gitseed" \
 # Bounded semver ranges for pre-installed agent CLIs (override via `--build-arg <NAME>_VERSION=<ver>`).
 ARG OPENCODE_VERSION=">=1.0.0 <2.0.0"
 ARG CLAUDE_CODE_VERSION=">=1.0.0 <3.0.0"
-ARG INCLUDE_PROPRIETARY_CLIS=true
+ARG INCLUDE_PROPRIETARY_CLIS=false
 ARG INSTALL_CLAUDE_CODE=${INCLUDE_PROPRIETARY_CLIS}
 ARG INSTALL_ANTIGRAVITY=${INCLUDE_PROPRIETARY_CLIS}
 ARG REQUIRE_ANTIGRAVITY_CLI=false
 ARG INSTALL_GROK_CLI=${INCLUDE_PROPRIETARY_CLIS}
 # HTTPS installer script URLs for Antigravity (agy) and Grok (grok) binaries.
 # Antigravity defaults to Google's official Linux installer when INSTALL_ANTIGRAVITY=true.
+# TODO(pin): the upstream installer is unversioned; set ANTIGRAVITY_INSTALL_SHA256
+# (and GROK_CLI_INSTALL_SHA256) to the sha256 of a reviewed installer script to
+# make builds reproducible and fail closed if the script changes.
 ARG ANTIGRAVITY_INSTALL_URL="https://antigravity.google/cli/install.sh"
+ARG ANTIGRAVITY_INSTALL_SHA256=""
 ARG GROK_CLI_INSTALL_URL=""
+ARG GROK_CLI_INSTALL_SHA256=""
 ARG CODEX_VERSION=">=0.40.0 <2.0.0"
 ARG GEMINI_CLI_VERSION=">=0.10.0 <2.0.0"
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -103,6 +116,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Install Google Antigravity (agy) and xAI Grok Build (grok) when enabled.
     && if [ "${INSTALL_ANTIGRAVITY}" = "true" ] && [ -n "${ANTIGRAVITY_INSTALL_URL}" ]; then \
          if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "${ANTIGRAVITY_INSTALL_URL}" -o /tmp/install-agy.sh \
+            && { [ -z "${ANTIGRAVITY_INSTALL_SHA256}" ] \
+                 || echo "${ANTIGRAVITY_INSTALL_SHA256}  /tmp/install-agy.sh" | sha256sum -c - \
+                 || { echo "ERROR: Antigravity installer sha256 mismatch." >&2; exit 1; }; } \
             && chmod 0755 /tmp/install-agy.sh \
             && su -s /bin/bash runner -c "HOME=/home/runner PATH=/home/runner/.local/bin:/usr/local/bin:/usr/bin:/bin bash /tmp/install-agy.sh" \
             && rm -f /tmp/install-agy.sh \
@@ -120,6 +136,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        fi \
     && if [ "${INSTALL_GROK_CLI}" = "true" ] && [ -n "${GROK_CLI_INSTALL_URL}" ]; then \
          curl -fsSL "${GROK_CLI_INSTALL_URL}" -o /tmp/install-grok.sh \
+         && { [ -z "${GROK_CLI_INSTALL_SHA256}" ] \
+              || echo "${GROK_CLI_INSTALL_SHA256}  /tmp/install-grok.sh" | sha256sum -c -; } \
          && chmod 0755 /tmp/install-grok.sh \
          && su -s /bin/bash runner -c "HOME=/home/runner PATH=/home/runner/.local/bin:/usr/local/bin:/usr/bin:/bin bash /tmp/install-grok.sh" \
          && rm -f /tmp/install-grok.sh \

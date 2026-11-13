@@ -142,10 +142,12 @@ def _user_sessions_key(user_id: str) -> str:
 
 def _login_rate_keys(email: str, client_ip: str | None) -> list[str]:
     normalized_email = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:16]
-    keys = [f"login_fail:email:{normalized_email}"]
     if client_ip:
-        keys.append(f"login_fail:ip:{client_ip}")
-    return keys
+        return [
+            f"login_fail:email:{normalized_email}:{client_ip}",
+            f"login_fail:ip:{client_ip}",
+        ]
+    return [f"login_fail:email:{normalized_email}"]
 
 
 _LOGIN_MAX_ATTEMPTS = 10
@@ -246,15 +248,21 @@ async def revoke_user_sessions(
         await redis.delete(user_set_key)
 
 
-def _derive_run_token_hmac_key(secret: str) -> bytes:
-    """Derive a domain-separated 32-byte HMAC-SHA256 key for run tokens via HKDF."""
+def derive_domain_hmac_key(domain_info: bytes, secret: str | None = None) -> bytes:
+    """Derive a domain-separated 32-byte HMAC-SHA256 key via RFC 5869 HKDF."""
+    raw_secret = secret if secret is not None else settings.GITSEED_SECRET_KEY
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
         salt=_HKDF_SALT,
-        info=_RUN_TOKEN_HKDF_INFO,
+        info=domain_info,
     )
-    return hkdf.derive(secret.encode("utf-8"))
+    return hkdf.derive(raw_secret.encode("utf-8"))
+
+
+def _derive_run_token_hmac_key(secret: str) -> bytes:
+    """Derive a domain-separated 32-byte HMAC-SHA256 key for run tokens via HKDF."""
+    return derive_domain_hmac_key(_RUN_TOKEN_HKDF_INFO, secret)
 
 
 def _get_run_token_hmac_keys() -> list[bytes]:

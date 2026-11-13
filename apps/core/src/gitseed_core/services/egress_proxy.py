@@ -422,10 +422,20 @@ async def handle_proxy_client(
             await client_writer.drain()
             return
 
+        canonical_host = f"{host}:{port}" if port != 80 else host
         upstream_writer.write(f"{method} {path} {version}\r\n".encode("latin-1"))
+        upstream_writer.write(f"Host: {canonical_host}\r\n".encode("latin-1"))
         for hdr in headers_raw:
             lower = hdr.decode("latin-1", errors="replace").lower()
-            if lower.startswith(("proxy-connection:", "proxy-authorization:")):
+            if lower.startswith(
+                (
+                    "host:",
+                    "connection:",
+                    "keep-alive:",
+                    "proxy-connection:",
+                    "proxy-authorization:",
+                )
+            ):
                 continue
             upstream_writer.write(hdr)
         upstream_writer.write(b"Connection: close\r\n\r\n")

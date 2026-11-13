@@ -36,6 +36,8 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     const rootDetectedRef = useRef(false)
     const onRootDetectedRef = useRef(onRootDetected)
     onRootDetectedRef.current = onRootDetected
+    const onDisconnectedRef = useRef(onDisconnected)
+    onDisconnectedRef.current = onDisconnected
     const [ready, setReady] = useState(false)
     const [state, setState] = useState<ConnState>('connecting')
     const [closeReason, setCloseReason] = useState<string>('')
@@ -170,7 +172,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           setState('closed')
           setCloseReason(ev.reason || (ev.code === 1000 ? 'Shell exited' : 'Connection lost'))
           term.write('\r\n\x1b[2m[disconnected]\x1b[0m\r\n')
-          onDisconnected?.()
+          onDisconnectedRef.current?.()
         }
       }
       connect()

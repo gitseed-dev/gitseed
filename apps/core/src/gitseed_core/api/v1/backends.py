@@ -39,8 +39,12 @@ async def _serialize_backend(
         allowed_ids = allowed_map.get(backend.id, [])
     else:
         allowed_ids = await backends_service.get_allowed_agent_ids(session, backend.id)
-    return BackendResponse.model_validate(backend).model_copy(
+    resp = BackendResponse.model_validate(backend)
+    sanitized_cfg = dict(resp.config or {})
+    sanitized_cfg.pop("manifest_state", None)
+    return resp.model_copy(
         update={
+            "config": sanitized_cfg,
             "secret_keys": backends_service.get_secret_keys(backend),
             "allowed_agent_ids": allowed_ids,
         }

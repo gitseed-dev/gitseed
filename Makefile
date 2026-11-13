@@ -1,4 +1,8 @@
 VERSION ?= dev
+# Local builds bundle proprietary agent CLIs (Claude Code, Antigravity, Grok)
+# for convenience. Use `make build INCLUDE_PROPRIETARY_CLIS=false` for any
+# runner image you push to a registry or otherwise redistribute.
+INCLUDE_PROPRIETARY_CLIS ?= true
 
 .DEFAULT_GOAL := help
 .PHONY: help init setup dev test lint build migrate
@@ -14,7 +18,7 @@ setup:    ## install all dependencies
 	uv sync --all-packages
 	pnpm install
 
-dev:      ## run the dev stack with hot reload
+dev:      ## build and run the full stack in Docker Compose (no hot reload; re-run after code changes)
 	docker compose -f compose.yaml up --build
 
 test:     ## run all tests
@@ -26,14 +30,14 @@ lint:     ## lint and type-check
 	uv run mypy packages/common apps/core apps/cli apps/mcp apps/runner
 	pnpm --filter web lint
 
-build:    ## build both images
+build:    ## build both images (local runner image includes proprietary CLIs; INCLUDE_PROPRIETARY_CLIS=false for images you redistribute)
 	docker build --build-arg GITSEED_VERSION=$(VERSION) -t gitseed/gitseed:$(VERSION) .
 	docker build \
 		--build-arg GITSEED_VERSION=$(VERSION) \
-		--build-arg INCLUDE_PROPRIETARY_CLIS=$${INCLUDE_PROPRIETARY_CLIS:-true} \
-		--build-arg INSTALL_CLAUDE_CODE=$${INSTALL_CLAUDE_CODE:-$${INCLUDE_PROPRIETARY_CLIS:-true}} \
-		--build-arg INSTALL_ANTIGRAVITY=$${INSTALL_ANTIGRAVITY:-$${INCLUDE_PROPRIETARY_CLIS:-true}} \
-		--build-arg INSTALL_GROK_CLI=$${INSTALL_GROK_CLI:-$${INCLUDE_PROPRIETARY_CLIS:-true}} \
+		--build-arg INCLUDE_PROPRIETARY_CLIS=$(INCLUDE_PROPRIETARY_CLIS) \
+		--build-arg INSTALL_CLAUDE_CODE=$${INSTALL_CLAUDE_CODE:-$(INCLUDE_PROPRIETARY_CLIS)} \
+		--build-arg INSTALL_ANTIGRAVITY=$${INSTALL_ANTIGRAVITY:-$(INCLUDE_PROPRIETARY_CLIS)} \
+		--build-arg INSTALL_GROK_CLI=$${INSTALL_GROK_CLI:-$(INCLUDE_PROPRIETARY_CLIS)} \
 		-t gitseed/runner:$(VERSION) apps/runner
 
 migrate:  ## apply database migrations

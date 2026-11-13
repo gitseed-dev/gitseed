@@ -303,7 +303,7 @@ async def _ensure_k8s_namespace(
     *,
     project_slug: str | None = None,
     workload: str = "runner",
-    enforce_shared_network_policy: bool = False,
+    enforce_shared_network_policy: bool = True,
 ) -> str:
     """Ensure `target_ns` exists with an active egress NetworkPolicy, failing closed if NetworkPolicy apply is denied."""
     control_plane_ns = _resolve_k8s_control_plane_namespace(fallback_ns)
@@ -324,6 +324,10 @@ async def _ensure_k8s_namespace(
             labels: dict[str, str] = {
                 "app.gitseed.managed": "true",
                 "app.gitseed.workload": workload,
+                "gitseed.io/workload-plane": "true",
+                "pod-security.kubernetes.io/enforce": "restricted",
+                "pod-security.kubernetes.io/warn": "restricted",
+                "pod-security.kubernetes.io/audit": "restricted",
             }
             if project_slug:
                 labels["app.gitseed.project_slug"] = _sanitize_k8s_label(project_slug, max_len=63)
@@ -697,7 +701,7 @@ async def _spawn_k8s_runner_job(
             default_ns,
             project_slug=project.slug,
             workload="runner",
-            enforce_shared_network_policy=bool(cfg.get("network_policy", False)),
+            enforce_shared_network_policy=bool(cfg.get("network_policy", True)),
         )
         await client.delete(
             f"{base_url}/apis/batch/v1/namespaces/{quote(target_ns, safe='')}/jobs/{quote(job_name, safe='')}?propagationPolicy=Background"
@@ -835,7 +839,7 @@ async def spawn_k8s_pod(
             default_ns,
             project_slug=project_slug,
             workload=workload,
-            enforce_shared_network_policy=bool(cfg.get("network_policy", False)),
+            enforce_shared_network_policy=bool(cfg.get("network_policy", True)),
         )
         await client.delete(
             f"{base_url}/api/v1/namespaces/{quote(target_ns, safe='')}/pods/{quote(clean_name, safe='')}?gracePeriodSeconds=0"
@@ -1392,6 +1396,7 @@ async def spawn_docker_runner_container(
 
             create_payload: dict[str, Any] = {
                 "Image": image,
+                "User": "1000:1000",
                 "Env": [f"{k}={v}" for k, v in role_env.items()],
                 "Labels": {
                     **base_labels,

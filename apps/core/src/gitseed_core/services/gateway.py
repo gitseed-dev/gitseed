@@ -1014,8 +1014,7 @@ async def _compute_remaining_budget(
     if effective_checkpoint is not None:
         cp_val = Decimal(str(effective_checkpoint))
         approved_through = Decimal(str(seed.checkpoint_approved_through or 0))
-        next_cp = ((max(seed_spent, approved_through) // cp_val) + 1) * cp_val
-        if seed_spent >= cp_val and seed_spent > approved_through:
+        if seed_spent >= cp_val and seed_spent >= approved_through:
             return (
                 Decimal("0"),
                 f"Spend checkpoint ({effective_checkpoint}) reached",
@@ -1027,6 +1026,10 @@ async def _compute_remaining_budget(
                     "enforcement_detail": enf_detail,
                 },
             )
+        if approved_through > seed_spent:
+            next_cp = approved_through
+        else:
+            next_cp = ((seed_spent // cp_val) + 1) * cp_val
         candidates.append(next_cp - seed_spent)
 
     if project.monthly_budget is not None:
@@ -1822,15 +1825,19 @@ async def finalize_run_litellm_key(
                             reported_spend = quant_sp
                 if reported_in_tokens > 0 or reported_out_tokens > 0:
                     break
-
-            if delete_key:
-                await client.post(
-                    f"{base_url}/key/delete",
-                    headers=_litellm_headers(),
-                    json={"keys": [virtual_key], "key_aliases": [f"run:{run.id}"]},
-                )
     except Exception as exc:
         logger.debug("LiteLLM finalize_run_litellm_key(%s) skipped: %s", run.id, exc)
+    finally:
+        if delete_key:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    await client.post(
+                        f"{base_url}/key/delete",
+                        headers=_litellm_headers(),
+                        json={"keys": [virtual_key], "key_aliases": [f"run:{run.id}"]},
+                    )
+            except Exception as exc:
+                logger.debug("LiteLLM finalize key delete(%s) skipped: %s", run.id, exc)
 
     if reported_in_tokens > 0 or reported_out_tokens > 0:
         run.input_tokens = reported_in_tokens

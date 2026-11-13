@@ -354,28 +354,39 @@ def _prepare_shared_git_mirror(
     local_proto = ["-c", "protocol.file.allow=always"] if is_local_repo_path(clone_url) else []
     try:
         with _lock_git_mirror(lock_file):
-            if (mirror_dir / "HEAD").is_file():
-                for stale_lock in mirror_dir.rglob("*.lock"):
-                    with suppress(OSError):
-                        stale_lock.unlink()
-                _run_git(["remote", "set-url", "origin", clone_url], mirror_dir)
-                try:
-                    _run_git(
-                        [
-                            *local_proto,
-                            "fetch",
-                            *fetch_depth_args,
-                            "origin",
-                            f"+refs/heads/{default_branch}:refs/heads/{default_branch}",
-                        ],
-                        mirror_dir,
-                    )
-                finally:
-                    _run_git(["remote", "set-url", "origin", clean_url], mirror_dir)
-                return mirror_dir
+            if (mirror_dir / "HEAD").is_file() and not (mirror_dir / "HEAD").is_symlink():
+                from gitseed_runner.gitsafe import (
+                    _is_git_dir_structurally_sound,
+                    _sanitize_single_git_dir,
+                )
 
-            if mirror_dir.exists():
-                shutil.rmtree(mirror_dir, ignore_errors=True)
+                _sanitize_single_git_dir(mirror_dir)
+                if _is_git_dir_structurally_sound(mirror_dir):
+                    for stale_lock in mirror_dir.rglob("*.lock"):
+                        with suppress(OSError):
+                            stale_lock.unlink()
+                    _run_git(["remote", "set-url", "origin", clone_url], mirror_dir)
+                    try:
+                        _run_git(
+                            [
+                                *local_proto,
+                                "fetch",
+                                *fetch_depth_args,
+                                "origin",
+                                f"+refs/heads/{default_branch}:refs/heads/{default_branch}",
+                            ],
+                            mirror_dir,
+                        )
+                    finally:
+                        _run_git(["remote", "set-url", "origin", clean_url], mirror_dir)
+                        _sanitize_single_git_dir(mirror_dir)
+                    return mirror_dir
+
+            if mirror_dir.exists() or mirror_dir.is_symlink():
+                if mirror_dir.is_symlink():
+                    mirror_dir.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(mirror_dir, ignore_errors=True)
             mirror_root.mkdir(parents=True, exist_ok=True)
             res = _run_git(
                 [

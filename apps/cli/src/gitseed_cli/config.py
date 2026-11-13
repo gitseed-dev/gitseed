@@ -8,6 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import typer
 from pydantic import BaseModel, Field
@@ -196,22 +197,32 @@ def delete_token(context_name: str) -> None:
         _save_file_credentials(creds)
 
 
+def _url_origin(raw_url: str) -> str:
+    parsed = urlsplit((raw_url or "").strip())
+    scheme = (parsed.scheme or "http").lower()
+    netloc = (parsed.netloc or parsed.path).strip().rstrip("/").lower()
+    return f"{scheme}://{netloc}"
+
+
 def resolve_connection(opts: RuntimeOptions) -> tuple[str, str, str | None, str | None]:
     """Return (context_name, api_url, token, default_project)."""
     cfg = load_config()
     ctx_name = opts.context or os.environ.get("GITSEED_CONTEXT") or cfg.current_context
     ctx = cfg.contexts.get(ctx_name, ContextConfig())
 
-    api_url = (
-        opts.api_url or os.environ.get("GITSEED_API_URL") or ctx.api_url or DEFAULT_API_URL
-    ).rstrip("/")
+    override_url = (opts.api_url or os.environ.get("GITSEED_API_URL") or "").strip()
+    ctx_url = (ctx.api_url or DEFAULT_API_URL).strip()
+    api_url = (override_url or ctx_url).rstrip("/")
 
-    token = (
+    explicit_token = (
         opts.token
         or os.environ.get("GITSEED_API_TOKEN")
         or os.environ.get("GITSEED_TOKEN")
-        or load_token(ctx_name)
     )
+    allow_stored_token = not override_url or (
+        _url_origin(override_url) == _url_origin(ctx_url)
+    )
+    token = explicit_token or (load_token(ctx_name) if allow_stored_token else None)
     if token:
         token = token.strip() or None
 

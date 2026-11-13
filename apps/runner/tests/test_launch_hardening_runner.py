@@ -739,6 +739,7 @@ def test_oversized_prompt_spills_to_prompt_md_and_cleans_up(
     from gitseed_runner.gitsafe import INTERNAL_EXCLUDED_PATHS
 
     assert ".gitseed/prompt.md" in INTERNAL_EXCLUDED_PATHS
+    monkeypatch.setenv("HOME", str(tmp_path))
 
     ws = tmp_path / "large_prompt_ws"
     ws.mkdir(parents=True, exist_ok=True)

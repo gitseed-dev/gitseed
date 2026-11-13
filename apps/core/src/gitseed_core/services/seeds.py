@@ -902,7 +902,7 @@ async def advance_seed(
 
     await session.commit()
 
-    if is_fast_track_to_execute and old_status in (SeedStatus.RUNNING, SeedStatus.QUEUED):
+    if old_status in (SeedStatus.RUNNING, SeedStatus.QUEUED):
         from gitseed_core.services.runs import cancel_run
 
         active_runs_res = await session.execute(
@@ -978,6 +978,7 @@ async def close_seed(
     if seed.status == SeedStatus.MERGED:
         raise Invalid("Cannot close a seed that has already been merged")
 
+    old_status = seed.status
     now = datetime.now(UTC)
     seed.status = SeedStatus.CLOSED
     seed.blocked_reason = None
@@ -995,6 +996,28 @@ async def close_seed(
         data={"stage": str(seed.stage)},
     )
     await session.commit()
+
+    if old_status in (SeedStatus.RUNNING, SeedStatus.QUEUED):
+        from gitseed_core.services.runs import cancel_run
+
+        active_runs_res = await session.execute(
+            select(Run).where(
+                Run.seed_id == seed.id,
+                col(Run.status).in_([s.value for s in RUN_ACTIVE_STATUSES]),
+            )
+        )
+        scalars_fn = getattr(active_runs_res, "scalars", None)
+        if callable(scalars_fn):
+            scalars_obj = scalars_fn()
+            if not inspect.iscoroutine(scalars_obj):
+                all_fn = getattr(scalars_obj, "all", None)
+                if callable(all_fn):
+                    rows = all_fn()
+                    if isinstance(rows, (list, tuple)):
+                        for r in rows:
+                            if isinstance(r, Run):
+                                await cancel_run(session, actor, r.id)
+
     await session.refresh(seed)
     return seed
 
@@ -1925,6 +1948,10 @@ async def create_approval(
         if len(approvers) >= pol.min_approvers:
             if seed.stage == SeedStage.MERGE:
                 merge_sha = await merge_seed_branch_into_default(session, seed)
+                if not merge_sha:
+                    raise Conflict(
+                        "Failed to merge seed branch into default branch; check PR mergeability and repository credentials."
+                    )
                 seed.status = SeedStatus.MERGED
                 seed.blocked_reason = None
                 seed.merged_at = now

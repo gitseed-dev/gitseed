@@ -272,7 +272,7 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
         "annotations": {
             "title": "Update Project Policy",
             "readOnlyHint": False,
-            "destructiveHint": False,
+            "destructiveHint": True,
             "idempotentHint": True,
             "openWorldHint": False,
         },
@@ -671,7 +671,7 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": True,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
         "description": "Start work on a staged seed by moving it from 'staged' to 'queued'.",
         "inputSchema": {
@@ -693,7 +693,7 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": False,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
         "description": (
             "Advance a seed to the next SDLC stage "
@@ -811,7 +811,7 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": True,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
         "description": (
             "Approve a spend checkpoint on a blocked seed so agent execution can continue."
@@ -961,7 +961,7 @@ TOOLS_CATALOG: list[dict[str, Any]] = [
             "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": False,
-            "openWorldHint": False,
+            "openWorldHint": True,
         },
         "description": (
             "Submit a stage gate decision ('approved', 'changes_requested', or 'rejected') "
