@@ -1137,7 +1137,7 @@ async def test_xai_opencode_default_and_coordinator_personal_mode_and_bootstrap_
         actor,
         CoordinatorChatRequest(
             messages=[CoordinatorChatMessage(role="user", content="Status update?")],
-            mode="coordinator",
+            mode="general",
         ),
     )
     assert chat_res.model == "personal-mode-cli"
