@@ -74,7 +74,7 @@ helm upgrade --install gitseed ./charts/gitseed \
 
 ## Why GitSeed?
 
-Interactive coding agents in a local terminal are great for rapid prototyping, but running autonomous agents across production repositories requires isolated execution, untrusted-agent containment, human review gates, cryptographic provenance, and spend controls:
+**Why not just run `claude`, `codex`, or `opencode` locally?** Local CLIs are great for interactive work, but they run on your host with your SSH keys, cloud credentials, and push access, and they leave no record of what ran or who approved it. GitSeed runs those same CLIs in isolated containers where agents never see your Git credentials, with approval gates, cross-model second opinions, spend limits, and a signed receipt on every PR. You can still drop into a live shell when you need to.
 
 - **Untrusted Agent, Trusted Broker (`prepare` → `agent` → `finalize`)**: Coding agents run with zero Git credentials behind an SSRF-hardened `egress-proxy`; a separate read-only `finalize` container enforces `blocked_paths` and added-line secret scanning before pushing.
 - **Ed25519-Signed PR Governance Receipts**: Every Pull Request receives a cryptographically signed receipt (`gitseed.receipt.v1`) attesting to the locked spec, models, spend mode, security scans, and human approvals, verifiable offline via `gitseed receipt verify`.

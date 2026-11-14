@@ -45,6 +45,7 @@ logger = logging.getLogger("uvicorn.error")
 _OSC8_URL_RE = re.compile(r"\x1b\]8;[^;]*;(https?://[^\x07\x1b]+)(?:\x07|\x1b\\)")
 _OSC_ESCAPE_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _DCS_ESCAPE_RE = re.compile(r"\x1b[P_^][^\x07\x1b]*(?:\x07|\x1b\\)")
+_CSI_CURSOR_FORWARD_RE = re.compile(r"\x1b\[(\d*)C")
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\([A-Z0-9])")
 _URL_RE = re.compile(r"https?://[^\s\"'<>)\]\x00-\x1f\x7f]+")
 _DEVICE_CODE_RE = re.compile(
@@ -56,6 +57,10 @@ _DEVICE_CODE_RE = re.compile(
 def _strip_ansi(text: str) -> str:
     cleaned = _OSC_ESCAPE_RE.sub("", text or "")
     cleaned = _DCS_ESCAPE_RE.sub("", cleaned)
+    cleaned = _CSI_CURSOR_FORWARD_RE.sub(
+        lambda m: " " * min(max(int(m.group(1) or "1"), 1), 4),
+        cleaned,
+    )
     cleaned = _ANSI_ESCAPE_RE.sub("", cleaned)
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     # Collapse long horizontal box-drawing divider lines and wide-PTY padding
@@ -66,12 +71,38 @@ def _strip_ansi(text: str) -> str:
     return cleaned
 
 
+def _extract_claude_oauth_token(raw_text: str) -> str | None:
+    """Extract a `claude setup-token` OAuth token (`sk-ant-oat...`) from container logs, handling optional line wraps."""
+    cleaned = _strip_ansi(raw_text or "")
+    lines = cleaned.splitlines()
+    for idx, line in enumerate(lines):
+        m = re.search(r"(sk-ant-oat[0-9a-zA-Z_-]+)", line)
+        if not m:
+            continue
+        parts = [m.group(1)]
+        if m.end() == len(line.rstrip()):
+            for next_line in lines[idx + 1 : idx + 6]:
+                stripped = next_line.strip()
+                if not stripped:
+                    break
+                if stripped.lower().startswith(("store ", "use ", "export ", "note:")):
+                    break
+                if re.fullmatch(r"[0-9a-zA-Z_-]+", stripped):
+                    parts.append(stripped)
+                else:
+                    break
+        candidate = "".join(parts)
+        if len(candidate) >= 32:
+            return candidate
+    return None
+
+
 def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
     osc_urls = _OSC8_URL_RE.findall(log_text or "")
     cleaned = _strip_ansi(log_text)
     urls = [*osc_urls, *_URL_RE.findall(cleaned)]
     chosen_url: str | None = None
-    for raw_url in urls:
+    for raw_url in reversed(urls):
         u = raw_url.rstrip(".,;:")
         lower = u.lower()
         if any(
@@ -83,6 +114,7 @@ def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
                 "auth",
                 "accounts.google.com",
                 "claude.ai",
+                "claude.com",
                 "anthropic.com",
                 "openai.com",
                 "x.ai",
@@ -92,7 +124,7 @@ def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
             chosen_url = u
             break
     if not chosen_url and urls:
-        for raw_url in urls:
+        for raw_url in reversed(urls):
             u = raw_url.rstrip(".,;:")
             if not u.startswith(("http://localhost", "http://127.0.0.1")) and not any(
                 doc_seg in u.lower() for doc_seg in ("/docs", "/terms", "/privacy")
@@ -100,8 +132,8 @@ def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
                 chosen_url = u
                 break
 
-    code_match = _DEVICE_CODE_RE.search(cleaned)
-    user_code = code_match.group(1) if code_match else None
+    code_matches = _DEVICE_CODE_RE.findall(cleaned)
+    user_code = code_matches[-1] if code_matches else None
     return chosen_url, user_code
 
 
@@ -142,7 +174,7 @@ async def _select_docker_compute_backend(session: AsyncSession) -> Backend:
 def _build_pty_auth_script(provider: str) -> str:
     """Return a self-contained Python script that drives the provider CLI inside a real PTY."""
     return f"""
-import fcntl, os, pty, select, shutil, struct, subprocess, sys, termios, time, json
+import fcntl, os, pty, re, select, shutil, struct, subprocess, sys, termios, time, json
 from pathlib import Path
 
 provider = {provider!r}
@@ -150,6 +182,7 @@ home = Path("/home/runner")
 fifo_path = "/tmp/.gitseed_stdin"
 if not os.path.exists(fifo_path):
     os.mkfifo(fifo_path)
+Path("/tmp/.gitseed_pty_v2").write_text("1", encoding="utf-8")
 
 env = dict(os.environ)
 env["HOME"] = str(home)
@@ -200,7 +233,24 @@ if provider == "antigravity":
 elif provider == "anthropic":
     claude_cfg = home / ".claude.json"
     if not claude_cfg.exists():
-        claude_cfg.write_text(json.dumps({{"hasCompletedOnboarding": True, "theme": "dark"}}, indent=2))
+        trusted_proj = {{
+            "allowedTools": [],
+            "hasTrustDialogAccepted": True,
+            "hasTrustDialogHooksAccepted": True,
+            "hasCompletedProjectOnboarding": True,
+            "projectOnboardingSeenCount": 1,
+        }}
+        claude_cfg.write_text(
+            json.dumps(
+                {{
+                    "hasCompletedOnboarding": True,
+                    "bypassPermissionsModeAccepted": True,
+                    "theme": "dark",
+                    "projects": {{"/workspace": trusted_proj, str(home): trusted_proj}},
+                }},
+                indent=2,
+            )
+        )
 
 if provider == "antigravity":
     if shutil.which("agy"):
@@ -388,12 +438,50 @@ def sync_keyring_to_files():
 
 init_headless_keyring()
 
+def sync_claude_token_to_files(raw_accum: str):
+    if provider != "anthropic" or "sk-ant-oat" not in raw_accum:
+        return
+    try:
+        cleaned = re.sub(r"\\x1b\\[(\\d*)C", lambda m: " " * min(max(int(m.group(1) or "1"), 1), 4), raw_accum)
+        cleaned = re.sub(r"\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)", "", cleaned)
+        cleaned = re.sub(r"\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~]|\\([A-Z0-9])", "", cleaned)
+        cleaned = cleaned.replace("\\r\\n", "\\n").replace("\\r", "\\n")
+        lines = cleaned.splitlines()
+        for idx, line in enumerate(lines):
+            m = re.search(r"(sk-ant-oat[0-9a-zA-Z_-]+)", line)
+            if not m:
+                continue
+            parts = [m.group(1)]
+            if m.end() == len(line.rstrip()):
+                for next_line in lines[idx + 1 : idx + 6]:
+                    stripped = next_line.strip()
+                    if not stripped or stripped.lower().startswith(("store ", "use ", "export ", "note:")):
+                        break
+                    if re.fullmatch(r"[0-9a-zA-Z_-]+", stripped):
+                        parts.append(stripped)
+                    else:
+                        break
+            token = "".join(parts)
+            if len(token) >= 32:
+                claude_dir = home / ".claude"
+                claude_dir.mkdir(parents=True, exist_ok=True)
+                cred_file = claude_dir / ".credentials.json"
+                if not cred_file.exists():
+                    cred_file.write_text(
+                        json.dumps({{"claudeAiOauth": {{"accessToken": token, "subscriptionType": "max"}}}}, indent=2),
+                        encoding="utf-8",
+                    )
+                    os.chmod(cred_file, 0o600)
+                return
+    except Exception:
+        pass
+
 print(f"Starting CLI authentication for {{provider}} ({{' '.join(cmd)}})...", flush=True)
 
 def spawn_in_pty(argv):
     m_fd, s_fd = pty.openpty()
     try:
-        fcntl.ioctl(s_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 1000, 0, 0))
+        fcntl.ioctl(s_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 2000, 0, 0))
     except Exception:
         pass
     p = subprocess.Popen(
@@ -408,16 +496,17 @@ def spawn_in_pty(argv):
     return m_fd, p
 
 master_fd, proc = spawn_in_pty(cmd)
-fifo_fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+fifo_fd = os.open(fifo_path, os.O_RDWR | os.O_NONBLOCK)
 start_ts = time.time()
 sent_folder_trust_enter = False
 sent_agy_oauth_enter = False
 accum_text = ""
 last_kr_sync_ts = 0.0
+pending_enters = []
 
 try:
     while time.time() - start_ts < 600:
-        rlist, _, _ = select.select([master_fd, fifo_fd], [], [], 0.25)
+        rlist, _, _ = select.select([master_fd, fifo_fd], [], [], 0.1)
         if master_fd in rlist:
             try:
                 data = os.read(master_fd, 4096)
@@ -425,6 +514,7 @@ try:
                     sys.stdout.buffer.write(data)
                     sys.stdout.buffer.flush()
                     accum_text += data.decode("utf-8", errors="ignore")
+                    sync_claude_token_to_files(accum_text)
                     if (
                         provider in ("antigravity", "gemini")
                         and "accounts.google.com" not in accum_text
@@ -453,18 +543,40 @@ try:
                 user_in = os.read(fifo_fd, 4096)
                 if user_in:
                     text = user_in.decode("utf-8", errors="ignore").strip()
-                    if text:
-                        os.write(master_fd, text.encode("utf-8"))
-                        time.sleep(0.15)
+                    if text == "__ENTER__":
                         os.write(master_fd, b"\\r")
+                    elif text:
+                        # Clear any prior partial paste on the input line before pasting fresh code
+                        os.write(master_fd, b"\\x05\\x15")
+                        time.sleep(0.05)
+                        os.write(master_fd, text.encode("utf-8"))
+                        now_in = time.time()
+                        pending_enters = [now_in + 0.5]
             except OSError:
                 pass
         now_ts = time.time()
+        if pending_enters and now_ts >= pending_enters[0]:
+            pending_enters.pop(0)
+            lower_acc = accum_text.lower()
+            if (
+                proc.poll() is None
+                and "sk-ant-oat" not in accum_text
+                and "token created" not in lower_acc
+                and "logged in" not in lower_acc
+            ):
+                try:
+                    os.write(master_fd, b"\\r")
+                except OSError:
+                    pass
+            else:
+                pending_enters.clear()
         if now_ts - last_kr_sync_ts >= 1.0:
             last_kr_sync_ts = now_ts
             sync_keyring_to_files()
+            sync_claude_token_to_files(accum_text)
         if proc.poll() is not None:
             sync_keyring_to_files()
+            sync_claude_token_to_files(accum_text)
             if provider == "openai" and proc.returncode != 0 and "--device-auth" in cmd:
                 cmd = ["codex", "login"]
                 master_fd, proc = spawn_in_pty(cmd)
@@ -475,6 +587,7 @@ try:
                 continue
             break
     sync_keyring_to_files()
+    sync_claude_token_to_files(accum_text)
     # Keep container briefly alive so Core can harvest credentials from /home/runner
     time.sleep(15)
 finally:
@@ -1105,7 +1218,12 @@ async def get_cli_auth_status(
     bundle = await _harvest_credentials_from_container(
         compute_backend, container_name, provider
     )
-    if bundle:
+    extracted_oauth_token = (
+        _extract_claude_oauth_token(raw_logs or "")
+        if provider == "anthropic"
+        else None
+    )
+    if bundle or extracted_oauth_token:
         # Allow any post-token-exchange user tier / onboarding writes to flush before stopping
         await asyncio.sleep(0.8)
         final_bundle = await _harvest_credentials_from_container(
@@ -1113,8 +1231,37 @@ async def get_cli_auth_status(
         )
         if final_bundle:
             bundle.update(final_bundle)
+        if (
+            provider == "anthropic"
+            and extracted_oauth_token
+            and not bundle.get(".claude/.credentials.json")
+        ):
+            bundle[".claude/.credentials.json"] = json.dumps(
+                {
+                    "claudeAiOauth": {
+                        "accessToken": extracted_oauth_token,
+                        "subscriptionType": "max",
+                    }
+                }
+            )
+        if (
+            provider == "anthropic"
+            and not extracted_oauth_token
+            and bundle.get(".claude/.credentials.json")
+        ):
+            try:
+                parsed_cred = json.loads(bundle[".claude/.credentials.json"])
+                tok = (parsed_cred.get("claudeAiOauth") or {}).get("accessToken")
+                if isinstance(tok, str) and tok.startswith("sk-ant-oat"):
+                    extracted_oauth_token = tok
+            except Exception:
+                pass
         updated_backend = await _persist_authenticated_bundle(
-            session, admin, backend, bundle=bundle
+            session,
+            admin,
+            backend,
+            bundle=bundle or None,
+            oauth_token=extracted_oauth_token,
         )
         await stop_and_remove_docker_container(compute_backend, container_name)
         return {
@@ -1190,8 +1337,20 @@ async def submit_cli_auth_code(
 
     # Case 2: User pasted a direct OAuth setup token (e.g. `claude setup-token` sk-ant-oat01-... or ya29....)
     if trimmed.startswith(("sk-ant-oat", "ya29.", "1//")):
+        direct_bundle: dict[str, str] | None = None
+        if provider == "anthropic" and trimmed.startswith("sk-ant-oat"):
+            direct_bundle = {
+                ".claude/.credentials.json": json.dumps(
+                    {
+                        "claudeAiOauth": {
+                            "accessToken": trimmed,
+                            "subscriptionType": "max",
+                        }
+                    }
+                )
+            }
         updated_backend = await _persist_authenticated_bundle(
-            session, admin, backend, oauth_token=trimmed
+            session, admin, backend, bundle=direct_bundle, oauth_token=trimmed
         )
         compute_backend = await _select_docker_compute_backend(session)
         if compute_backend.provider.lower() == "docker":
@@ -1231,11 +1390,19 @@ async def submit_cli_auth_code(
                 trimmed,
             ]
         else:
-            # Write the verification code into the PTY FIFO pipe
+            # Write the verification code into the PTY FIFO pipe (and for legacy v1 containers without pending_enters, send delayed Enter to PTY master)
             exec_cmd = [
                 "sh",
                 "-c",
-                'printf "%s\\n" "$1" > /tmp/.gitseed_stdin',
+                (
+                    'if [ -f /tmp/.gitseed_pty_v2 ]; then '
+                    'printf "%s\\n" "$1" > /tmp/.gitseed_stdin; '
+                    'else '
+                    'if [ -e /proc/1/fd/3 ]; then printf "\\005\\025" > /proc/1/fd/3 2>/dev/null || true; sleep 0.05; fi; '
+                    'printf "%s\\n" "$1" > /tmp/.gitseed_stdin; '
+                    'if [ -e /proc/1/fd/3 ]; then sleep 0.5; printf "\\r" > /proc/1/fd/3 2>/dev/null || true; fi; '
+                    'fi'
+                ),
                 "sh",
                 trimmed,
             ]

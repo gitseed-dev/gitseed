@@ -1002,6 +1002,29 @@ class ClaudeCodeAdapter(RuntimeAdapter):
                 pass
         claude_cfg["hasCompletedOnboarding"] = True
         claude_cfg["bypassPermissionsModeAccepted"] = True
+        claude_cfg.setdefault("theme", "dark")
+        projects_map = claude_cfg.get("projects")
+        if not isinstance(projects_map, dict):
+            projects_map = {}
+        for folder in dict.fromkeys(
+            [
+                "/workspace",
+                str(self.working_dir),
+                str(self.working_dir.resolve()),
+                str(Path.cwd()),
+                str(Path.home()),
+            ]
+        ):
+            proj_entry = projects_map.get(folder)
+            if not isinstance(proj_entry, dict):
+                proj_entry = {}
+            proj_entry["hasTrustDialogAccepted"] = True
+            proj_entry["hasTrustDialogHooksAccepted"] = True
+            proj_entry["hasCompletedProjectOnboarding"] = True
+            proj_entry.setdefault("allowedTools", [])
+            proj_entry.setdefault("projectOnboardingSeenCount", 1)
+            projects_map[folder] = proj_entry
+        claude_cfg["projects"] = projects_map
         mcp_map = self._build_standard_mcp_map()
         if mcp_map:
             claude_cfg["mcpServers"] = mcp_map
@@ -1012,8 +1035,18 @@ class ClaudeCodeAdapter(RuntimeAdapter):
         if self.auth_mode == "cli_oauth":
             env.pop("ANTHROPIC_BASE_URL", None)
             env.pop("ANTHROPIC_AUTH_TOKEN", None)
-            if self.oauth_token:
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = self.oauth_token
+            resolved_oauth = self.oauth_token
+            if not resolved_oauth:
+                cred_file = Path.home() / ".claude" / ".credentials.json"
+                if cred_file.is_file():
+                    with contextlib.suppress(Exception):
+                        cred_doc = json.loads(cred_file.read_text(encoding="utf-8"))
+                        if isinstance(cred_doc, dict):
+                            tok = (cred_doc.get("claudeAiOauth") or {}).get("accessToken")
+                            if isinstance(tok, str) and tok.startswith("sk-ant-oat"):
+                                resolved_oauth = tok
+            if resolved_oauth:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = resolved_oauth
         else:
             env["ANTHROPIC_BASE_URL"] = self.gateway_anthropic_url
             env["ANTHROPIC_AUTH_TOKEN"] = self.gateway_api_key

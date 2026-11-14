@@ -230,7 +230,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       setAccessRestricted(false)
       setSelectedAgentIds([])
       setEnabled(true)
-      setAuthMode(initialProvider === 'antigravity' ? 'cli_oauth' : 'api_key')
+      setAuthMode('api_key')
       setPersonalModeAcknowledged(false)
       const hasExistingInference = backends.some(
         (b) => b.type === 'inference' && b.enabled
@@ -263,8 +263,6 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     setCliAuthSession(null)
     if (!def.supportsCliOAuth) {
       setAuthMode('api_key')
-    } else if (nextProvider === 'antigravity') {
-      setAuthMode('cli_oauth')
     }
     if (type === 'inference' && !currentBackend) {
       const cloudDefaults = DEFAULT_CLOUD_MODELS[nextProvider] || []

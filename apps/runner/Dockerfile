@@ -111,6 +111,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd -g 1000 runner \
     && useradd -u 1000 -g runner -m -s /bin/bash runner \
     && mkdir -p /workspace /gitseed-ctl /gitseed-secrets /home/runner/.local/bin /home/runner/.local/share/keyrings /home/runner/.cache/packages \
+    && printf '%s\n' '{"hasCompletedOnboarding":true,"bypassPermissionsModeAccepted":true,"theme":"dark","projects":{"/workspace":{"allowedTools":[],"hasTrustDialogAccepted":true,"hasTrustDialogHooksAccepted":true,"hasCompletedProjectOnboarding":true,"projectOnboardingSeenCount":1},"/home/runner":{"allowedTools":[],"hasTrustDialogAccepted":true,"hasTrustDialogHooksAccepted":true,"hasCompletedProjectOnboarding":true,"projectOnboardingSeenCount":1}}}' > /home/runner/.claude.json \
     && chown -R 1000:1000 /workspace /gitseed-ctl /gitseed-secrets /home/runner \
     # Install Google Antigravity (agy) and xAI Grok Build (grok) when enabled.
     && if [ "${INSTALL_ANTIGRAVITY}" = "true" ] && [ -n "${ANTIGRAVITY_INSTALL_URL}" ]; then \

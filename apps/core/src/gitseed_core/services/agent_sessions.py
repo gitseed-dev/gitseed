@@ -892,6 +892,28 @@ async def main():
     output_file = Path("/tmp/gitseed_ses/output.json")
     adapter = create_runtime_adapter(ctx=ctx, working_dir=working_dir, output_file=output_file)
     env = adapter.prepare_workspace()
+    if adapter.binary_name == "claude":
+        try:
+            c_path = Path.home() / ".claude.json"
+            c_cfg = json.loads(c_path.read_text(encoding="utf-8")) if c_path.exists() else {}
+            if not isinstance(c_cfg, dict):
+                c_cfg = {}
+            c_cfg["hasCompletedOnboarding"] = True
+            c_cfg["bypassPermissionsModeAccepted"] = True
+            c_cfg.setdefault("theme", "dark")
+            projs = c_cfg.get("projects") if isinstance(c_cfg.get("projects"), dict) else {}
+            for f in ("/workspace", str(working_dir.resolve()), str(Path.home())):
+                pe = projs.get(f) if isinstance(projs.get(f), dict) else {}
+                pe["hasTrustDialogAccepted"] = True
+                pe["hasTrustDialogHooksAccepted"] = True
+                pe["hasCompletedProjectOnboarding"] = True
+                pe.setdefault("allowedTools", [])
+                pe.setdefault("projectOnboardingSeenCount", 1)
+                projs[f] = pe
+            c_cfg["projects"] = projs
+            c_path.write_text(json.dumps(c_cfg, indent=2), encoding="utf-8")
+        except Exception:
+            pass
     prompt = str(ctx.get("prompt") or "")
     continue_session = bool(ctx.get("continue_session", False))
 
@@ -2200,6 +2222,28 @@ adapter = create_runtime_adapter(
     ctx=ctx, working_dir=Path("/workspace"), output_file=Path("/tmp/gitseed_ses/tui_output.json")
 )
 env = adapter.prepare_workspace()
+if adapter.binary_name == "claude":
+    try:
+        c_path = Path.home() / ".claude.json"
+        c_cfg = json.loads(c_path.read_text(encoding="utf-8")) if c_path.exists() else {}
+        if not isinstance(c_cfg, dict):
+            c_cfg = {}
+        c_cfg["hasCompletedOnboarding"] = True
+        c_cfg["bypassPermissionsModeAccepted"] = True
+        c_cfg.setdefault("theme", "dark")
+        projs = c_cfg.get("projects") if isinstance(c_cfg.get("projects"), dict) else {}
+        for f in ("/workspace", str(Path("/workspace").resolve()), str(Path.home())):
+            pe = projs.get(f) if isinstance(projs.get(f), dict) else {}
+            pe["hasTrustDialogAccepted"] = True
+            pe["hasTrustDialogHooksAccepted"] = True
+            pe["hasCompletedProjectOnboarding"] = True
+            pe.setdefault("allowedTools", [])
+            pe.setdefault("projectOnboardingSeenCount", 1)
+            projs[f] = pe
+        c_cfg["projects"] = projs
+        c_path.write_text(json.dumps(c_cfg, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 env["TERM"] = os.environ.get("TERM", "xterm-256color")
 env["COLORTERM"] = os.environ.get("COLORTERM", "truecolor")
 binary = adapter.binary_name

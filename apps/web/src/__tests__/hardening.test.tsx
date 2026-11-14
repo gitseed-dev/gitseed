@@ -370,6 +370,16 @@ describe('DataContext Seed Pagination Limit & Local Workspaces Client', () => {
       'Expected Step 1 to be titled Connect inference'
     )
     assert.ok(
+      html.includes('Done ✓'),
+      'Expected completed Step 1 badge to show Done ✓'
+    )
+    assert.ok(
+      html.includes('Claude Code connected') &&
+        html.includes('stage agents ready') &&
+        html.includes('Connect another'),
+      'Expected connected model panel to collapse into a single summary line'
+    )
+    assert.ok(
       html.includes('Create a seed'),
       'Expected Step 3 to be titled Create a seed'
     )
