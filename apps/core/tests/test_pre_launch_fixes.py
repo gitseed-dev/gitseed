@@ -746,7 +746,12 @@ async def test_probe_discovery_and_personal_mode_explicit_sdlc_default(
     )
     assert repos == []
     assert models == [
-        {"id": "qwen2.5-coder-7b-instruct", "owned_by": "lmstudio", "enabled": True}
+        {
+            "id": "qwen2.5-coder-7b-instruct",
+            "owned_by": "lmstudio",
+            "enabled": True,
+            "is_default": True,
+        }
     ]
 
     # 2. Personal Mode (cli_oauth) backend in single-user org with set_sdlc_default=True
@@ -1116,8 +1121,8 @@ async def test_xai_opencode_default_and_coordinator_personal_mode_and_bootstrap_
     )
     monkeypatch.setattr(
         coordinator_svc,
-        "_build_brainstorm_repo_context",
-        AsyncMock(return_value=("", [], [])),
+        "_build_brainstorm_context",
+        AsyncMock(return_value=("", [], None, [])),
     )
     actor = User(
         id="usr_owner_1",

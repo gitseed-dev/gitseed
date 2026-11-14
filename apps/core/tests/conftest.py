@@ -82,6 +82,7 @@ def _make_session() -> AsyncMock:
     session = AsyncMock()
     session.add = MagicMock()
     session.add_all = MagicMock()
+    session.execute.return_value = _exec_result()
     return session
 
 
