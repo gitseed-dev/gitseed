@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from './AuthContext'
 
+export type DockedPaneMode = 'terminal' | 'split' | 'code' | 'vscode'
+
 /** A session minimized to the bottom dock, so it stays at hand across pages. */
 export interface DockedSession {
   kind: 'chat' | 'terminal'
@@ -8,7 +10,7 @@ export interface DockedSession {
   projectId: string
   title: string
   agentHandle?: string | null
-  pane?: 'terminal' | 'code' | 'vscode'
+  pane?: DockedPaneMode
   vscodeUrl?: string | null
 }
 
@@ -31,7 +33,7 @@ interface SessionDockContextValue extends DockState {
   /** Collapse all expanded panes back to the dock bar. */
   collapseAll: () => void
   updateTitle: (key: string, title: string) => void
-  updatePane: (key: string, pane: 'terminal' | 'code' | 'vscode', vscodeUrl?: string | null) => void
+  updatePane: (key: string, pane: DockedPaneMode, vscodeUrl?: string | null) => void
   isDocked: (key: string) => boolean
   isExpanded: (key: string) => boolean
 }
@@ -196,7 +198,7 @@ export const SessionDockProvider: React.FC<{ children: React.ReactNode }> = ({ c
     })
   }, [])
 
-  const updatePane = useCallback((key: string, pane: 'terminal' | 'code' | 'vscode', vscodeUrl?: string | null) => {
+  const updatePane = useCallback((key: string, pane: DockedPaneMode, vscodeUrl?: string | null) => {
     setState((prev) => {
       const target = prev.items.find((i) => dockKey(i.kind, i.id) === key)
       if (!target || (target.pane === pane && (vscodeUrl === undefined || target.vscodeUrl === vscodeUrl))) return prev

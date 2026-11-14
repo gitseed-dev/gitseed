@@ -58,7 +58,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
 
     if (isOffline || s.includes('unreachable') || s.includes('error') || s.includes('disconnected')) {
       return (
-        <span className="font-mono font-medium text-[11px] px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 inline-flex items-center gap-1.5">
+        <span className="font-mono font-medium text-xs px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 inline-flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
           {unreachableLabel}
         </span>
@@ -67,7 +67,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
 
     if (s === 'disabled' || s === 'not configured') {
       return (
-        <span className="font-mono font-medium text-[11px] px-2.5 py-0.5 rounded-full bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border border-zinc-500/20 inline-flex items-center gap-1.5">
+        <span className="font-mono font-medium text-xs px-2.5 py-0.5 rounded-full bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border border-zinc-500/20 inline-flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
           {disabledLabel}
         </span>
@@ -76,7 +76,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
 
     if (s === 'connected' || s === 'ok' || s === 'ready' || isOnline) {
       return (
-        <span className="font-mono font-medium text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 inline-flex items-center gap-1.5">
+        <span className="font-mono font-medium text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 inline-flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
           {connectedLabel}
         </span>
@@ -84,7 +84,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
     }
 
     return (
-      <span className="font-mono font-medium text-[11px] px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 inline-flex items-center gap-1.5">
+      <span className="font-mono font-medium text-xs px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 inline-flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
         {unreachableLabel}
       </span>
@@ -104,7 +104,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
                 <span className="font-bold text-sm text-emerald-800 dark:text-emerald-300">
                   {t('modals.status.operational')}
                 </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-mono font-semibold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
                   HTTP 200 OK
                 </span>
               </div>
@@ -141,7 +141,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
                 <span className="font-bold text-sm text-rose-800 dark:text-rose-300">
                   {t('modals.status.offline')}
                 </span>
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-rose-500/20 text-rose-700 dark:text-rose-300">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-mono font-semibold bg-rose-500/20 text-rose-700 dark:text-rose-300">
                   UNREACHABLE
                 </span>
               </div>
@@ -149,7 +149,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
                 {t('modals.status.offlineDesc')}
               </p>
               {health.error && (
-                <div className="mt-2.5 p-2.5 rounded-xl bg-rose-950/20 border border-rose-500/20 font-mono text-[11px] text-rose-600 dark:text-rose-300 break-all">
+                <div className="mt-2.5 p-2.5 rounded-xl bg-rose-950/20 border border-rose-500/20 font-mono text-xs text-rose-600 dark:text-rose-300 break-all">
                   {health.error}
                 </div>
               )}
@@ -159,7 +159,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
-            <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider block mb-1">
               {t('modals.status.connection')}
             </span>
             <div className="flex items-center gap-1.5 font-semibold text-xs text-zinc-900 dark:text-zinc-100">
@@ -177,7 +177,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
           </div>
 
           <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
-            <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider block mb-1">
               {t('modals.status.latency')}
             </span>
             <div className="flex items-center gap-1 font-semibold text-xs text-zinc-900 dark:text-zinc-100 font-mono">
@@ -187,7 +187,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
           </div>
 
           <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
-            <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider block mb-1">
               {t('modals.status.version')}
             </span>
             <div className="font-semibold text-xs text-zinc-900 dark:text-zinc-100 font-mono">
@@ -196,7 +196,7 @@ export const ControlPlaneStatusModal: React.FC<ControlPlaneStatusModalProps> = (
           </div>
 
           <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80">
-            <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider block mb-1">
               {t('modals.status.lastHeartbeat')}
             </span>
             <div className="flex items-center gap-1 font-medium text-xs text-zinc-700 dark:text-zinc-300 font-mono">

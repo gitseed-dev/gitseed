@@ -195,7 +195,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
             doesn't subtract its padding, which made the terminal overflow by the padding. */}
         <div ref={hostRef} className="absolute inset-2" />
         {state !== 'open' && (
-          <div className="absolute top-2 right-3 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-zinc-900/90 border border-zinc-700 text-[11px] text-zinc-300">
+          <div className="absolute top-2 right-3 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-zinc-900/90 border border-zinc-700 text-xs text-zinc-300">
             {state === 'connecting' ? (
               <>
                 <Loader2 size={12} className="animate-spin text-teal-400" />

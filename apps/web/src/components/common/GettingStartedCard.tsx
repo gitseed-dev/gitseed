@@ -585,7 +585,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                     onClick={() => setModelSectionExpanded((prev) => !prev)}
                     className="font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
                   >
-                    {modelSectionExpanded ? 'Hide' : 'Connect another'}
+                    {modelSectionExpanded ? 'Cancel' : 'Connect another'}
                   </button>
                 </div>
               ) : (
@@ -637,7 +637,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                             </div>
                             {connectedBackend ? (
                               <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
                                   isPrimary
                                     ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30'
                                     : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
@@ -645,10 +645,6 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                               >
                                 <Check size={11} />
                                 {isPrimary ? 'Primary' : 'Added'}
-                              </span>
-                            ) : vendor.id === 'ollama' ? (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/25">
-                                No API key needed
                               </span>
                             ) : (
                               <span className="text-xs font-medium text-zinc-400 group-hover:text-teal-600 dark:group-hover:text-teal-400">
@@ -728,7 +724,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                   onClick={() => setGitSectionExpanded((prev) => !prev)}
                   className="font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
                 >
-                  {gitSectionExpanded ? 'Hide' : 'Connect another'}
+                  {gitSectionExpanded ? 'Cancel' : 'Connect another'}
                 </button>
               </div>
 
@@ -760,7 +756,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                             />
                           </div>
                           {connectedGit ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
                               <Check size={11} />
                               Ready
                             </span>

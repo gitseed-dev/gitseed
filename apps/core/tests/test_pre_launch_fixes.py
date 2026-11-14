@@ -995,6 +995,16 @@ async def test_antigravity_auto_provisions_stage_agents_when_added_after_local_i
         )
         is True
     )
+    assert (
+        _has_verified_provider_credentials(
+            "antigravity",
+            {
+                ".gemini/antigravity-cli/jetski_state.pbtxt": "onboarding_complete: true\n",
+                ".gemini/antigravity-cli/acp-auth-state.json": '{"authenticated": false}',
+            },
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio

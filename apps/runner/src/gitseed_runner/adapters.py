@@ -1719,9 +1719,31 @@ class AntigravityAdapter(RuntimeAdapter):
             env.pop("GOOGLE_GEMINI_BASE_URL", None)
             env["GEMINI_FORCE_FILE_STORAGE"] = "true"
             env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] = "false"
+            gem_oauth = gemini_dir / "oauth_creds.json"
+            agy_oauth = agy_cfg_dir / "oauth_creds.json"
+            if gem_oauth.is_file() and not agy_oauth.exists():
+                with contextlib.suppress(OSError):
+                    agy_oauth.write_bytes(gem_oauth.read_bytes())
+                    os.chmod(agy_oauth, 0o600)
+            elif agy_oauth.is_file() and not gem_oauth.exists():
+                with contextlib.suppress(OSError):
+                    gem_oauth.write_bytes(agy_oauth.read_bytes())
+                    os.chmod(gem_oauth, 0o600)
             seed_token, kr_items = _resolve_antigravity_keyring_seed(
                 gemini_dir, self.oauth_token or None
             )
+            if seed_token:
+                kr_dir = agy_cfg_dir / "keyring"
+                with contextlib.suppress(OSError):
+                    kr_dir.mkdir(parents=True, exist_ok=True)
+                    for tok_path in (
+                        gemini_dir / "jetski-standalone-oauth-token",
+                        agy_cfg_dir / "antigravity-oauth-token",
+                        kr_dir / "antigravity-oauth-token",
+                    ):
+                        if not tok_path.exists():
+                            tok_path.write_text(seed_token, encoding="utf-8")
+                            os.chmod(tok_path, 0o600)
             _ensure_headless_linux_keyring(
                 env,
                 Path.home(),

@@ -73,7 +73,7 @@ export const ContextWindowBadge: React.FC<ContextWindowBadgeProps> = ({
     return (
       <span
         title={title}
-        className={`inline-flex items-center gap-1.5 font-mono text-[11px] tabular-nums ${textToneClass} ${className}`}
+        className={`inline-flex items-center gap-1.5 font-mono text-xs tabular-nums ${textToneClass} ${className}`}
       >
         <span className="w-5 h-1 rounded-full bg-zinc-200/90 dark:bg-zinc-700/90 overflow-hidden shrink-0">
           <span
@@ -89,7 +89,7 @@ export const ContextWindowBadge: React.FC<ContextWindowBadgeProps> = ({
   return (
     <span
       title={title}
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] font-mono tabular-nums shrink-0 ${pillBorderBgClass} ${textToneClass} ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-xs font-mono tabular-nums shrink-0 ${pillBorderBgClass} ${textToneClass} ${className}`}
     >
       <span className="w-7 h-1.5 rounded-full bg-zinc-200/90 dark:bg-zinc-700/90 overflow-hidden shrink-0">
         <span

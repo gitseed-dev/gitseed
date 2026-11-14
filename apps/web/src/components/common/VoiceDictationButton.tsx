@@ -164,7 +164,7 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
   return (
     <span className="inline-flex items-center gap-1.5">
       {errorHint && (
-        <span className="text-[11px] text-rose-500 dark:text-rose-400">
+        <span className="text-xs text-rose-500 dark:text-rose-400">
           {errorHint}
         </span>
       )}

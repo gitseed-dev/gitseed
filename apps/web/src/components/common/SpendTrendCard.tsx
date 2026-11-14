@@ -333,18 +333,18 @@ export const SpendTrendCard: React.FC<SpendTrendCardProps> = ({
           {/* 30-Day Activity & Merge Summary Strip */}
           <div className="grid grid-cols-3 gap-2.5">
             <div className="px-3 py-2 rounded-xl bg-zinc-50/90 dark:bg-zinc-800/50 border border-zinc-200/60 dark:border-zinc-800">
-              <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+              <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
                 Agent Runs
               </div>
               <div className="font-mono text-xs sm:text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-0.5">
                 {totalRunsCount.toLocaleString()}
-                <span className="text-[11px] font-normal text-zinc-500 dark:text-zinc-400 ml-1">
+                <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400 ml-1">
                   ({succeededRunsCount.toLocaleString()} ok)
                 </span>
               </div>
             </div>
             <div className="px-3 py-2 rounded-xl bg-zinc-50/90 dark:bg-zinc-800/50 border border-zinc-200/60 dark:border-zinc-800">
-              <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
+              <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
                 <GitMerge size={11} className="text-emerald-500" />
                 <span>Seeds Merged</span>
               </div>
@@ -353,7 +353,7 @@ export const SpendTrendCard: React.FC<SpendTrendCardProps> = ({
               </div>
             </div>
             <div className="px-3 py-2 rounded-xl bg-zinc-50/90 dark:bg-zinc-800/50 border border-zinc-200/60 dark:border-zinc-800">
-              <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+              <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
                 Total Tokens
               </div>
               <div
@@ -367,7 +367,7 @@ export const SpendTrendCard: React.FC<SpendTrendCardProps> = ({
 
           {/* 30-Day Daily Sparkline Bar Chart */}
           <div className="px-3.5 py-3 rounded-xl bg-zinc-50/60 dark:bg-zinc-800/30 border border-zinc-200/60 dark:border-zinc-800/80">
-            <div className="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 mb-2.5">
+            <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 mb-2.5">
               <span className="font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                 {chartStats.metricMode === 'spend'
                   ? 'Daily Spend (30d)'
@@ -443,7 +443,7 @@ export const SpendTrendCard: React.FC<SpendTrendCardProps> = ({
               })}
             </div>
 
-            <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 dark:text-zinc-500 mt-1.5">
+            <div className="flex items-center justify-between text-xs font-mono text-zinc-400 dark:text-zinc-500 mt-1.5">
               <span>{dailyBuckets[0]?.label}</span>
               <span>{dailyBuckets[Math.floor(dailyBuckets.length / 2)]?.label}</span>
               <span>Today</span>
@@ -469,7 +469,7 @@ export const SpendTrendCard: React.FC<SpendTrendCardProps> = ({
                         {seed.status === 'merged' || seed.status === 'closed' ? (
                           // Finished seeds: say Merged / Closed, not the last stage they sat in
                           <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border shrink-0 ${getSeedStatusClasses(seed.status)}`}
+                            className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border shrink-0 ${getSeedStatusClasses(seed.status)}`}
                           >
                             {STATUS_LABELS[seed.status]}
                           </span>

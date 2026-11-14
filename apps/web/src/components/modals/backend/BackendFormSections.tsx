@@ -248,6 +248,12 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
     )
 
   useEffect(() => {
+    if (cliAuthSession?.authenticated) {
+      setCliCodeInput('')
+    }
+  }, [cliAuthSession?.authenticated])
+
+  useEffect(() => {
     if (!isProviderMenuOpen) return
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -627,7 +633,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                   </p>
                 </div>
                 {appId && existingSecretKeys.includes('private_key') && installationId && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
                     <Check size={12} />
                     <span>Connected</span>
                   </span>
@@ -636,7 +642,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
 
               {setGithubOrg && (
                 <div className="flex flex-col gap-1">
-                  <label className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300">
+                  <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                     GitHub Organization (optional, leave blank for personal account)
                   </label>
                   <input
@@ -651,7 +657,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
 
               {(appId || gitAppManifestStatus) && (
                 <div className="p-2.5 rounded-lg bg-white dark:bg-zinc-900/90 border border-zinc-200/80 dark:border-zinc-700/80 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-wrap font-mono text-[11px]">
+                  <div className="flex items-center gap-2 flex-wrap font-mono text-xs">
                     {appId ? (
                       <span className="text-zinc-700 dark:text-zinc-200">
                         App ID: <strong>{appId}</strong>
@@ -683,7 +689,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                       href={safeGitAppInstallUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline"
                     >
                       <span>Install App on GitHub</span>
                       <ExternalLink size={11} />
@@ -770,7 +776,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <p className="font-semibold">Consumer subscriptions are for one person</p>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/30">
+                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/30">
                     Personal Mode (Single-User Subscription)
                   </span>
                 </div>
@@ -830,18 +836,21 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
 
                 return (
                   <div key={sec.key} className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
-                        <span>{sec.label}</span>
-                        <span className="font-mono text-xs text-zinc-400">({sec.key})</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5 min-w-0">
+                        <span className="truncate">{sec.label}</span>
+                        <span className="font-mono text-xs text-zinc-400 shrink-0">({sec.key})</span>
                       </label>
                       {isConfigured ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                        <span
+                          title="Enter a new value below to rotate"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 shrink-0 whitespace-nowrap"
+                        >
                           <Check size={12} />
-                          <span>Configured · enter new value to rotate</span>
+                          <span>Stored</span>
                         </span>
                       ) : sec.required ? (
-                        <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                        <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 shrink-0 whitespace-nowrap">
                           Required
                         </span>
                       ) : null}
@@ -895,7 +904,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                     </p>
                   </div>
                   {cliAuthenticated && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
                       <Check size={12} />
                       <span>Authenticated</span>
                     </span>
@@ -903,7 +912,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                 </div>
 
                 {cliAuthenticated && cliAuthUpdatedAt && (
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">
                     Last authenticated: {new Date(cliAuthUpdatedAt).toLocaleString()}
                   </p>
                 )}
@@ -951,7 +960,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                 </div>
 
                 {type !== 'git' && !personalModeAcknowledged && (
-                  <p className="text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                  <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
                     Check the Personal Mode acknowledgment above to launch sign-in
                   </p>
                 )}
@@ -993,17 +1002,17 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
 
                     {cliAuthSession.log_output && (
                       <div className="flex flex-col gap-1">
-                        <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
+                        <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
                           Container CLI Output:
                         </span>
-                        <pre className="p-2.5 rounded-lg bg-zinc-900 text-zinc-100 font-mono text-[11px] max-h-36 overflow-y-auto whitespace-pre-wrap break-all leading-relaxed">
+                        <pre className="p-2.5 rounded-lg bg-zinc-900 text-zinc-100 font-mono text-xs max-h-36 overflow-y-auto whitespace-pre-wrap break-all leading-relaxed">
                           {cliAuthSession.log_output}
                         </pre>
                       </div>
                     )}
 
                     {!cliAuthSession.authenticated && type !== 'git' && (
-                      <div className="flex flex-col gap-1.5">
+                      <div className="flex flex-col gap-2">
                         <label className="font-semibold text-zinc-700 dark:text-zinc-300">
                           Step 2: Paste Authorization Code, Callback URL, or Setup Token:
                         </label>
@@ -1012,8 +1021,20 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                             type="text"
                             placeholder="Paste code, http://localhost:... callback URL, or token"
                             value={cliCodeInput}
+                            disabled={isSubmittingCliAuthCode}
                             onChange={(e) => setCliCodeInput(e.target.value)}
-                            className="flex-1 h-9 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 text-xs font-mono text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-teal-500/50"
+                            onKeyDown={(e) => {
+                              if (
+                                e.key === 'Enter' &&
+                                onSubmitCliAuthCode &&
+                                cliCodeInput.trim() &&
+                                !isSubmittingCliAuthCode
+                              ) {
+                                e.preventDefault()
+                                onSubmitCliAuthCode(cliCodeInput.trim())
+                              }
+                            }}
+                            className="flex-1 h-9 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 text-xs font-mono text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-teal-500/50 disabled:opacity-60"
                           />
                           <button
                             type="button"
@@ -1021,14 +1042,57 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                             onClick={() => {
                               if (onSubmitCliAuthCode && cliCodeInput.trim()) {
                                 onSubmitCliAuthCode(cliCodeInput.trim())
-                                setCliCodeInput('')
                               }
                             }}
-                            className="h-9 px-3.5 rounded-lg bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 font-semibold text-xs cursor-pointer disabled:opacity-50 shrink-0"
+                            className="h-9 px-3.5 rounded-lg bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 font-semibold text-xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
                           >
-                            {isSubmittingCliAuthCode ? 'Verifying...' : 'Submit Code'}
+                            {isSubmittingCliAuthCode ? (
+                              <>
+                                <Loader2 size={13} className="animate-spin" />
+                                <span>Verifying…</span>
+                              </>
+                            ) : (
+                              <span>Verify Code</span>
+                            )}
                           </button>
                         </div>
+
+                        {isSubmittingCliAuthCode && (
+                          <div
+                            role="status"
+                            className="p-2.5 rounded-lg bg-teal-500/10 border border-teal-500/25 flex items-center gap-2 text-xs text-teal-800 dark:text-teal-200"
+                          >
+                            <Loader2 size={14} className="animate-spin text-teal-600 dark:text-teal-400 shrink-0" />
+                            <span>
+                              Submitting authorization code to CLI container and verifying OAuth credentials…
+                            </span>
+                          </div>
+                        )}
+
+                        {!isSubmittingCliAuthCode && cliAuthSession.error && (
+                          <div
+                            role="alert"
+                            className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/25 flex items-start gap-2 text-xs text-rose-700 dark:text-rose-300"
+                          >
+                            <AlertTriangle size={14} className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                            <div className="flex flex-col gap-0.5">
+                              <span className="font-semibold">Verification did not complete</span>
+                              <span>{cliAuthSession.error}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {cliAuthSession.authenticated && (
+                      <div
+                        role="status"
+                        className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300"
+                      >
+                        <Check size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span>
+                          CLI authentication verified and encrypted credentials saved.
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1038,16 +1102,19 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
               {/* Direct OAuth Token / Bundle fallback field */}
               {type !== 'git' && (
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
-                      <span>Direct OAuth Token / Credential Bundle (optional)</span>
-                      <span className="font-mono text-xs text-zinc-400">(oauth_token)</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">Direct OAuth Token / Bundle (optional)</span>
+                      <span className="font-mono text-xs text-zinc-400 shrink-0">(oauth_token)</span>
                     </label>
                     {existingSecretKeys.includes('oauth_token') ||
                     existingSecretKeys.includes('cli_auth_bundle') ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                      <span
+                        title="Enter a new value below to rotate"
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 shrink-0 whitespace-nowrap"
+                      >
                         <Check size={12} />
-                        <span>Stored · enter new value to rotate</span>
+                        <span>Stored</span>
                       </span>
                     ) : null}
                   </div>
@@ -1057,7 +1124,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                       placeholder={
                         existingSecretKeys.includes('oauth_token') ||
                         existingSecretKeys.includes('cli_auth_bundle')
-                          ? '•••••••••••••••• (stored in encrypted vault)'
+                          ? '•••••••••••••••• (leave blank to keep stored token, or paste to rotate)'
                           : provider === 'anthropic'
                             ? 'sk-ant-oat01-... (from "claude setup-token") or leave blank when using Launch CLI Sign-In'
                             : 'Paste OAuth token or JSON credential bundle (optional)'
@@ -1112,7 +1179,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
                 {getProviderSdlcStageHandles(provider).map((st) => (
                   <span
                     key={st.stage}
-                    className="px-2 py-0.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-700/80 text-[11px] font-mono text-teal-700 dark:text-teal-300"
+                    className="px-2 py-0.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-700/80 text-xs font-mono text-teal-700 dark:text-teal-300"
                     title={`${st.stageLabel} stage agent`}
                   >
                     {st.handle}

@@ -195,7 +195,7 @@ export const SeedDiscussionCard: React.FC<SeedDiscussionCardProps> = ({
                             {formatRelativeTime(c.created_at)}
                           </span>
                           {c.edited_at && (
-                            <span className="text-[11px] text-zinc-400">
+                            <span className="text-xs text-zinc-400">
                               (edited)
                             </span>
                           )}

@@ -219,7 +219,7 @@ export const Sidebar: React.FC = () => {
                 {t('coordinator.searchOrAsk')}
               </span>
             </div>
-            <kbd className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono font-semibold rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 group-hover:text-teal-600 dark:group-hover:text-teal-400 group-hover:border-teal-500/40 transition-colors shrink-0 shadow-2xs">
+            <kbd className="inline-flex items-center px-1.5 py-0.5 text-xs font-mono font-semibold rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 group-hover:text-teal-600 dark:group-hover:text-teal-400 group-hover:border-teal-500/40 transition-colors shrink-0 shadow-2xs">
               {getCoordinatorShortcut()}
             </kbd>
           </button>
@@ -234,7 +234,7 @@ export const Sidebar: React.FC = () => {
       >
         {!isCollapsed && (
           <div className="pb-1 px-2 pt-0.5 shrink-0">
-            <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+            <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
               {t('nav.sectionWorkspace')}
             </span>
           </div>
@@ -256,7 +256,7 @@ export const Sidebar: React.FC = () => {
               <div className="my-2 border-t border-zinc-200 dark:border-zinc-800 mx-2 shrink-0" />
             ) : (
               <div className="pt-4 mt-2 border-t border-zinc-200/80 dark:border-zinc-800 pb-1 px-2 shrink-0">
-                <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                   {t('nav.sectionAdmin')}
                 </span>
               </div>
@@ -280,7 +280,7 @@ export const Sidebar: React.FC = () => {
               <div className="my-2 border-t border-zinc-200 dark:border-zinc-800 mx-2 shrink-0" />
             ) : (
               <div className="pt-4 mt-2 border-t border-zinc-200/80 dark:border-zinc-800 pb-1 px-2 shrink-0">
-                <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                   {t('nav.sectionResources')}
                 </span>
               </div>

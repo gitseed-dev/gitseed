@@ -275,7 +275,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                 Stage Policy
               </h2>
               {projectName && (
-                <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/20">
+                <span className="px-2 py-0.5 rounded-md text-xs font-medium bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/20">
                   {projectName}
                 </span>
               )}
@@ -310,7 +310,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                 <div className="text-xs sm:text-sm font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
                   <span>Stage Execution</span>
                   {meta.isRequired && (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-zinc-200/80 dark:bg-zinc-700/80 text-zinc-600 dark:text-zinc-300">
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-zinc-200/80 dark:bg-zinc-700/80 text-zinc-600 dark:text-zinc-300">
                       <Lock size={10} />
                       <span>Required</span>
                     </span>
@@ -425,7 +425,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
             </div>
             {inheritedInstructions && (
               <div className="rounded-xl border border-zinc-200 dark:border-zinc-700/80 bg-zinc-50/70 dark:bg-zinc-800/40">
-                <div className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <div className="px-3 pt-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
                   From organization defaults
                 </div>
                 <div className="px-3 pb-2.5 pt-1 text-xs text-zinc-600 dark:text-zinc-300 whitespace-pre-wrap max-h-32 overflow-y-auto">
@@ -649,7 +649,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                         key={preset}
                         type="button"
                         onClick={() => setTimeoutMinutes(preset)}
-                        className={`px-1.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition cursor-pointer ${timeoutMinutes === preset
+                        className={`px-1.5 py-1 rounded-lg text-xs font-mono font-semibold transition cursor-pointer ${timeoutMinutes === preset
                           ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30'
                           : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                           }`}

@@ -923,7 +923,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
                         <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                       ) : (
                         <span
-                          className={`w-4 h-4 rounded-full text-[11px] font-mono flex items-center justify-center ${isCurrent
+                          className={`w-4 h-4 rounded-full text-xs font-mono flex items-center justify-center ${isCurrent
                             ? 'bg-teal-500 text-white font-semibold'
                             : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
                             }`}
@@ -947,7 +947,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
                       policy?.requires_approval ? (
                         <span
                           title="Requires approval gate"
-                          className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-700 dark:text-zinc-300"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300"
                         >
                           <ShieldCheck className="w-3.5 h-3.5 text-teal-500 shrink-0" />
                           <span>Gate</span>
@@ -955,7 +955,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
                       ) : (
                         <span
                           title="Auto-advances on stage completion"
-                          className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-700 dark:text-zinc-300"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300"
                         >
                           <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                           <span>Auto</span>
@@ -1067,7 +1067,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
         >
           <MessageSquare className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
           <span>Comments</span>
-          <span className="px-1.5 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[11px] font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
+          <span className="px-1.5 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-xs font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
             {activeCommentsCount}
           </span>
         </button>

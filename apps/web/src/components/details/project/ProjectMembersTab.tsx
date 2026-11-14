@@ -245,12 +245,12 @@ export const ProjectMembersTab: React.FC<ProjectMembersTabProps> = ({
                             {displayName}
                           </span>
                           {orgUser?.org_role === 'admin' && (
-                            <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+                            <span className="px-1.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
                               Org Admin
                             </span>
                           )}
                           {userStatus === 'invited' && (
-                            <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
+                            <span className="px-1.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
                               Invited
                             </span>
                           )}

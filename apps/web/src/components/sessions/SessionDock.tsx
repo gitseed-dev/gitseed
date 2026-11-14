@@ -21,6 +21,7 @@ import {
   dockKey,
   MAX_SPLIT_PANES,
   useSessionDock,
+  type DockedPaneMode,
   type DockedSession,
 } from '../../context/SessionDockContext'
 import { useTheme } from '../../context/ThemeContext'
@@ -275,10 +276,10 @@ export const SessionDock: React.FC = () => {
   if (visible.length === 0 && !notice) return null
 
   const statusFor = (it: DockedSession) => statuses[items.indexOf(it)]?.data as SessionListItem | undefined
-  const resolvePane = (it: DockedSession): 'terminal' | 'code' | 'vscode' =>
+  const resolvePane = (it: DockedSession): DockedPaneMode =>
     it.pane || (it.title.startsWith('Editor ·') ? 'code' : 'terminal')
 
-  const selectDockPane = async (it: DockedSession, pane: 'terminal' | 'code' | 'vscode') => {
+  const selectDockPane = async (it: DockedSession, pane: DockedPaneMode) => {
     const key = dockKey(it.kind, it.id)
     const proj = projects.find((p) => p.id === it.projectId) || null
     if (pane === 'vscode' && !canStartSessions(user, proj)) {
@@ -312,7 +313,7 @@ export const SessionDock: React.FC = () => {
       VIEWS.SESSIONS,
       it.kind,
       it.id,
-      pane === 'code' || (pane === 'vscode' && canManageItem) ? { pane } : undefined
+      pane === 'code' || pane === 'split' || (pane === 'vscode' && canManageItem) ? { pane } : undefined
     )
   }
 
@@ -377,7 +378,7 @@ export const SessionDock: React.FC = () => {
                     <div className="px-3 py-1.5 flex items-center justify-between gap-2 border-b border-zinc-200/80 dark:border-zinc-800 shrink-0">
                       <div className="flex items-center gap-2 min-w-0 text-xs">
                         {isSplitMode && (
-                          <span className="w-4 h-4 rounded bg-teal-500/15 border border-teal-500/30 text-[10px] font-mono font-bold text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
+                          <span className="w-4 h-4 rounded bg-teal-500/15 border border-teal-500/30 text-xs font-mono font-bold text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
                             {paneIdx + 1}
                           </span>
                         )}
@@ -399,8 +400,8 @@ export const SessionDock: React.FC = () => {
                         {liveStatus?.is_running && (
                           <div className="ml-1 inline-flex rounded-lg p-0.5 bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shrink-0">
                             {(canContributePane
-                              ? (['terminal', 'code', 'vscode'] as const)
-                              : (['terminal', 'code'] as const)
+                              ? (['terminal', 'split', 'code', 'vscode'] as const)
+                              : (['terminal', 'split', 'code'] as const)
                             ).map((p) => {
                               const isStarting = p === 'vscode' && vscodeStartingKey === key
                               return (
@@ -409,6 +410,11 @@ export const SessionDock: React.FC = () => {
                                   type="button"
                                   disabled={isStarting}
                                   onClick={() => void selectDockPane(paneItem, p)}
+                                  title={
+                                    p === 'split'
+                                      ? 'Side-by-side Terminal and Code/Diff for this session container'
+                                      : undefined
+                                  }
                                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold cursor-pointer ${
                                     activePane === p
                                       ? 'bg-white dark:bg-zinc-800 text-teal-700 dark:text-teal-300 shadow-2xs'
@@ -419,10 +425,18 @@ export const SessionDock: React.FC = () => {
                                     <Loader2 size={11} className="animate-spin" />
                                   ) : p === 'terminal' ? (
                                     <Terminal size={11} />
+                                  ) : p === 'split' ? (
+                                    <Columns2 size={11} />
                                   ) : (
                                     <Code2 size={11} />
                                   )}
-                                  {p === 'code' ? 'Code' : p === 'vscode' ? 'VS Code' : 'Terminal'}
+                                  {p === 'code'
+                                    ? 'Code'
+                                    : p === 'split'
+                                      ? 'Split'
+                                      : p === 'vscode'
+                                        ? 'VS Code'
+                                        : 'Terminal'}
                                 </button>
                               )
                             })}
@@ -434,7 +448,7 @@ export const SessionDock: React.FC = () => {
                             target="_blank"
                             rel="noopener noreferrer"
                             title="Open VS Code in a separate browser tab"
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold text-zinc-500 hover:text-teal-600 dark:hover:text-teal-300 shrink-0"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold text-zinc-500 hover:text-teal-600 dark:hover:text-teal-300 shrink-0"
                           >
                             <ExternalLink size={11} />
                           </a>
@@ -447,27 +461,44 @@ export const SessionDock: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => {
-                                if (unexpandedItems.length === 1) {
-                                  const target = unexpandedItems[0]
-                                  toggleSplit(dockKey(target.kind, target.id))
-                                } else {
-                                  setSplitPickerOpen((v) => !v)
-                                }
+                                setSplitPickerOpen((v) => !v)
                               }}
-                              title={
-                                unexpandedItems.length === 1
-                                  ? `Split side-by-side with “${unexpandedItems[0].title}”`
-                                  : 'Add another docked session side-by-side'
-                              }
+                              title="Split Terminal & Code in this session, or open another docked session side-by-side"
                               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold text-teal-700 dark:text-teal-300 hover:bg-teal-500/10 cursor-pointer"
                             >
                               <Columns2 size={13} />
                               <span className="hidden lg:inline">Split</span>
                             </button>
-                            {splitPickerOpen && unexpandedItems.length > 1 && (
-                              <div className="absolute right-0 top-full mt-1.5 z-50 w-60 p-1 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg text-xs">
-                                <div className="px-2.5 py-1.5 text-[11px] font-semibold text-zinc-400 border-b border-zinc-100 dark:border-zinc-800">
-                                  Open side-by-side
+                            {splitPickerOpen && (
+                              <div className="absolute right-0 top-full mt-1.5 z-50 w-64 p-1 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg text-xs">
+                                {liveStatus?.is_running && (
+                                  <>
+                                    <div className="px-2.5 py-1.5 text-xs font-semibold text-zinc-400">
+                                      This session container
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSplitPickerOpen(false)
+                                        void selectDockPane(
+                                          paneItem,
+                                          activePane === 'split' ? 'terminal' : 'split'
+                                        )
+                                      }}
+                                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer text-left"
+                                    >
+                                      <Code2 size={12} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                                      <span className="font-medium text-zinc-900 dark:text-zinc-100 truncate">
+                                        {activePane === 'split'
+                                          ? 'Exit Terminal + Code split'
+                                          : 'Terminal + Code / Diff'}
+                                      </span>
+                                    </button>
+                                    <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
+                                  </>
+                                )}
+                                <div className="px-2.5 py-1.5 text-xs font-semibold text-zinc-400">
+                                  Another docked session
                                 </div>
                                 {unexpandedItems.map((cand) => {
                                   const candKey = dockKey(cand.kind, cand.id)
@@ -528,7 +559,7 @@ export const SessionDock: React.FC = () => {
                     ) : liveStatus?.is_running && activePane === 'vscode' && resolvedVsCode ? (
                       <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-zinc-950">
                         {!resolvedVsCode.sandbox.includes('allow-same-origin') && (
-                          <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
+                          <div className="px-3 py-1.5 text-xs bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
                             <span>
                               Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
                             </span>
@@ -553,27 +584,41 @@ export const SessionDock: React.FC = () => {
                           className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
                         />
                       </div>
-                    ) : liveStatus?.is_running && activePane === 'code' ? (
-                      <SessionEditorPane
-                        key={`editor-${key}`}
-                        projectId={paneItem.projectId}
-                        kind={paneItem.kind}
-                        sessionId={paneItem.id}
-                        canContribute={canContributePane}
-                        onOpenPush={() => openFull(paneItem)}
-                        className="flex-1 min-h-0"
-                      />
                     ) : liveStatus ? (
-                      <SessionTerminal
-                        key={key}
-                        url={api.projects.sessionPtyUrl(paneItem.projectId, paneItem.kind, paneItem.id)}
-                        connectingLabel={
-                          paneItem.kind === 'chat' && paneItem.agentHandle
-                            ? `Resuming @${paneItem.agentHandle}…`
-                            : undefined
-                        }
-                        className="flex-1 min-h-0"
-                      />
+                      <div className="flex-1 min-h-0 flex flex-row overflow-hidden">
+                        {activePane !== 'code' && (
+                          <div
+                            className={
+                              activePane === 'split' && liveStatus.is_running
+                                ? 'w-1/2 min-w-0 min-h-0 flex flex-col border-r border-zinc-200 dark:border-zinc-800 shrink-0'
+                                : 'flex-1 min-w-0 min-h-0 flex flex-col'
+                            }
+                          >
+                            <SessionTerminal
+                              key={key}
+                              url={api.projects.sessionPtyUrl(paneItem.projectId, paneItem.kind, paneItem.id)}
+                              connectingLabel={
+                                paneItem.kind === 'chat' && paneItem.agentHandle
+                                  ? `Resuming @${paneItem.agentHandle}…`
+                                  : undefined
+                              }
+                              className="flex-1 min-h-0"
+                            />
+                          </div>
+                        )}
+                        {liveStatus.is_running && (activePane === 'code' || activePane === 'split') && (
+                          <SessionEditorPane
+                            key={`editor-${key}`}
+                            projectId={paneItem.projectId}
+                            kind={paneItem.kind}
+                            sessionId={paneItem.id}
+                            canContribute={canContributePane}
+                            preferDiffOnInitialChange={activePane === 'split'}
+                            onOpenPush={() => openFull(paneItem)}
+                            className="flex-1 min-w-0 min-h-0"
+                          />
+                        )}
+                      </div>
                     ) : (
                       <div className="flex-1 min-h-0 bg-zinc-950" />
                     )}
@@ -638,7 +683,7 @@ export const SessionDock: React.FC = () => {
                 }
               >
                 {isSplitMode && isOpen && (
-                  <span className="w-3.5 h-3.5 rounded bg-teal-500/20 text-[10px] font-mono font-bold text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
+                  <span className="w-3.5 h-3.5 rounded bg-teal-500/20 text-xs font-mono font-bold text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
                     {splitIndex + 1}
                   </span>
                 )}
@@ -695,14 +740,14 @@ export const SessionDock: React.FC = () => {
             type="button"
             onClick={collapseAll}
             title="Collapse all split panes (Ctrl+`)"
-            className="ml-1 px-2 py-1 rounded-md text-[11px] font-semibold text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-900 cursor-pointer shrink-0"
+            className="ml-1 px-2 py-1 rounded-md text-xs font-semibold text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-900 cursor-pointer shrink-0"
           >
             Collapse all
           </button>
         )}
 
         {notice && (
-          <span className="ml-auto pr-2 text-[11px] text-zinc-500 dark:text-zinc-400 shrink-0">
+          <span className="ml-auto pr-2 text-xs text-zinc-500 dark:text-zinc-400 shrink-0">
             {notice}
           </span>
         )}
@@ -788,7 +833,7 @@ const DockCloseMenu: React.FC<{
             className="w-full flex flex-col items-start px-2.5 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer text-left"
           >
             <span className="font-semibold text-zinc-900 dark:text-zinc-100">Remove from dock</span>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
               Keeps running; reopen it from Sessions
             </span>
           </button>
@@ -802,7 +847,7 @@ const DockCloseMenu: React.FC<{
               {stopping ? <Loader2 size={12} className="animate-spin" /> : <Square size={11} />}
               {stopping ? 'Stopping…' : 'Stop session'}
             </span>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
               {item.kind === 'chat'
                 ? 'Ends the agent and puts the workspace to sleep'
                 : 'Ends the terminal and collects artifacts'}

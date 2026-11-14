@@ -240,7 +240,7 @@ export const SdlcStreamAnimation: React.FC = () => {
               }}
             >
               <div
-                className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-mono shadow-md border bg-white dark:bg-[#08121f] whitespace-nowrap transition-colors duration-300 ${pair.inbound.colorClass}`}
+                className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono shadow-md border bg-white dark:bg-[#08121f] whitespace-nowrap transition-colors duration-300 ${pair.inbound.colorClass}`}
               >
                 <span className="relative flex h-2 w-2">
                   <span
@@ -263,7 +263,7 @@ export const SdlcStreamAnimation: React.FC = () => {
               }}
             >
               <div
-                className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-mono shadow-md border bg-white dark:bg-[#08121f] whitespace-nowrap transition-colors duration-300 ${pair.outbound.colorClass}`}
+                className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono shadow-md border bg-white dark:bg-[#08121f] whitespace-nowrap transition-colors duration-300 ${pair.outbound.colorClass}`}
               >
                 <span className="relative flex h-2 w-2">
                   <span

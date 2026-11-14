@@ -549,7 +549,7 @@ export const UserDetail: React.FC<UserDetailProps> = ({
                     <span>{t('details.user.resetThemeToOrgDefault')}</span>
                   </button>
                 ) : (
-                  <span className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500">
+                  <span className="text-xs font-medium text-zinc-400 dark:text-zinc-500">
                     {t('details.user.followingOrgDefault')}
                   </span>
                 )}

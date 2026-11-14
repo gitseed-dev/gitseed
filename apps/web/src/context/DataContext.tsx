@@ -108,12 +108,16 @@ function mergeSeedsById(primary: Seed[], extra: Seed[]): Seed[] {
 }
 
 const PROJECT_MEMBERS_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
+  VIEWS.DASHBOARD,
+  VIEWS.GUIDE,
   VIEWS.PROJECTS,
   VIEWS.SEEDS,
   VIEWS.USERS,
 ])
 
 const PROJECT_POLICIES_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
+  VIEWS.DASHBOARD,
+  VIEWS.GUIDE,
   VIEWS.PROJECTS,
   VIEWS.SEEDS,
   VIEWS.SESSIONS,
@@ -121,6 +125,8 @@ const PROJECT_POLICIES_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
 ])
 
 const PROJECT_REPOS_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
+  VIEWS.DASHBOARD,
+  VIEWS.GUIDE,
   VIEWS.PROJECTS,
   VIEWS.SEEDS,
   VIEWS.SESSIONS,
@@ -599,6 +605,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false
       }
       if (
+        activeView === VIEWS.DASHBOARD ||
+        activeView === VIEWS.GUIDE ||
         activeView === VIEWS.PROJECTS ||
         activeView === VIEWS.USERS ||
         activeView === VIEWS.BACKENDS ||

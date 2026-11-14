@@ -238,7 +238,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                 <h2 className="text-2xl font-extrabold tracking-tight font-heading text-zinc-900 dark:text-zinc-100 truncate">
                   {project.name}
                 </h2>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-300">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-300">
                   {project.visibility === 'public' ? (
                     <>
                       <Globe size={11} className="text-sky-500" />
@@ -262,7 +262,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                         : t('details.project.actions.focus')
                     }
                     aria-pressed={isFocused}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
                       isFocused
                         ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border-teal-500/30'
                         : 'text-zinc-400 border-transparent hover:text-teal-600 dark:hover:text-teal-400 hover:border-zinc-200 dark:hover:border-zinc-700'
@@ -273,7 +273,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                   </button>
                 )}
                 {project.archived_at && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                     <Archive size={11} />
                     <span>Archived</span>
                   </span>
@@ -357,7 +357,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                     {project.tags.map((tag) => (
                       <span
                         key={tag}
-                        className="px-2 py-0.5 rounded-md text-[11px] font-mono bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-400"
+                        className="px-2 py-0.5 rounded-md text-xs font-mono bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-400"
                       >
                         #{tag}
                       </span>

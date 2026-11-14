@@ -632,7 +632,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                 Sandbox &amp; Test Commands
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Default container image, run command, and test suite command for the Run tab and Review agent. Leave blank to fall back to <code className="font-mono text-[11px]">.gitseed/run.json</code> or stack auto-detection.
+                Default container image, run command, and test suite command for the Run tab and Review agent. Leave blank to fall back to <code className="font-mono text-xs">.gitseed/run.json</code> or stack auto-detection.
               </p>
             </div>
           </div>
@@ -772,7 +772,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                 <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                   Deterministic Supervisor Test Gate
                 </span>
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   Enforce passing <code className="font-mono">test_command</code> in container supervisor before Execute &amp; Review succeed
                 </span>
               </div>
@@ -790,7 +790,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                 <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                   Warm Dependency Cache Volume
                 </span>
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   Mount per-project package cache (<code className="font-mono">uv</code>, <code className="font-mono">pip</code>, <code className="font-mono">npm</code>, <code className="font-mono">pnpm</code>, <code className="font-mono">go</code>) across runs
                 </span>
               </div>
@@ -824,7 +824,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                 <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                   Batch Sequential Tasks
                 </span>
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   Execute sequential pending tasks inside the same warm container &amp; agent session (<code className="font-mono">--continue</code>)
                 </span>
               </div>
@@ -842,7 +842,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                 <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                   Warm Seed Workspace Volume
                 </span>
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   Reuse <code className="font-mono">/workspace</code> per seed with incremental <code className="font-mono">git fetch</code> instead of cold cloning
                 </span>
               </div>
@@ -860,7 +860,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                 <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                   Strict CLI Execution Mode
                 </span>
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   Disable single-shot gateway synthesis fallback so CLI errors fail fast
                 </span>
               </div>
@@ -878,7 +878,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                 <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                   Stage New Seeds by Default
                 </span>
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   Create new seeds in Staged status so a human must click Start Work to initiate execution
                 </span>
               </div>
@@ -932,7 +932,7 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                           ? 'Estimated from CLI token reports in Personal Mode'
                           : 'Enforced in real time via LiteLLM per-run virtual key max_budget')
                     }
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide border ${
+                    className={`px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide border ${
                       project.enforcement === 'unpriced'
                         ? 'bg-zinc-500/15 text-zinc-700 dark:text-zinc-300 border-zinc-400/30'
                         : project.enforcement === 'estimated'
@@ -975,11 +975,11 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                   Monthly Project Budget ($ USD)
                 </span>
                 {monthlyBudget.trim() !== '' ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
                     Overridden
                   </span>
                 ) : (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
                     Org default: ${parseFloat(orgMonthlyDefault).toFixed(0)}/mo
                   </span>
                 )}
@@ -1025,11 +1025,11 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                   Per-Seed Budget Cap ($ USD)
                 </span>
                 {seedBudgetCap.trim() !== '' ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
                     Overridden
                   </span>
                 ) : (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
                     Org default: ${parseFloat(orgSeedCapDefault).toFixed(2)}
                   </span>
                 )}
@@ -1075,11 +1075,11 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                   Spend Checkpoint ($ USD)
                 </span>
                 {spendCheckpoint.trim() !== '' ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
                     Overridden
                   </span>
                 ) : (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
                     Org default: ${parseFloat(orgCheckpointDefault).toFixed(2)}
                   </span>
                 )}
@@ -1125,11 +1125,11 @@ export const ProjectSettingsTab: React.FC<ProjectSettingsTabProps> = ({
                   Max Concurrent Runs
                 </span>
                 {maxConcurrentRuns.trim() !== '' ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
                     Overridden
                   </span>
                 ) : (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
                     Org default: {orgConcurrencyDefault} slots
                   </span>
                 )}

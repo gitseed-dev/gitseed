@@ -54,7 +54,7 @@ export const SidebarNavItem: React.FC<SidebarNavItemProps> = ({
             item.badgeCount !== undefined &&
             item.badgeCount > 0 && (
               <span
-                className={`absolute top-1 right-1 min-w-[17px] h-[17px] px-1 text-[9px] font-bold font-mono rounded-full flex items-center justify-center leading-none shadow-xs ${
+                className={`absolute top-1 right-1 min-w-[17px] h-[17px] px-1 text-xs font-bold font-mono rounded-full flex items-center justify-center leading-none shadow-xs ${
                   item.badgeVariant === 'neutral'
                     ? isActive
                       ? 'bg-white text-teal-700'
@@ -102,7 +102,7 @@ export const SidebarNavItem: React.FC<SidebarNavItemProps> = ({
         item.badgeCount !== undefined &&
         item.badgeCount > 0 && (
           <span
-            className={`h-5 min-w-[20px] px-1.5 inline-flex items-center justify-center rounded-full text-[11px] font-bold font-mono leading-none border transition-colors shrink-0 ${
+            className={`h-5 min-w-[20px] px-1.5 inline-flex items-center justify-center rounded-full text-xs font-bold font-mono leading-none border transition-colors shrink-0 ${
               item.badgeVariant === 'neutral'
                 ? isActive
                   ? 'bg-white/20 text-white dark:text-zinc-950 border-white/30 dark:border-zinc-950/20'

@@ -98,7 +98,7 @@ export const EntityTableHeaderRow: React.FC<{ children: React.ReactNode; classNa
 }) => (
   <thead>
     <tr
-      className={`bg-zinc-100/70 dark:bg-zinc-800/60 border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 font-semibold uppercase tracking-wider text-[11px] h-11 ${className}`}
+      className={`bg-zinc-100/70 dark:bg-zinc-800/60 border-b border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 font-semibold uppercase tracking-wider text-xs h-11 ${className}`}
     >
       {children}
     </tr>

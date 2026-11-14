@@ -315,7 +315,7 @@ export const BackendModelsTab: React.FC<BackendModelsTabProps> = ({
                         {model.id}
                       </span>
                       {isDefault && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-sans font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30 shrink-0">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-sans font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30 shrink-0">
                           Default
                         </span>
                       )}

@@ -28,25 +28,41 @@ export function canStartSessions(user: { org_role?: string } | null, project: Pr
   return user?.org_role === 'admin' || project.my_role === 'maintainer' || project.my_role === 'developer'
 }
 
-/** Agents for chat: enabled, stage agents first, assistants (e.g. @coordinator) after. */
+const NON_CODING_STAGE_HANDLE_RE = /^(?:[a-z0-9_]+-)?(?:ideator|planner|reviewer|merger)$/i
+
+/** Agents for interactive coding sessions: enabled execute/coder stage agents (and custom stage agents). */
 export function useSessionAgents(projectId: string | null): { agents: Agent[]; defaultAgent: Agent | null } {
   const { agents, policies, projectPoliciesByProject } = useData()
   return useMemo(() => {
-    const list = agents
-      .filter((a) => a.enabled && !a.archived_at)
-      .sort((a, b) => Number(a.kind === 'assistant') - Number(b.kind === 'assistant'))
+    const enabledAgents = agents.filter((a) => a.enabled && !a.archived_at && a.kind !== 'assistant')
     const effective =
       (projectId && projectPoliciesByProject[projectId]?.length
         ? projectPoliciesByProject[projectId]
         : policies) || []
     const implementAgentId = effective.find((p) => p.stage === 'execute')?.agent_id
-    const planAgentId = effective.find((p) => p.stage === 'plan')?.agent_id
+    const executePolicyAgentIds = new Set<string>(
+      [
+        ...policies.filter((p) => p.stage === 'execute').map((p) => p.agent_id),
+        ...Object.values(projectPoliciesByProject)
+          .flat()
+          .filter((p) => p.stage === 'execute')
+          .map((p) => p.agent_id),
+      ].filter((id): id is string => Boolean(id))
+    )
+
+    const codingAgents = enabledAgents.filter(
+      (a) =>
+        executePolicyAgentIds.has(a.id) ||
+        a.handle === 'coder' ||
+        a.handle.endsWith('-coder') ||
+        !NON_CODING_STAGE_HANDLE_RE.test(a.handle)
+    )
+    const list = codingAgents.length > 0 ? codingAgents : enabledAgents
+
     const defaultAgent =
-      list.find((a) => a.handle === 'coder') ||
       list.find((a) => a.id === implementAgentId) ||
-      list.find((a) => a.id === planAgentId) ||
-      list.find((a) => a.handle === 'architect') ||
-      list.find((a) => a.kind !== 'assistant') ||
+      list.find((a) => a.handle === 'coder') ||
+      list.find((a) => a.handle.endsWith('-coder')) ||
       list[0] ||
       null
     return { agents: list, defaultAgent }

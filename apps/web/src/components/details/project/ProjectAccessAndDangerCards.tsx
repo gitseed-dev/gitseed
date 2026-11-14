@@ -102,7 +102,7 @@ export const ProjectAccessAndDangerCards: React.FC<
                         <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">
                           {backend.name}
                         </span>
-                        <span className="text-[11px] font-mono text-zinc-400 uppercase">
+                        <span className="text-xs font-mono text-zinc-400 uppercase">
                           {backend.type} · {backend.provider}
                         </span>
                       </div>

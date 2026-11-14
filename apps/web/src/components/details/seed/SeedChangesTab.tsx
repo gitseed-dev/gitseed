@@ -569,7 +569,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                   <>
                     <span className="text-zinc-300 dark:text-zinc-600">·</span>
                     <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border ${
                         isMergedState
                           ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300 border-violet-500/25'
                           : prStatus?.state === 'closed'
@@ -651,7 +651,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowChecks((v) => !v)}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border transition cursor-pointer ${
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border transition cursor-pointer ${
                         prStatus.ci_status === 'passing'
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25 hover:bg-emerald-500/20'
                           : prStatus.ci_status === 'failing'
@@ -684,7 +684,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                   )}
 
                 {prStatus?.has_conflicts && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-500/12 text-rose-700 dark:text-rose-300 border border-rose-500/25">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-rose-500/12 text-rose-700 dark:text-rose-300 border border-rose-500/25">
                     <AlertCircle size={11} />
                     <span>Merge conflicts</span>
                   </span>
@@ -805,7 +805,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                             <span>Browse code at this commit</span>
                           </span>
                           {commitShaRef && (
-                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
                               {commitShaRef.slice(0, 7)}
                             </span>
                           )}
@@ -928,7 +928,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
         {showPrBody && prStatus?.body && (
           <div className="px-4 py-3 border-t border-zinc-200/70 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 text-xs">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 Pull Request Description
               </span>
               <button
@@ -947,7 +947,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
         {(showChecks || prStatus?.ci_status === 'failing') &&
           prChecks.length > 0 && (
             <div className="border-t border-zinc-200/70 dark:border-zinc-800 divide-y divide-zinc-200/60 dark:divide-zinc-800/70">
-              <div className="px-4 py-2 bg-zinc-50 dark:bg-zinc-800/60 text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center justify-between">
+              <div className="px-4 py-2 bg-zinc-50 dark:bg-zinc-800/60 text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center justify-between">
                 <span>
                   CI / Pipeline Checks ({prChecks.length})
                   {prStatus?.ci_status === 'pending' && ' · Live updating'}
@@ -977,17 +977,17 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                           {chk.name}
                         </span>
                         {workflowLabel && (
-                          <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[10px] font-mono text-zinc-500 dark:text-zinc-400 shrink-0">
+                          <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-xs font-mono text-zinc-500 dark:text-zinc-400 shrink-0">
                             {workflowLabel}
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-2.5 shrink-0 text-zinc-400">
                         {dur && (
-                          <span className="font-mono text-[11px]">{dur}</span>
+                          <span className="font-mono text-xs">{dur}</span>
                         )}
                         <span
-                          className={`text-[11px] font-medium capitalize ${
+                          className={`text-xs font-medium capitalize ${
                             chk.status === 'passed'
                               ? 'text-emerald-600 dark:text-emerald-400'
                               : chk.status === 'failed'
@@ -1016,7 +1016,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                       </div>
                     </div>
                     {chk.summary && chk.status === 'failed' && (
-                      <pre className="mt-1 p-2 rounded-lg bg-rose-500/5 border border-rose-500/20 text-[11px] font-mono text-rose-700 dark:text-rose-300 whitespace-pre-wrap overflow-x-auto max-h-36">
+                      <pre className="mt-1 p-2 rounded-lg bg-rose-500/5 border border-rose-500/20 text-xs font-mono text-rose-700 dark:text-rose-300 whitespace-pre-wrap overflow-x-auto max-h-36">
                         {chk.summary}
                       </pre>
                     )}
@@ -1030,7 +1030,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
         {showPrConversation && (
           <div className="border-t border-zinc-200/70 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/30 p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 Pull Request Conversation &amp; Reviews ({prComments.length})
               </span>
               <button
@@ -1080,7 +1080,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                           </span>
                           {kindBadgeLabel && (
                             <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                              className={`px-1.5 py-0.5 rounded text-xs font-semibold uppercase ${
                                 normalizedKind === 'review_approved' ||
                                 normalizedKind === 'approved'
                                   ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
@@ -1094,7 +1094,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                             </span>
                           )}
                           {cm.path && (
-                            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
                               {cm.path}
                               {cm.line ? `:${cm.line}` : ''}
                             </span>
@@ -1174,7 +1174,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
               <span>
                 Reverted unauthorized agent modifications to protected project paths before pushing:{' '}
               </span>
-              <code className="font-mono text-[11px]">
+              <code className="font-mono text-xs">
                 {changes.blocked_paths_reverted.join(', ')}
               </code>
             </div>
@@ -1184,7 +1184,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
       {/* Collapsible Commits Drawer */}
       {showCommits && commits.length > 0 && (
         <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700/80 bg-white dark:bg-zinc-900 overflow-hidden divide-y divide-zinc-200/70 dark:divide-zinc-800">
-          <div className="px-4 py-2.5 bg-zinc-50 dark:bg-zinc-800/60 text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center justify-between">
+          <div className="px-4 py-2.5 bg-zinc-50 dark:bg-zinc-800/60 text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center justify-between">
             <span>Commits ({commits.length})</span>
             <button
               type="button"
@@ -1201,7 +1201,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <GitCommit size={14} className="text-teal-500 shrink-0" />
-                <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80 shrink-0">
+                <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80 shrink-0">
                   {c.short_sha}
                 </span>
                 <span className="font-medium text-zinc-800 dark:text-zinc-200 truncate">
@@ -1277,7 +1277,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                   className="w-full h-8 pl-8 pr-2.5 text-xs rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                 />
               </div>
-              <div className="flex items-center justify-between px-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+              <div className="flex items-center justify-between px-1 text-xs text-zinc-500 dark:text-zinc-400">
                 <span>
                   Showing {filteredFiles.length} of {files.length}
                 </span>
@@ -1354,7 +1354,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <span
-                        className={`w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center border shrink-0 ${meta.badgeClass}`}
+                        className={`w-4 h-4 rounded text-xs font-mono font-bold flex items-center justify-center border shrink-0 ${meta.badgeClass}`}
                       >
                         {meta.short}
                       </span>
@@ -1365,7 +1365,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                         {file.path}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1 font-mono text-[10px] shrink-0">
+                    <div className="flex items-center gap-1 font-mono text-xs shrink-0">
                       {file.additions > 0 && (
                         <span className="text-emerald-600 dark:text-emerald-400">
                           +{file.additions}
@@ -1421,7 +1421,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                   <button
                     type="button"
                     onClick={() => setDraftDiffNotes([])}
-                    className="text-[11px] font-medium text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 cursor-pointer"
+                    className="text-xs font-medium text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 cursor-pointer"
                   >
                     Clear all
                   </button>
@@ -1436,7 +1436,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                     className="flex-1 h-8 px-2.5 text-xs rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                   />
                   {prStatus?.number != null && (
-                    <label className="inline-flex items-center gap-1.5 text-[11px] text-zinc-600 dark:text-zinc-300 select-none cursor-pointer shrink-0">
+                    <label className="inline-flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300 select-none cursor-pointer shrink-0">
                       <input
                         type="checkbox"
                         checked={postReviewToRemotePr}
@@ -1499,7 +1499,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                           : file.path}
                       </span>
                       <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border shrink-0 ${meta.badgeClass}`}
+                        className={`px-1.5 py-0.5 rounded text-xs font-semibold border shrink-0 ${meta.badgeClass}`}
                       >
                         {meta.label}
                       </span>
@@ -1531,7 +1531,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                               setDraftNoteBody('')
                             }
                           }}
-                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border transition cursor-pointer ${
                             annotatingFilePath === file.path ||
                             (draftNotesByPath[file.path]?.length ?? 0) > 0
                               ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border-teal-500/35'
@@ -1655,7 +1655,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                                 type="button"
                                 onClick={() => setDraftNoteSide('modified')}
                                 title="Targeting deleted (original) line — click to switch to modified side"
-                                className="px-2 h-8 rounded-xl text-[11px] font-semibold bg-rose-500/12 text-rose-700 dark:text-rose-300 border border-rose-500/25 shrink-0 cursor-pointer"
+                                className="px-2 h-8 rounded-xl text-xs font-semibold bg-rose-500/12 text-rose-700 dark:text-rose-300 border border-rose-500/25 shrink-0 cursor-pointer"
                               >
                                 Deleted line
                               </button>
@@ -1692,7 +1692,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                       {draftNotesByPath[file.path] &&
                         draftNotesByPath[file.path].length > 0 && (
                           <div className="p-3 border-t border-teal-500/25 bg-teal-500/5 dark:bg-teal-950/20 space-y-2">
-                            <div className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300 flex items-center gap-1.5">
+                            <div className="text-xs font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300 flex items-center gap-1.5">
                               <MessageSquare size={12} className="text-teal-500" />
                               <span>
                                 Queued Notes for @coder on {file.path} (
@@ -1705,7 +1705,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                                 className="p-2.5 rounded-xl border border-teal-500/25 bg-white dark:bg-zinc-900 text-xs flex items-start justify-between gap-2"
                               >
                                 <div className="space-y-0.5 min-w-0">
-                                  <div className="flex items-center gap-1.5 font-mono text-[11px] text-teal-700 dark:text-teal-300 font-semibold">
+                                  <div className="flex items-center gap-1.5 font-mono text-xs text-teal-700 dark:text-teal-300 font-semibold">
                                     <span>
                                       {note.line
                                         ? `${note.path}:${note.line}${note.side === 'original' ? ' (deleted line)' : ''}`
@@ -1732,7 +1732,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                       {inlineCommentsByPath[file.path] &&
                         inlineCommentsByPath[file.path].length > 0 && (
                           <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/70 space-y-2">
-                            <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
+                            <div className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
                               <MessageSquare size={12} className="text-teal-500" />
                               <span>
                                 PR Review Comments on {file.path} (
@@ -1748,7 +1748,7 @@ export const SeedChangesTab: React.FC<SeedChangesTabProps> = ({
                                   <span className="font-semibold text-zinc-900 dark:text-zinc-100">
                                     @{ic.author}
                                     {ic.line ? (
-                                      <span className="ml-1.5 font-mono text-[11px] text-zinc-500">
+                                      <span className="ml-1.5 font-mono text-xs text-zinc-500">
                                         line {ic.line}
                                       </span>
                                     ) : null}

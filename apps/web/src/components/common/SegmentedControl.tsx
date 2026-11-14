@@ -61,7 +61,7 @@ export function SegmentedControl<T extends string = string>({
             <span>{item.label}</span>
             {item.count !== undefined && (
               <span
-                className={`ml-1 sm:ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none ${
+                className={`ml-1 sm:ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-semibold leading-none ${
                   isActive
                     ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
                     : 'bg-zinc-200/60 dark:bg-zinc-700/50 text-zinc-500 dark:text-zinc-400'

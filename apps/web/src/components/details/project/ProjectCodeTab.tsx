@@ -535,7 +535,7 @@ export const ProjectCodeTab: React.FC<ProjectCodeTabProps> = ({
                   {activeRepo.full_name}
                 </span>
                 {activeRepo.is_primary && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
                     <Star size={9} className="fill-current" />
                     Primary
                   </span>

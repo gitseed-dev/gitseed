@@ -216,7 +216,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
                     setEditingSlug((prev) => !prev)
                     if (!editingSlug) setIsSlugCustom(true)
                   }}
-                  className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                  className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
                 >
                   {editingSlug ? 'done' : 'edit slug'}
                 </button>

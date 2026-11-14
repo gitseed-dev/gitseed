@@ -162,7 +162,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectTemplate(null)}
-                className="text-[11px] font-semibold text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 cursor-pointer"
+                className="text-xs font-semibold text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 cursor-pointer"
               >
                 Clear preset
               </button>
@@ -206,7 +206,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
                 setEditingHandle((prev) => !prev)
                 if (!editingHandle) setIsHandleCustom(true)
               }}
-              className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+              className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
             >
               {editingHandle ? 'done' : 'edit handle'}
             </button>
@@ -270,7 +270,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
                   <RuntimeIcon runtime={rt.id} size={14} />
                   <span>{rt.shortLabel}</span>
                   {isMissing && (
-                    <span className="absolute -top-2 right-1 px-1.5 py-px rounded-md bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 text-[9px] font-semibold uppercase tracking-wide">
+                    <span className="absolute -top-2 right-1 px-1.5 py-px rounded-md bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 text-xs font-semibold uppercase tracking-wide">
                       Not installed
                     </span>
                   )}
@@ -278,14 +278,14 @@ export const AgentForm: React.FC<AgentFormProps> = ({
               )
             })}
           </div>
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1.5 leading-relaxed">
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5 leading-relaxed">
             {runtimeDef.description}
           </p>
           {selectedRuntimeMissing && (
             <div
               role="alert"
               data-testid="runtime-not-installed-warning"
-              className="mt-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 flex gap-2 text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed"
+              className="mt-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 flex gap-2 text-xs text-amber-900 dark:text-amber-200 leading-relaxed"
             >
               <AlertTriangle size={13} className="shrink-0 mt-0.5" />
               <span>
@@ -378,7 +378,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
                     {runtimeDef.authSummary}
                   </p>
                 </div>
@@ -521,12 +521,12 @@ export const AgentForm: React.FC<AgentFormProps> = ({
                             <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate">
                               {sk.name}
                             </span>
-                            <span className="font-mono text-[11px] text-zinc-400">
+                            <span className="font-mono text-xs text-zinc-400">
                               {sk.slug}
                             </span>
                           </div>
                           {sk.description && (
-                            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate mt-0.5">
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate mt-0.5">
                               {sk.description}
                             </p>
                           )}
@@ -590,7 +590,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
                           <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate">
                             {tb.name}
                           </span>
-                          <span className="text-[11px] text-zinc-400">
+                          <span className="text-xs text-zinc-400">
                             ({formatProviderName(tb.provider)})
                           </span>
                         </div>
@@ -650,7 +650,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
                           <span className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate">
                             {b.name}
                           </span>
-                          <span className="text-[11px] text-zinc-400">
+                          <span className="text-xs text-zinc-400">
                             ({formatProviderName(b.provider)})
                           </span>
                         </div>

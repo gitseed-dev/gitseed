@@ -382,6 +382,47 @@ def sync_keyring_to_files():
                         }})
             except Exception:
                 pass
+        try:
+            s_res = subprocess.run(
+                ["secret-tool", "search", "--all", "xdg:schema", "org.freedesktop.Secret.Generic"],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=3,
+            )
+            combined_out = (s_res.stdout or "") + "\\n" + (s_res.stderr or "")
+            cur_label = "Google Antigravity Session"
+            cur_secret = ""
+            cur_attrs = {{}}
+            for raw_ln in combined_out.splitlines() + ["["]:
+                ln = raw_ln.strip()
+                if ln.startswith("["):
+                    if cur_secret and cur_attrs.get("service") != "gitseed-init":
+                        if not token_val:
+                            token_val = cur_secret
+                        sig = (tuple(sorted(cur_attrs.items())), cur_secret)
+                        if sig not in seen_keys:
+                            seen_keys.add(sig)
+                            items.append({{
+                                "label": cur_label,
+                                "attributes": dict(cur_attrs),
+                                "secret": cur_secret,
+                            }})
+                    cur_label = "Google Antigravity Session"
+                    cur_secret = ""
+                    cur_attrs = {{}}
+                elif "=" in ln:
+                    k_part, v_part = ln.split("=", 1)
+                    k_part = k_part.strip()
+                    v_part = v_part.strip()
+                    if k_part == "label":
+                        cur_label = v_part or cur_label
+                    elif k_part == "secret":
+                        cur_secret = v_part
+                    elif k_part.startswith("attribute.") and k_part != "attribute.xdg:schema":
+                        cur_attrs[k_part[10:]] = v_part
+        except Exception:
+            pass
 
     login_kr = home / ".local" / "share" / "keyrings" / "login.keyring"
     if login_kr.is_file():
@@ -426,6 +467,7 @@ def sync_keyring_to_files():
             for out_file in (
                 kr_out_dir / "antigravity-oauth-token",
                 agy_cli_dir / "antigravity-oauth-token",
+                home / ".gemini" / "jetski-standalone-oauth-token",
             ):
                 out_file.write_text(token_val, encoding="utf-8")
                 os.chmod(out_file, 0o600)
@@ -823,8 +865,22 @@ def _has_verified_provider_credentials(provider: str, bundle: dict[str, str]) ->
                 or lower_key.endswith("-oauth-token")
                 or "/keyring/" in lower_key
                 or lower_key.endswith("oauth_creds.json")
-                or (lower_key.endswith("jetski_state.pbtxt") and bool(lower_val.strip()))
-                or (lower_key.endswith("acp-auth-state.json") and bool(lower_val.strip()))
+                or (
+                    lower_key.endswith("jetski_state.pbtxt")
+                    and any(
+                        tok in lower_val
+                        for tok in ("oauth", "token", "ya29.", "1//")
+                    )
+                )
+                or (
+                    lower_key.endswith("acp-auth-state.json")
+                    and (
+                        '"authenticated": true' in lower_val
+                        or '"authenticated":true' in lower_val
+                        or '"access_token"' in lower_val
+                        or '"refresh_token"' in lower_val
+                    )
+                )
                 or (
                     lower_key.endswith("auth.json")
                     and (
@@ -924,12 +980,28 @@ async def _harvest_credentials_from_container(
     if not _has_verified_provider_credentials(provider, bundle):
         return {}
 
-    # Mirror .gemini/oauth_creds.json into .gemini/antigravity-cli/oauth_creds.json for Antigravity compatibility
-    if provider == "antigravity" and ".gemini/oauth_creds.json" in bundle:
-        bundle.setdefault(
-            ".gemini/antigravity-cli/oauth_creds.json",
-            bundle[".gemini/oauth_creds.json"],
-        )
+    # Mirror .gemini/oauth_creds.json <-> .gemini/antigravity-cli/oauth_creds.json and token files for Antigravity compatibility
+    if provider == "antigravity":
+        if ".gemini/oauth_creds.json" in bundle:
+            bundle.setdefault(
+                ".gemini/antigravity-cli/oauth_creds.json",
+                bundle[".gemini/oauth_creds.json"],
+            )
+        if ".gemini/antigravity-cli/oauth_creds.json" in bundle:
+            bundle.setdefault(
+                ".gemini/oauth_creds.json",
+                bundle[".gemini/antigravity-cli/oauth_creds.json"],
+            )
+        if ".gemini/antigravity-cli/antigravity-oauth-token" in bundle:
+            bundle.setdefault(
+                ".gemini/jetski-standalone-oauth-token",
+                bundle[".gemini/antigravity-cli/antigravity-oauth-token"],
+            )
+        if ".gemini/jetski-standalone-oauth-token" in bundle:
+            bundle.setdefault(
+                ".gemini/antigravity-cli/antigravity-oauth-token",
+                bundle[".gemini/jetski-standalone-oauth-token"],
+            )
 
     bundle = validate_and_filter_cli_auth_bundle(
         bundle, provider=provider, strict=False
@@ -1436,9 +1508,30 @@ async def submit_cli_auth_code(
 
     final_status = await get_cli_auth_status(session, admin, backend_id)
     if not final_status.get("authenticated") and not final_status.get("error"):
+        log_out = str(final_status.get("log_output") or "")
+        detected_err = None
+        for ln in reversed(log_out.splitlines()):
+            s_ln = ln.strip()
+            lower_ln = s_ln.lower()
+            if any(
+                kw in lower_ln
+                for kw in (
+                    "oauth error:",
+                    "invalid_grant",
+                    "failed to authenticate",
+                    "error exchanging",
+                    "invalid authorization code",
+                )
+            ):
+                detected_err = s_ln
+                break
         final_status["error"] = (
-            "Authorization code submitted, but credential exchange has not completed yet. "
-            "Check the terminal output above for errors or wait a few seconds for sign-in to finish."
+            f"Verification failed: {detected_err}"
+            if detected_err
+            else (
+                "Authorization code submitted, but credential exchange has not completed yet. "
+                "Check the terminal output above for errors or wait a few seconds for sign-in to finish."
+            )
         )
     return final_status
 

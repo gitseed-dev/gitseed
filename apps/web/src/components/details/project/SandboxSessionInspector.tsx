@@ -186,7 +186,7 @@ export const SandboxArtifactsList: React.FC<{
         </form>
       )}
 
-      <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
         {isTerminal ? (
           <>
             Only files you keep are stored: use <strong>Save file</strong>, or put them in{' '}
@@ -223,7 +223,7 @@ export const SandboxArtifactsList: React.FC<{
                     <span className="text-xs font-bold font-mono text-zinc-900 dark:text-zinc-100 truncate group-hover:text-teal-600 dark:group-hover:text-teal-400">
                       {art.name}
                     </span>
-                    <span className="text-[11px] font-mono text-zinc-400 truncate">
+                    <span className="text-xs font-mono text-zinc-400 truncate">
                       {art.rel_path} · {formatBytes(art.size_bytes)}
                       {art.rule ? ` · ${art.rule === 'saved' ? 'saved by you' : `rule: ${art.rule}`}` : ''}
                     </span>
@@ -380,14 +380,14 @@ export const SandboxSessionInspector: React.FC<SandboxSessionInspectorProps> = (
               )}
             </span>
 
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono bg-zinc-100 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-mono bg-zinc-100 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
               <Box size={11} />
               {selectedSession.image}
             </span>
 
             {selectedSession.exit_code !== null && (
               <span
-                className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold ${
+                className={`px-2 py-0.5 rounded-md text-xs font-mono font-semibold ${
                   selectedSession.exit_code === 0
                     ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
                     : 'bg-rose-500/10 text-rose-700 dark:text-rose-300'
@@ -449,7 +449,7 @@ export const SandboxSessionInspector: React.FC<SandboxSessionInspectorProps> = (
               <Package size={14} className="text-amber-500" />
               Collected Build Artifacts ({uniqueArtifacts.length})
             </span>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">
               commit {selectedSession.head_sha.slice(0, 7) || 'HEAD'}
             </span>
           </div>
@@ -474,7 +474,7 @@ export const SandboxSessionInspector: React.FC<SandboxSessionInspectorProps> = (
                       <span className="text-xs font-bold font-mono text-zinc-900 dark:text-zinc-100 truncate group-hover:text-teal-600 dark:group-hover:text-teal-400">
                         {art.name}
                       </span>
-                      <span className="text-[11px] font-mono text-zinc-400 truncate">
+                      <span className="text-xs font-mono text-zinc-400 truncate">
                         {art.rel_path} · {formatBytes(art.size_bytes)} · sha256:
                         {art.sha256.slice(0, 8)}
                       </span>
@@ -493,7 +493,7 @@ export const SandboxSessionInspector: React.FC<SandboxSessionInspectorProps> = (
 
       {/* Terminal Output */}
       <div className="flex flex-col bg-zinc-950 text-zinc-100">
-        <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+        <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-xs font-mono text-zinc-400">
           <span className="inline-flex items-center gap-1.5">
             <Terminal size={12} className="text-teal-400" />
             <span>
@@ -583,7 +583,7 @@ export const SandboxSessionInspector: React.FC<SandboxSessionInspectorProps> = (
                   })
                 }
                 title="Close stdin (send EOF / Ctrl+D)"
-                className="inline-flex items-center gap-1 h-8 px-2.5 rounded-lg text-[11px] font-mono font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-1 h-8 px-2.5 rounded-lg text-xs font-mono font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition cursor-pointer disabled:opacity-50"
               >
                 <span>EOF (Ctrl+D)</span>
               </button>

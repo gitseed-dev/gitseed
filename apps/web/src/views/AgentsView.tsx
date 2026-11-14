@@ -325,13 +325,31 @@ export const AgentsView: React.FC = () => {
     requestSort: requestAgentSort,
   } = useTableSort<Agent, AgentSortKey>({
     items: filteredAgents,
-    initialKey: 'name',
+    initialKey: 'stages',
     initialDirection: 'asc',
     customComparators: {
       name: (a, b) => a.name.localeCompare(b.name),
-      stages: (a, b) =>
-        getAgentAssignedStages(b.id, policies).length -
-        getAgentAssignedStages(a.id, policies).length,
+      stages: (a, b) => {
+        const stageOrder: Record<string, number> = {
+          ideate: 0,
+          plan: 1,
+          execute: 2,
+          review: 3,
+          merge: 4,
+        }
+        const stagesA = getAgentAssignedStages(a.id, policies)
+        const stagesB = getAgentAssignedStages(b.id, policies)
+        const groupA = stagesA.length > 0 ? 0 : a.kind === 'assistant' ? 1 : 2
+        const groupB = stagesB.length > 0 ? 0 : b.kind === 'assistant' ? 1 : 2
+        if (groupA !== groupB) return groupA - groupB
+        if (groupA === 0) {
+          const minStageA = stageOrder[stagesA[0]] ?? 99
+          const minStageB = stageOrder[stagesB[0]] ?? 99
+          if (minStageA !== minStageB) return minStageA - minStageB
+          if (stagesA.length !== stagesB.length) return stagesB.length - stagesA.length
+        }
+        return a.name.localeCompare(b.name)
+      },
       runtime: (a, b) =>
         `${a.runtime}:${a.model}`.localeCompare(`${b.runtime}:${b.model}`),
       status: (a, b) => (a.enabled === b.enabled ? 0 : a.enabled ? -1 : 1),

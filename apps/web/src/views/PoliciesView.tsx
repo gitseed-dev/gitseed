@@ -298,7 +298,7 @@ export const PoliciesView: React.FC = () => {
                           </div>
                           <p
                             title={meta.shortDescription}
-                            className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate mt-1"
+                            className="text-xs text-zinc-500 dark:text-zinc-400 truncate mt-1"
                           >
                             {meta.shortDescription}
                           </p>
@@ -325,7 +325,7 @@ export const PoliciesView: React.FC = () => {
                               @{agent.handle}
                             </span>
                             {!agent.enabled && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                              <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                                 Paused
                               </span>
                             )}
@@ -356,7 +356,7 @@ export const PoliciesView: React.FC = () => {
                               {pol.min_approvers}+ {formatRoleLabel(pol.min_approver_role)}
                             </span>
                           </div>
-                          <div className="text-[11px] text-zinc-500 dark:text-zinc-400 pl-5 truncate">
+                          <div className="text-xs text-zinc-500 dark:text-zinc-400 pl-5 truncate">
                             {pol.allow_self_approval ? 'Self-ok' : 'Distinct approver'}
                             {pol.allow_auto_approve ? ' · Auto-ok' : ''}
                           </div>
@@ -399,7 +399,7 @@ export const PoliciesView: React.FC = () => {
                           )}
                           {pol.instructions && (
                             <span
-                              className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80"
+                              className="ml-1 px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80"
                               title="Has stage instructions"
                             >
                               Instructions
@@ -430,7 +430,7 @@ export const PoliciesView: React.FC = () => {
                           {meta.isRequired && (
                             <span
                               title="Required stage (cannot be skipped)"
-                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200/80 dark:border-zinc-700/80"
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200/80 dark:border-zinc-700/80"
                             >
                               <Lock size={9} />
                               <span>Required</span>

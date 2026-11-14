@@ -461,7 +461,7 @@ const ProjectModalForm: React.FC<{
                 <button
                   type="button"
                   onClick={() => setEditingSlug(false)}
-                  className="text-[11px] font-sans font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                  className="text-xs font-sans font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
                 >
                   {t('modals.project.slugDone')}
                 </button>
@@ -477,7 +477,7 @@ const ProjectModalForm: React.FC<{
                     if (!slugTouched) setSlug(effectiveSlug)
                     setEditingSlug(true)
                   }}
-                  className="text-[11px] font-sans font-semibold text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 cursor-pointer"
+                  className="text-xs font-sans font-semibold text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 cursor-pointer"
                 >
                   [{t('modals.project.slugEdit')}]
                 </button>
@@ -507,7 +507,7 @@ const ProjectModalForm: React.FC<{
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder={t('modals.project.descPlaceholder')}
-            className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 resize-y"
+            className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 resize-y"
           />
         </div>
 
@@ -520,7 +520,7 @@ const ProjectModalForm: React.FC<{
             value={tagsInput}
             onChange={(e) => setTagsInput(e.target.value)}
             placeholder={t('modals.project.tagsPlaceholder')}
-            className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
+            className="w-full px-3.5 py-2 text-sm font-mono rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
           />
         </div>
       </div>
@@ -540,7 +540,7 @@ const ProjectModalForm: React.FC<{
                     <button
                       type="button"
                       onClick={() => setRepoMode('existing')}
-                      className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      className={`px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                         repoMode === 'existing'
                           ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                           : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -551,7 +551,7 @@ const ProjectModalForm: React.FC<{
                     <button
                       type="button"
                       onClick={() => setRepoMode('create')}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                         repoMode === 'create'
                           ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                           : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -566,7 +566,7 @@ const ProjectModalForm: React.FC<{
                   type="button"
                   data-testid="project-repo-mode-local"
                   onClick={() => setRepoMode('local')}
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                     repoMode === 'local'
                       ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                       : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -579,7 +579,7 @@ const ProjectModalForm: React.FC<{
                   <button
                     type="button"
                     onClick={() => setRepoMode('none')}
-                    className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                    className={`px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                       repoMode === 'none'
                         ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                         : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -646,7 +646,7 @@ const ProjectModalForm: React.FC<{
             <div className="flex flex-col gap-2.5">
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
                 <div className="sm:col-span-9">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
                     Local Workspace Directory <span className="text-zinc-400">(optional)</span>
                   </label>
                   <div className="relative flex items-center">
@@ -660,12 +660,12 @@ const ProjectModalForm: React.FC<{
                       value={localWorkspacePath}
                       onChange={(e) => setLocalWorkspacePath(e.target.value)}
                       placeholder="Leave blank for managed repo (or /workspaces/my-app)"
-                      className="w-full h-9 pl-8 pr-3 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
+                      className="w-full h-9 pl-8 pr-3 text-sm font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                     />
                   </div>
                 </div>
                 <div className="sm:col-span-3">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
                     Default Branch
                   </label>
                   <div className="relative flex items-center">
@@ -678,12 +678,12 @@ const ProjectModalForm: React.FC<{
                       value={defaultBranch}
                       onChange={(e) => setDefaultBranch(e.target.value)}
                       placeholder="main"
-                      className="w-full h-9 pl-7 pr-2.5 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
+                      className="w-full h-9 pl-7 pr-2.5 text-sm font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                     />
                   </div>
                 </div>
               </div>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
                 Initializes an On-Device Local Git repository served over Git Smart HTTP (<code className="font-mono">/api/v1/local-git/{effectiveSlug || 'project'}.git</code>) with no GitHub or GitLab account required. Leave blank for a managed repo under <code className="font-mono">./data/workspaces/</code>, or enter a mounted path under <code className="font-mono">/workspaces/...</code> (configure <code className="font-mono">LOCAL_WORKSPACES_HOST_DIR</code> in <code className="font-mono">.env</code> when running via Docker Compose).
               </p>
             </div>
@@ -694,13 +694,13 @@ const ProjectModalForm: React.FC<{
           ) : repoMode === 'create' ? (
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
               <div className="sm:col-span-4">
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
                   Git Provider
                 </label>
                 <select
                   value={gitBackendId}
                   onChange={(e) => setGitBackendId(e.target.value)}
-                  className="w-full h-9 px-3 text-xs font-medium rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer"
+                  className="w-full h-9 px-3 text-sm font-medium rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer"
                 >
                   {gitBackends.map((b) => (
                     <option key={b.id} value={b.id}>
@@ -710,7 +710,7 @@ const ProjectModalForm: React.FC<{
                 </select>
               </div>
               <div className="sm:col-span-5">
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
                   New Repository Name (or org/repo)
                 </label>
                 <div className="relative flex items-center">
@@ -731,19 +731,19 @@ const ProjectModalForm: React.FC<{
                       setNewRepoName(e.target.value)
                     }}
                     placeholder={effectiveSlug || 'my-new-repo'}
-                    className="w-full h-9 pl-8 pr-3 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
+                    className="w-full h-9 pl-8 pr-3 text-sm font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                   />
                 </div>
               </div>
               <div className="sm:col-span-3">
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
                   Repo Visibility
                 </label>
                 <div className="grid grid-cols-2 gap-1 h-9 p-1 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80">
                   <button
                     type="button"
                     onClick={() => setNewRepoPrivate(true)}
-                    className={`rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
+                    className={`rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
                       newRepoPrivate
                         ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300'
                         : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -755,7 +755,7 @@ const ProjectModalForm: React.FC<{
                   <button
                     type="button"
                     onClick={() => setNewRepoPrivate(false)}
-                    className={`rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
+                    className={`rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
                       !newRepoPrivate
                         ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300'
                         : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -770,7 +770,7 @@ const ProjectModalForm: React.FC<{
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
               <div className="sm:col-span-4">
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
                   Git Provider
                 </label>
                 <select
@@ -781,7 +781,7 @@ const ProjectModalForm: React.FC<{
                     setDefaultBranch('main')
                     setUseCustomRepoInput(false)
                   }}
-                  className="w-full h-9 px-3 text-xs font-medium rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer"
+                  className="w-full h-9 px-3 text-sm font-medium rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer"
                 >
                   {gitBackends.map((b) => (
                     <option key={b.id} value={b.id}>
@@ -792,7 +792,7 @@ const ProjectModalForm: React.FC<{
               </div>
               <div className="sm:col-span-5">
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">
                     Repository
                   </label>
                   {availableBackendRepos.length > 0 && useCustomRepoInput && (
@@ -802,7 +802,7 @@ const ProjectModalForm: React.FC<{
                         setUseCustomRepoInput(false)
                         setRepoFullName('')
                       }}
-                      className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                      className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
                     >
                       Select from list
                     </button>
@@ -826,7 +826,7 @@ const ProjectModalForm: React.FC<{
                         setDefaultBranch(matched.default_branch || 'main')
                       }
                     }}
-                    className="w-full h-9 px-3 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-teal-500 cursor-pointer"
+                    className="w-full h-9 px-3 text-sm font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-teal-500 cursor-pointer"
                   >
                     <option value="">Select a repository...</option>
                     {availableBackendRepos.map((r) => (
@@ -852,13 +852,13 @@ const ProjectModalForm: React.FC<{
                       value={repoFullName}
                       onChange={(e) => setRepoFullName(e.target.value)}
                       placeholder="acme/core-api"
-                      className="w-full h-9 pl-8 pr-3 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
+                      className="w-full h-9 pl-8 pr-3 text-sm font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                     />
                   </div>
                 )}
               </div>
               <div className="sm:col-span-3">
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">
                   Default Branch
                 </label>
                 <div className="relative flex items-center">
@@ -871,7 +871,7 @@ const ProjectModalForm: React.FC<{
                     value={defaultBranch}
                     onChange={(e) => setDefaultBranch(e.target.value)}
                     placeholder="main"
-                    className="w-full h-9 pl-7 pr-2.5 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
+                    className="w-full h-9 pl-7 pr-2.5 text-sm font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                   />
                 </div>
               </div>
@@ -889,13 +889,13 @@ const ProjectModalForm: React.FC<{
                 Stage Agents
               </label>
               {customizedStages.length > 0 ? (
-                <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/25">
+                <span className="px-2 py-0.5 rounded-md text-xs font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/25">
                   {customizedStages.length === 1
                     ? '1 stage customized'
                     : `${customizedStages.length} stages customized`}
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
+                <span className="px-2 py-0.5 rounded-md text-xs font-medium bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
                   Org default policy
                 </span>
               )}
@@ -911,7 +911,7 @@ const ProjectModalForm: React.FC<{
                 <span>Reset to org defaults</span>
               </button>
             ) : (
-              <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">
                 Preset to organization defaults
               </span>
             )}
@@ -940,7 +940,7 @@ const ProjectModalForm: React.FC<{
                   } ${isSkipped ? 'opacity-65' : ''}`}
                 >
                   <div className="flex items-center gap-2 min-w-[125px] sm:min-w-[150px] shrink-0">
-                    <span className="w-5 h-5 rounded-md bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700/80 font-mono text-[11px] font-bold text-zinc-500 dark:text-zinc-400 flex items-center justify-center shrink-0">
+                    <span className="w-5 h-5 rounded-md bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700/80 font-mono text-xs font-bold text-zinc-500 dark:text-zinc-400 flex items-center justify-center shrink-0">
                       {meta.stepNumber}
                     </span>
                     <StageBadge stage={stage} />
@@ -965,7 +965,7 @@ const ProjectModalForm: React.FC<{
                         onChange={(e) =>
                           handleStageSelectionChange(stage, e.target.value)
                         }
-                        className="w-full h-8 pl-7 pr-6 text-xs font-medium rounded-lg bg-zinc-50 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700/80 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer truncate"
+                        className="w-full h-8 pl-7 pr-6 text-sm font-medium rounded-lg bg-zinc-50 dark:bg-zinc-800/70 border border-zinc-200 dark:border-zinc-700/80 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer truncate"
                       >
                         {(orgDefaultVal === '' || selectedVal === '') && (
                           <option value="">
@@ -1047,13 +1047,13 @@ const ProjectModalForm: React.FC<{
               <button
                 type="button"
                 onClick={() => setMonthlyBudget('')}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
               >
                 <RotateCcw size={11} />
                 <span>{t('modals.project.budgetReset')}</span>
               </button>
             ) : (
-              <span className="text-[11px] text-zinc-400 font-mono">
+              <span className="text-xs text-zinc-400 font-mono">
                 ${orgDefaultBudget} {t('modals.project.budgetOrgDefault')}
               </span>
             )}
@@ -1071,7 +1071,7 @@ const ProjectModalForm: React.FC<{
               placeholder={`${orgDefaultBudget} (${t('modals.project.budgetOrgDefault')})`}
               className="w-full h-10 pl-7 pr-12 text-sm font-mono rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
             />
-            <span className="absolute right-3 text-[11px] font-mono text-zinc-400 pointer-events-none">
+            <span className="absolute right-3 text-xs font-mono text-zinc-400 pointer-events-none">
               / mo
             </span>
           </div>

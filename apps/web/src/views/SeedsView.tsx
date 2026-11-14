@@ -618,7 +618,7 @@ export const SeedsView: React.FC<SeedsViewProps> = ({
                         {(needsYou || seed.tags.length > 0) && (
                           <div className="flex items-center gap-2 flex-wrap mt-1">
                             {needsYou && (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                              <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                                 <AlertTriangle size={11} />
                                 <span>{getSeedAttentionReason(seed)}</span>
                               </span>
@@ -626,7 +626,7 @@ export const SeedsView: React.FC<SeedsViewProps> = ({
                             {seed.tags.slice(0, 3).map((tag) => (
                               <span
                                 key={tag}
-                                className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[10px] font-mono text-zinc-600 dark:text-zinc-400 border border-zinc-200/70 dark:border-zinc-700/70"
+                                className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-xs font-mono text-zinc-600 dark:text-zinc-400 border border-zinc-200/70 dark:border-zinc-700/70"
                               >
                                 #{tag}
                               </span>
@@ -661,7 +661,7 @@ export const SeedsView: React.FC<SeedsViewProps> = ({
                     {/* 4. Status */}
                     <td className="py-3.5 px-4 whitespace-nowrap">
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${getSeedStatusClasses(
+                        className={`inline-flex items-center px-2 py-0.5 rounded-md border text-xs font-semibold ${getSeedStatusClasses(
                           seed.status
                         )}`}
                       >

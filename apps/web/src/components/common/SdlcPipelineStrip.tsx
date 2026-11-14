@@ -240,7 +240,7 @@ export const SdlcPipelineStrip: React.FC<SdlcPipelineStripProps> = ({
                   </span>
                   <span>{stage.name}</span>
                   <span
-                    className={`font-mono text-[11px] px-1.5 py-0.5 rounded-full border transition-colors ml-0.5 min-w-[20px] text-center leading-none ${
+                    className={`font-mono text-xs px-1.5 py-0.5 rounded-full border transition-colors ml-0.5 min-w-[20px] text-center leading-none ${
                       isSelected
                         ? 'font-bold text-teal-700 dark:text-teal-300 bg-teal-500/15 border-teal-500/30'
                         : hasItems

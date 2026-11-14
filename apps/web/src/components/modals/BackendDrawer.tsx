@@ -1286,7 +1286,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
             >
               <span>Repositories</span>
               {gitRepositories.length > 0 && (
-                <span className="px-1.5 py-0.5 rounded-full text-[11px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+                <span className="px-1.5 py-0.5 rounded-full text-xs font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
                   {gitRepositories.filter((r) => r.enabled).length}/{gitRepositories.length}
                 </span>
               )}
@@ -1303,7 +1303,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
             >
               <span>Models</span>
               {modelEntries.length > 0 && (
-                <span className="px-1.5 py-0.5 rounded-full text-[11px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+                <span className="px-1.5 py-0.5 rounded-full text-xs font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
                   {modelEntries.filter((m) => m.enabled).length}/{modelEntries.length}
                 </span>
               )}

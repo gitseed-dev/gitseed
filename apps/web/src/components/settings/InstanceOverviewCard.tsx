@@ -112,7 +112,7 @@ export const AboutGitSeedCard: React.FC<AboutGitSeedCardProps> = ({ version }) =
             <p className="text-xs text-zinc-600 dark:text-zinc-300 mt-0.5">
               Self-Hosted AI Software Engineering Control Plane
             </p>
-            <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">
               Copyright 2026 Trent Seed · Apache-2.0 License
             </p>
           </div>

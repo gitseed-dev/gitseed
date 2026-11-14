@@ -278,7 +278,7 @@ export const AgentsWorkingCard: React.FC<AgentsWorkingCardProps> = ({
           {visibleSessions.length > 0 && (
             <div className="pt-2.5 mt-1">
               <div className="flex items-center justify-between px-2.5 pb-1">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
                   Your sessions
                 </span>
                 {mySessions.length > MAX_SESSIONS && (

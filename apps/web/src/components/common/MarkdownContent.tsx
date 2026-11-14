@@ -128,7 +128,7 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = ({
           className="max-w-full min-w-0 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700/80 bg-zinc-50 dark:bg-zinc-950 text-zinc-800 dark:text-zinc-100 my-1"
         >
           {lang && (
-            <div className="px-3 py-1 text-[11px] font-mono uppercase tracking-wider text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-900/90 border-b border-zinc-200 dark:border-zinc-800 truncate">
+            <div className="px-3 py-1 text-xs font-mono uppercase tracking-wider text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-900/90 border-b border-zinc-200 dark:border-zinc-800 truncate">
               {lang}
             </div>
           )}

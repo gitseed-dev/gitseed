@@ -152,7 +152,7 @@ export const NewSessionMenu: React.FC<NewSessionMenuProps> = ({
                   <Sprout size={14} className="text-teal-600 dark:text-teal-400 shrink-0" />
                   <span>Create a seed</span>
                 </span>
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400">
                   Pipeline
                 </span>
               </button>
@@ -173,7 +173,7 @@ export const NewSessionMenu: React.FC<NewSessionMenuProps> = ({
               <Bot size={14} className="text-teal-600 dark:text-teal-400 shrink-0" />
             )}
             <span className="truncate">
-              Code with <span className="font-mono text-[11px]">@{defaultAgent?.handle || 'coder'}</span>
+              Code with <span className="font-mono text-xs">@{defaultAgent?.handle || 'coder'}</span>
             </span>
           </button>
           {otherAgents.length > 0 && (
@@ -201,7 +201,7 @@ export const NewSessionMenu: React.FC<NewSessionMenuProps> = ({
                       className={itemClass}
                     >
                       <AgentProviderIcon agent={a} backends={backends} size={14} />
-                      <span className="font-mono text-[11px] truncate">@{a.handle}</span>
+                      <span className="font-mono text-xs truncate">@{a.handle}</span>
                     </button>
                   ))}
                 </div>
@@ -228,7 +228,7 @@ export const NewSessionMenu: React.FC<NewSessionMenuProps> = ({
               <Box size={14} className="text-teal-600 dark:text-teal-400 shrink-0" />
               <span>Sandbox Terminal</span>
             </span>
-            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
               Container
             </span>
           </button>
