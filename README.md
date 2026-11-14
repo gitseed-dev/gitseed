@@ -16,7 +16,9 @@ Self-hosted, vendor-neutral control plane for AI software engineering. Run **Ope
 
 </div>
 
-https://github.com/user-attachments/assets/67b63c58-e663-4dc9-94ab-fbe65c0fecd6
+<!-- Paste bare GitHub user-attachments .mp4 URL on its own line below (outside <div> so GitHub renders the native video player):
+https://github.com/user-attachments/assets/YOUR-ASSET-UUID-HERE
+-->
 
 ---
 
