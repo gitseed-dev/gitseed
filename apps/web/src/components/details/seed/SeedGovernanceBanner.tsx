@@ -35,6 +35,7 @@ import {
   resolveRunContextWindow,
 } from '../../../utils/format'
 import { safeExternalUrl } from '../../../utils/gitUrls'
+import { filterStageAgentsForStage } from '../../../utils/agents'
 import { STAGE_LABELS } from '../../../utils/seeds'
 import type {
   Approval,
@@ -467,13 +468,10 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
       .map((r) => r.agent_id)
       .filter((id): id is string => Boolean(id))
   )
-  const eligibleSecondOpinionAgents = agents.filter(
-    (a) =>
-      !a.archived_at &&
-      a.enabled &&
-      a.kind === 'stage' &&
-      !usedCycleAgentIds.has(a.id)
-  )
+  const eligibleSecondOpinionAgents = filterStageAgentsForStage(
+    agents.filter((a) => !a.archived_at && a.enabled && a.kind === 'stage'),
+    seed.stage
+  ).filter((a) => !usedCycleAgentIds.has(a.id))
   const canRequestSecondOpinion =
     isAwaitingApproval &&
     isMultiOpinionStage &&

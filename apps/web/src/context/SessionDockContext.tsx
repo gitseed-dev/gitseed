@@ -14,26 +14,35 @@ export interface DockedSession {
 
 interface DockState {
   items: DockedSession[]
+  expandedKeys: string[]
   expandedKey: string | null
 }
 
 interface SessionDockContextValue extends DockState {
-  /** Add (or refresh) a session in the dock; expands it by default. */
-  dock: (item: DockedSession, opts?: { expand?: boolean }) => void
+  /** Add (or refresh) a session in the dock; expands it by default (or adds side-by-side when split: true). */
+  dock: (item: DockedSession, opts?: { expand?: boolean; split?: boolean }) => void
   undock: (key: string) => void
-  /** Expand one docked session (null collapses the drawer). */
+  /** Expand a single docked session (null collapses all panes). */
   setExpanded: (key: string | null) => void
+  /** Toggle a docked session into or out of the side-by-side split view. */
+  toggleSplit: (key: string) => void
+  /** Collapse a single pane from the expanded view while keeping any other split panes open. */
+  collapsePane: (key: string) => void
+  /** Collapse all expanded panes back to the dock bar. */
+  collapseAll: () => void
   updateTitle: (key: string, title: string) => void
   updatePane: (key: string, pane: 'terminal' | 'code' | 'vscode', vscodeUrl?: string | null) => void
   isDocked: (key: string) => boolean
+  isExpanded: (key: string) => boolean
 }
 
-/** Keep the dock calm: a few sessions at most; docking another drops the oldest. */
-export const MAX_DOCKED_SESSIONS = 3
+/** Keep the dock calm: up to 4 docked sessions and up to 3 side-by-side split panes. */
+export const MAX_DOCKED_SESSIONS = 4
+export const MAX_SPLIT_PANES = 3
 
 export const dockKey = (kind: string, id: string) => `${kind}:${id}`
 
-const EMPTY: DockState = { items: [], expandedKey: null }
+const EMPTY: DockState = { items: [], expandedKeys: [], expandedKey: null }
 
 const SessionDockContext = createContext<SessionDockContextValue | null>(null)
 
@@ -42,6 +51,24 @@ function stripVsCodeUrl(item: DockedSession): DockedSession {
   const copy: DockedSession = { ...item }
   delete copy.vscodeUrl
   return copy
+}
+
+function normalizeExpandedKeys(rawKeys: string[], items: DockedSession[]): DockState {
+  const validSet = new Set(items.map((i) => dockKey(i.kind, i.id)))
+  const seen = new Set<string>()
+  const expandedKeys: string[] = []
+  for (const k of rawKeys) {
+    if (typeof k === 'string' && validSet.has(k) && !seen.has(k)) {
+      seen.add(k)
+      expandedKeys.push(k)
+    }
+  }
+  const capped = expandedKeys.slice(-MAX_SPLIT_PANES)
+  return {
+    items,
+    expandedKeys: capped,
+    expandedKey: capped[0] ?? null,
+  }
 }
 
 function load(storageKey: string): DockState {
@@ -58,11 +85,12 @@ function load(storageKey: string): DockState {
           .map(stripVsCodeUrl)
           .slice(-MAX_DOCKED_SESSIONS)
       : []
-    const expandedKey =
-      typeof parsed.expandedKey === 'string' && items.some((i) => dockKey(i.kind, i.id) === parsed.expandedKey)
-        ? parsed.expandedKey
-        : null
-    return { items, expandedKey }
+    const rawExpandedKeys = Array.isArray(parsed.expandedKeys)
+      ? parsed.expandedKeys
+      : typeof parsed.expandedKey === 'string'
+        ? [parsed.expandedKey]
+        : []
+    return normalizeExpandedKeys(rawExpandedKeys, items)
   } catch {
     return EMPTY
   }
@@ -85,6 +113,7 @@ export const SessionDockProvider: React.FC<{ children: React.ReactNode }> = ({ c
     try {
       const persisted: DockState = {
         items: state.items.map(stripVsCodeUrl),
+        expandedKeys: state.expandedKeys,
         expandedKey: state.expandedKey,
       }
       window.localStorage.setItem(storageKey, JSON.stringify(persisted))
@@ -93,29 +122,70 @@ export const SessionDockProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   }, [state, storageKey])
 
-  const dock = useCallback((item: DockedSession, opts?: { expand?: boolean }) => {
+  const dock = useCallback((item: DockedSession, opts?: { expand?: boolean; split?: boolean }) => {
     const key = dockKey(item.kind, item.id)
     setState((prev) => {
       const rest = prev.items.filter((i) => dockKey(i.kind, i.id) !== key)
       const nextItems = [...rest, item].slice(-MAX_DOCKED_SESSIONS)
-      const candidateExpandedKey = opts?.expand === false ? prev.expandedKey : key
-      const expandedKey =
-        candidateExpandedKey && nextItems.some((i) => dockKey(i.kind, i.id) === candidateExpandedKey)
-          ? candidateExpandedKey
-          : null
-      return { items: nextItems, expandedKey }
+      if (opts?.expand === false) {
+        return normalizeExpandedKeys(prev.expandedKeys, nextItems)
+      }
+      if (opts?.split) {
+        const nextKeys = prev.expandedKeys.includes(key)
+          ? prev.expandedKeys
+          : [...prev.expandedKeys.slice(-(MAX_SPLIT_PANES - 1)), key]
+        return normalizeExpandedKeys(nextKeys, nextItems)
+      }
+      if (prev.expandedKeys.includes(key)) {
+        return normalizeExpandedKeys(prev.expandedKeys, nextItems)
+      }
+      const nextKeys =
+        prev.expandedKeys.length <= 1
+          ? [key]
+          : [...prev.expandedKeys.slice(0, -1), key]
+      return normalizeExpandedKeys(nextKeys, nextItems)
     })
   }, [])
 
   const undock = useCallback((key: string) => {
-    setState((prev) => ({
-      items: prev.items.filter((i) => dockKey(i.kind, i.id) !== key),
-      expandedKey: prev.expandedKey === key ? null : prev.expandedKey,
-    }))
+    setState((prev) => {
+      const nextItems = prev.items.filter((i) => dockKey(i.kind, i.id) !== key)
+      const nextKeys = prev.expandedKeys.filter((k) => k !== key)
+      return normalizeExpandedKeys(nextKeys, nextItems)
+    })
   }, [])
 
   const setExpanded = useCallback((key: string | null) => {
-    setState((prev) => ({ ...prev, expandedKey: key }))
+    setState((prev) => normalizeExpandedKeys(key ? [key] : [], prev.items))
+  }, [])
+
+  const toggleSplit = useCallback((key: string) => {
+    setState((prev) => {
+      if (prev.expandedKeys.includes(key)) {
+        return normalizeExpandedKeys(
+          prev.expandedKeys.filter((k) => k !== key),
+          prev.items
+        )
+      }
+      const nextKeys =
+        prev.expandedKeys.length >= MAX_SPLIT_PANES
+          ? [...prev.expandedKeys.slice(0, MAX_SPLIT_PANES - 1), key]
+          : [...prev.expandedKeys, key]
+      return normalizeExpandedKeys(nextKeys, prev.items)
+    })
+  }, [])
+
+  const collapsePane = useCallback((key: string) => {
+    setState((prev) =>
+      normalizeExpandedKeys(
+        prev.expandedKeys.filter((k) => k !== key),
+        prev.items
+      )
+    )
+  }, [])
+
+  const collapseAll = useCallback(() => {
+    setState((prev) => normalizeExpandedKeys([], prev.items))
   }, [])
 
   const updateTitle = useCallback((key: string, title: string) => {
@@ -145,11 +215,15 @@ export const SessionDockProvider: React.FC<{ children: React.ReactNode }> = ({ c
       dock,
       undock,
       setExpanded,
+      toggleSplit,
+      collapsePane,
+      collapseAll,
       updateTitle,
       updatePane,
       isDocked: (key: string) => state.items.some((i) => dockKey(i.kind, i.id) === key),
+      isExpanded: (key: string) => state.expandedKeys.includes(key),
     }),
-    [state, dock, undock, setExpanded, updateTitle, updatePane]
+    [state, dock, undock, setExpanded, toggleSplit, collapsePane, collapseAll, updateTitle, updatePane]
   )
 
   return <SessionDockContext.Provider value={value}>{children}</SessionDockContext.Provider>
@@ -165,4 +239,3 @@ export function useSessionDock(): SessionDockContextValue {
 export function useOptionalSessionDock(): SessionDockContextValue | null {
   return useContext(SessionDockContext)
 }
-

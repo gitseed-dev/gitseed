@@ -26,6 +26,7 @@ import {
   getBackendRepositories,
   getEnabledBackendRepositories,
 } from '../../utils/backends'
+import { filterStageAgentsForStage } from '../../utils/agents'
 import { buildNewRepoWebUrl, safeExternalUrl } from '../../utils/gitUrls'
 import { ORDERED_STAGES, STAGE_METADATA } from '../../utils/policies'
 import { deriveProjectSlug } from '../../utils/projects'
@@ -658,7 +659,7 @@ const ProjectModalForm: React.FC<{
                       data-testid="local-workspace-path-input"
                       value={localWorkspacePath}
                       onChange={(e) => setLocalWorkspacePath(e.target.value)}
-                      placeholder="/Users/you/code/my-app (or leave blank for managed repo)"
+                      placeholder="Leave blank for managed repo (or /workspaces/my-app)"
                       className="w-full h-9 pl-8 pr-3 text-xs font-mono rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-teal-500"
                     />
                   </div>
@@ -683,7 +684,7 @@ const ProjectModalForm: React.FC<{
                 </div>
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                Initializes an On-Device Local Git repository served over Git Smart HTTP (<code className="font-mono">/api/v1/local-git/{effectiveSlug || 'project'}.git</code>) with no GitHub or GitLab account required. Supply a local folder path to link or initialize existing source files.
+                Initializes an On-Device Local Git repository served over Git Smart HTTP (<code className="font-mono">/api/v1/local-git/{effectiveSlug || 'project'}.git</code>) with no GitHub or GitLab account required. Leave blank for a managed repo under <code className="font-mono">./data/workspaces/</code>, or enter a mounted path under <code className="font-mono">/workspaces/...</code> (configure <code className="font-mono">LOCAL_WORKSPACES_HOST_DIR</code> in <code className="font-mono">.env</code> when running via Docker Compose).
               </p>
             </div>
           ) : repoMode === 'none' || gitBackends.length === 0 ? (
@@ -923,6 +924,11 @@ const ProjectModalForm: React.FC<{
               const orgDefaultVal = orgDefaultByStage[stage] ?? ''
               const isCustomized = selectedVal !== orgDefaultVal
               const isSkipped = selectedVal === '__skip__'
+              const stageSpecificAgents = filterStageAgentsForStage(
+                stageAgents,
+                stage,
+                [selectedVal, orgDefaultVal]
+              )
 
               return (
                 <div
@@ -967,7 +973,7 @@ const ProjectModalForm: React.FC<{
                             {orgDefaultVal === '' ? ' (Org default)' : ''}
                           </option>
                         )}
-                        {stageAgents.map((agent) => (
+                        {stageSpecificAgents.map((agent) => (
                           <option key={agent.id} value={agent.id}>
                             {agent.name} (@{agent.handle})
                             {agent.model ? ` · ${agent.model}` : ''}
@@ -1122,7 +1128,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       title={
         project ? t('modals.project.editTitle') : t('modals.project.createTitle')
       }
-      size="2xl"
+      size="3xl"
     >
       {isOpen && (
         <ProjectModalForm

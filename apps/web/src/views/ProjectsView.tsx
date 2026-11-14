@@ -33,10 +33,7 @@ import {
   EntityTableHeaderRow,
   SortableTh,
 } from '../components/layout/EntityPageLayout'
-import {
-  ProjectModal,
-  type ProjectRepoSetupMode,
-} from '../components/modals/ProjectModal'
+import { ProjectModal } from '../components/modals/ProjectModal'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import { useTranslation } from '../context/I18nContext'
@@ -88,9 +85,6 @@ export const ProjectsView: React.FC = () => {
   const [filterTab, setFilterTab] = useState<ProjectFilterTab>('active')
   const [searchQuery, setSearchQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
-  const [modalInitialRepoMode, setModalInitialRepoMode] = useState<
-    ProjectRepoSetupMode | undefined
-  >(undefined)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [archiveConfirmProject, setArchiveConfirmProject] =
     useState<Project | null>(null)
@@ -504,37 +498,19 @@ export const ProjectsView: React.FC = () => {
         showViewModeToggle
         primaryAction={
           canCreateProject ? (
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                data-testid="link-local-workspace-btn"
-                onClick={() => {
-                  setEditingProject(null)
-                  setModalInitialRepoMode('local')
-                  setModalOpen(true)
-                }}
-                className="rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700/80 cursor-pointer"
-              >
-                <FolderGit2 size={14} className="text-teal-600 dark:text-teal-400" />
-                <span>Link Local Folder</span>
-              </Button>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                onClick={() => {
-                  setEditingProject(null)
-                  setModalInitialRepoMode(undefined)
-                  setModalOpen(true)
-                }}
-                className="rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm shadow-teal-600/20 cursor-pointer"
-              >
-                <Plus size={15} />
-                <span>{t('projects.create')}</span>
-              </Button>
-            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEditingProject(null)
+                setModalOpen(true)
+              }}
+              className="rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm shadow-teal-600/20 cursor-pointer"
+            >
+              <Plus size={15} />
+              <span>{t('projects.create')}</span>
+            </Button>
           ) : undefined
         }
         filterTabs={
@@ -592,34 +568,18 @@ export const ProjectsView: React.FC = () => {
                 {t('projects.emptySubtitle')}
               </p>
               {canCreateProject && (
-                <div className="mt-1 flex items-center gap-2 flex-wrap justify-center">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => {
-                      setEditingProject(null)
-                      setModalInitialRepoMode(undefined)
-                      setModalOpen(true)
-                    }}
-                    className="rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus size={14} />
-                    <span>{t('projects.createFirst')}</span>
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      setEditingProject(null)
-                      setModalInitialRepoMode('local')
-                      setModalOpen(true)
-                    }}
-                    className="rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700/80 cursor-pointer"
-                  >
-                    <FolderGit2 size={14} className="text-teal-600 dark:text-teal-400" />
-                    <span>Link Local Folder</span>
-                  </Button>
-                </div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    setEditingProject(null)
+                    setModalOpen(true)
+                  }}
+                  className="mt-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>{t('projects.createFirst')}</span>
+                </Button>
               )}
             </div>
           ) : (
@@ -999,11 +959,9 @@ export const ProjectsView: React.FC = () => {
         isOpen={modalOpen}
         onClose={() => {
           setModalOpen(false)
-          setModalInitialRepoMode(undefined)
           setEditingProject(null)
         }}
         project={editingProject}
-        initialRepoMode={modalInitialRepoMode}
         onSaved={(saved) => {
           if (!editingProject) {
             navigateToDetail(VIEWS.PROJECTS, saved.slug || saved.id)

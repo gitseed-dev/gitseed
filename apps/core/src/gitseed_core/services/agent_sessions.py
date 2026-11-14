@@ -1410,7 +1410,7 @@ async def _execute_session_turn_background(
                 synth_model = (
                     ag_session.model
                     if ag_session.model != "default"
-                    else (extract_enabled_model_ids(models_backend) or ["claude-sonnet-4-5"])[0]
+                    else (extract_enabled_model_ids(models_backend) or ["claude-sonnet-5-5"])[0]
                 )
                 session_vk = await create_session_virtual_key(
                     session_id=ag_session.id,

@@ -450,7 +450,12 @@ def test_sibling_prefix_traversal_rejected_in_adapters_and_git_ops(
 
 
 def test_normalize_google_cli_model_preserves_gemini_3_1_and_maps_aliases() -> None:
-    """Real `gemini-3.1-*` models must be preserved without downgrading to `gemini-2.5-*`."""
+    """Real `gemini-4-*`, `gemini-3.8-*`, and `gemini-3.1-*` models must be preserved without downgrading."""
+    assert _normalize_google_cli_model("gemini-4-hydrogen") == "gemini-4-hydrogen"
+    assert _normalize_google_cli_model("gemini-4-argon") == "gemini-4-argon"
+    assert _normalize_google_cli_model("gemini-4-carbon") == "gemini-4-carbon"
+    assert _normalize_google_cli_model("gemini-3.8-flash") == "gemini-3.8-flash"
+    assert _normalize_google_cli_model("gemini-3.5-flash") == "gemini-3.5-flash"
     assert _normalize_google_cli_model("gemini-3.1-pro") == "gemini-3.1-pro"
     assert _normalize_google_cli_model("gemini-3.1-pro-preview") == "gemini-3.1-pro-preview"
     assert _normalize_google_cli_model("gemini-3.1-flash-lite") == "gemini-3.1-flash-lite"
@@ -530,7 +535,7 @@ def test_opencode_secret_isolation_oauth_prefix_and_codex_auth(
     oauth_cmd = oc_oauth.build_command("Plan feature")
     assert oauth_cmd[oauth_cmd.index("--model") + 1] == "anthropic/claude-sonnet-4-5"
 
-    # Codex OAuth fallback writes both top-level and nested `tokens.access_token`, and API key mode uses `wire_api = "chat"`
+    # Codex OAuth fallback writes both top-level and nested `tokens.access_token`, and API key mode uses `wire_api = "responses"`
     codex_oauth = CodexAdapter(
         ctx={
             "runtime": "codex",
@@ -560,7 +565,7 @@ def test_opencode_secret_isolation_oauth_prefix_and_codex_auth(
     )
     codex_gw.prepare_workspace()
     codex_toml = (home_dir / ".codex" / "config.toml").read_text(encoding="utf-8")
-    assert 'wire_api = "chat"' in codex_toml
+    assert 'wire_api = "responses"' in codex_toml
 
 
 def test_extract_json_object_reverse_scan_with_earlier_braces() -> None:

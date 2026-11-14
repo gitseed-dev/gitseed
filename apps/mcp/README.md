@@ -6,9 +6,12 @@
 
 ## Connecting Your IDE
 
-### Option 1: `stdio` Transport (Local Binary)
+### Option 1: `stdio` Transport (Local Binary from Repository Checkout)
 
 ```bash
+# Install `gitseed-mcp` onto your PATH from the repository root
+uv tool install --editable ./apps/mcp --with ./packages/common
+
 claude mcp add gitseed \
   -e GITSEED_API_URL=http://localhost:8420 \
   -e GITSEED_TOKEN=gsp_your_personal_access_token \

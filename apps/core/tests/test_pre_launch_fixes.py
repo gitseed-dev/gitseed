@@ -876,3 +876,358 @@ def test_antigravity_pty_auth_script_requires_agy_and_syncs_headless_keyring() -
     url_doc_only, _ = _extract_auth_url_and_code("Docs: https://antigravity.google/docs/cli")
     assert url_doc_only is None
 
+
+@pytest.mark.asyncio
+async def test_antigravity_auto_provisions_stage_agents_when_added_after_local_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gitseed_core.models.policy import Policy
+    from gitseed_core.services.cli_auth import _has_verified_provider_credentials
+
+    from conftest import _exec_result, _make_session
+
+    local_backend = Backend(
+        id="bnd_local_ollama",
+        name="Local Model Inference",
+        type=BackendType.INFERENCE,
+        provider="ollama",
+        endpoint="http://localhost:11434/v1",
+        config={
+            "auth_mode": "api_key",
+            "models": [{"id": "qwen2.5-coder:14b", "enabled": True}],
+            "is_sdlc_default": True,
+        },
+        enabled=True,
+    )
+
+    # Case A: Antigravity added in api_key mode without a secret key (optional api_key)
+    agy_keyless = Backend(
+        id="bnd_agy_keyless",
+        name="Google Antigravity",
+        type=BackendType.INFERENCE,
+        provider="antigravity",
+        config={
+            "auth_mode": "api_key",
+            "models": [{"id": "gemini-2.5-pro", "enabled": True}],
+            "auto_create_agents": True,
+            "set_sdlc_default": False,
+        },
+        secrets_encrypted=encrypt_secrets({}),
+        enabled=True,
+    )
+    assert backends_svc._is_inference_backend_ready(agy_keyless) is True
+
+    sess = _make_session()
+    sess.scalar = AsyncMock(return_value=1)
+    sess.execute = AsyncMock(
+        return_value=_exec_result(scalars_all=[local_backend, agy_keyless])
+    )
+    fake_policies = {
+        st: Policy(stage=st, agent_id=f"agt_open_{st.value}") for st in SeedStage
+    }
+    monkeypatch.setattr(
+        backends_svc, "ensure_org_policies", AsyncMock(return_value=fake_policies)
+    )
+    provision_spy = AsyncMock(return_value=[])
+    monkeypatch.setattr(backends_svc, "provision_sdlc_agents_for_backend", provision_spy)
+
+    await backends_svc.maybe_auto_provision_sdlc_agents(sess, agy_keyless)
+    provision_spy.assert_awaited_once_with(
+        sess,
+        agy_keyless,
+        force_switch=False,
+        assign_policies=False,
+        overwrite_existing=False,
+    )
+
+    # Case B: Antigravity saved in cli_oauth mode with cli_auth_status="pending" and auto_create_agents=True
+    provision_spy.reset_mock()
+    agy_pending_oauth = Backend(
+        id="bnd_agy_oauth_pending",
+        name="Google Antigravity OAuth",
+        type=BackendType.INFERENCE,
+        provider="antigravity",
+        config={
+            "auth_mode": "cli_oauth",
+            "personal_mode": True,
+            "personal_mode_acknowledged": True,
+            "cli_auth_status": "pending",
+            "models": [{"id": "gemini-2.5-pro", "enabled": True}],
+            "auto_create_agents": True,
+            "set_sdlc_default": False,
+        },
+        secrets_encrypted=encrypt_secrets({}),
+        enabled=True,
+    )
+    assert backends_svc._is_inference_backend_ready(agy_pending_oauth) is False
+    await backends_svc.maybe_auto_provision_sdlc_agents(sess, agy_pending_oauth)
+    provision_spy.assert_awaited_once_with(
+        sess,
+        agy_pending_oauth,
+        force_switch=False,
+        assign_policies=False,
+        overwrite_existing=False,
+    )
+
+    # Case C: Antigravity CLI auth credential verification accepts jetski_state.pbtxt, acp-auth-state.json, and auth.json keyring dumps
+    assert (
+        _has_verified_provider_credentials(
+            "antigravity",
+            {
+                ".config/Antigravity/User/globalStorage/jetski_state.pbtxt": 'oauth_token: "ya29.abc"\n'
+            },
+        )
+        is True
+    )
+    assert (
+        _has_verified_provider_credentials(
+            "antigravity",
+            {".gemini/antigravity-cli/acp-auth-state.json": '{"authenticated": true}'},
+        )
+        is True
+    )
+    assert (
+        _has_verified_provider_credentials(
+            "antigravity",
+            {
+                ".gemini/antigravity-cli/auth.json": '{"keyring_items": {"item_0": "secret-val"}}'
+            },
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_xai_opencode_default_and_coordinator_personal_mode_and_bootstrap_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify xAI OpenCode SDLC provisioning, Personal Mode coordinator handling, Alembic lock release, and finalize retry."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import httpx
+    from gitseed_common.schemas.agent import CoordinatorChatMessage, CoordinatorChatRequest
+    from gitseed_core import bootstrap as bootstrap_mod
+    from gitseed_core.services import coordinator as coordinator_svc
+    from gitseed_core.services import session_workspace as session_ws_svc
+    from gitseed_runner import broker_modes
+
+    from conftest import _exec_result, _make_session  # type: ignore[import-not-found]
+
+    # 1. xAI API-key backend provisions OpenCode stage agents out of the box (while honoring explicit grok-build)
+    xai_api = Backend(
+        id="bnd_xai_api",
+        name="xAI Grok API",
+        type=BackendType.INFERENCE,
+        provider="xai",
+        config={"models": [{"id": "grok-4.7", "enabled": True}]},
+        secrets_encrypted=encrypt_secrets({"api_key": "xai-key"}),
+        enabled=True,
+    )
+    assert backends_svc.resolve_provider_sdlc_profile(xai_api) == (
+        "grok",
+        "Grok",
+        AgentRuntime.OPENCODE,
+        "grok-4.7",
+    )
+
+    xai_explicit = Backend(
+        id="bnd_xai_cli",
+        name="xAI Grok CLI",
+        type=BackendType.INFERENCE,
+        provider="xai",
+        config={"runtime": "grok-build"},
+        secrets_encrypted=encrypt_secrets({"api_key": "xai-key"}),
+        enabled=True,
+    )
+    assert backends_svc.resolve_provider_sdlc_profile(xai_explicit) == (
+        "grok",
+        "Grok",
+        AgentRuntime.GROK_BUILD,
+        "default",
+    )
+
+    # 2. _resolve_coordinator_model prefers HTTP/LiteLLM backends over Personal Mode cli_oauth
+    personal_claude = Backend(
+        id="bnd_personal_claude",
+        name="Claude Personal",
+        type=BackendType.INFERENCE,
+        provider="anthropic",
+        config={
+            "auth_mode": "cli_oauth",
+            "personal_mode": True,
+            "personal_mode_acknowledged": True,
+            "personal_owner_user_id": "usr_owner_1",
+            "models": [{"id": "claude-sonnet-5-5", "enabled": True}],
+        },
+        secrets_encrypted=encrypt_secrets({"oauth_token": "tok"}),
+        enabled=True,
+    )
+    local_ollama = Backend(
+        id="bnd_local_ollama",
+        name="Local Ollama",
+        type=BackendType.INFERENCE,
+        provider="ollama",
+        endpoint="http://localhost:11434",
+        config={"models": [{"id": "qwen2.5-coder:32b", "enabled": True}]},
+        secrets_encrypted=encrypt_secrets({}),
+        enabled=True,
+    )
+    coord_sess = _make_session()
+    coord_sess.execute = AsyncMock(
+        return_value=_exec_result(scalars_all=[personal_claude, local_ollama])
+    )
+    monkeypatch.setattr(
+        coordinator_svc, "validate_personal_mode_backend_access", lambda *a, **kw: None
+    )
+    picked_b, picked_m = await coordinator_svc._resolve_coordinator_model(
+        coord_sess, None, None, actor_user_id="usr_owner_1"
+    )
+    assert picked_b is local_ollama
+    assert picked_m == "qwen2.5-coder:32b"
+
+    # When ONLY a Personal Mode cli_oauth backend exists, coordinator & draft_push_summary skip LiteLLM HTTP calls
+    litellm_http_spy = AsyncMock(side_effect=AssertionError("LiteLLM HTTP must not be called"))
+    monkeypatch.setattr(coordinator_svc, "sync_backend_to_litellm", litellm_http_spy)
+    monkeypatch.setattr(
+        coordinator_svc,
+        "_resolve_coordinator_agent",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        coordinator_svc,
+        "_resolve_coordinator_model",
+        AsyncMock(return_value=(personal_claude, "claude-sonnet-5-5")),
+    )
+    monkeypatch.setattr(
+        coordinator_svc,
+        "_build_workspace_snapshot",
+        AsyncMock(return_value=("## Workspace", "Workspace snapshot OK.", None)),
+    )
+    monkeypatch.setattr(
+        coordinator_svc,
+        "_build_brainstorm_repo_context",
+        AsyncMock(return_value=("", [], [])),
+    )
+    actor = User(
+        id="usr_owner_1",
+        email="owner@gitseed.local",
+        name="Owner",
+        org_role=OrgRole.ADMIN,
+        status=UserStatus.ACTIVE,
+        password_hash="x",
+    )
+    chat_res = await coordinator_svc.chat_with_coordinator(
+        coord_sess,
+        actor,
+        CoordinatorChatRequest(
+            messages=[CoordinatorChatMessage(role="user", content="Status update?")],
+            mode="coordinator",
+        ),
+    )
+    assert chat_res.model == "personal-mode-cli"
+    assert "Personal Mode" in chat_res.reply
+    assert "Workspace snapshot OK." in chat_res.reply
+
+    monkeypatch.setattr(
+        session_ws_svc,
+        "_resolve_coordinator_model",
+        AsyncMock(return_value=(personal_claude, "claude-sonnet-5-5")),
+    )
+    monkeypatch.setattr(
+        session_ws_svc,
+        "get_effective_stage_policy",
+        AsyncMock(return_value=SimpleNamespace(min_acceptance_criteria=1, max_acceptance_criteria=4)),
+    )
+    proj = Project(id="prj_1", name="Demo", slug="demo")
+    _, _, _, draft_src = await session_ws_svc.draft_push_summary(
+        coord_sess,
+        proj,
+        session_label="sandbox-1",
+        context_text="Implemented auth fix",
+        changes=[{"path": "app.py", "status": "modified"}],
+        files={"app.py": b"print('ok')\n"},
+    )
+    assert draft_src == "fallback"
+
+    # 3. bootstrap_database closes engine.begin() BEFORE running synchronous Alembic upgrade
+    tx_open = False
+    upgrade_saw_open_tx: list[bool] = []
+
+    @asynccontextmanager
+    async def _fake_begin():
+        nonlocal tx_open
+        tx_open = True
+        fake_conn = AsyncMock()
+        fake_conn.dialect = SimpleNamespace(name="postgresql")
+
+        async def _run_sync(fn: Any) -> None:
+            sync_conn = MagicMock()
+            sync_conn.dialect = SimpleNamespace(name="postgresql")
+            monkeypatch.setattr(
+                bootstrap_mod, "inspect", lambda _c: SimpleNamespace(has_table=lambda _t: True)
+            )
+            fn(sync_conn)
+
+        fake_conn.run_sync = _run_sync
+        try:
+            yield fake_conn
+        finally:
+            tx_open = False
+
+    monkeypatch.setattr(bootstrap_mod.settings, "GITSEED_AUTO_MIGRATE", True)
+    monkeypatch.setattr(bootstrap_mod, "engine", SimpleNamespace(begin=_fake_begin, dialect=SimpleNamespace(name="postgresql")))
+    monkeypatch.setattr(
+        bootstrap_mod.command,
+        "upgrade",
+        lambda _cfg, _rev: upgrade_saw_open_tx.append(tx_open),
+    )
+    boot_sess = _make_session()
+    boot_sess.get = AsyncMock(return_value=SimpleNamespace(id=1))
+    boot_sess.scalar = AsyncMock(side_effect=[1, 1, 1])
+    executed_sql: list[str] = []
+
+    async def _track_exec(stmt: Any) -> Any:
+        executed_sql.append(str(stmt))
+        return _exec_result(scalars_all=[], scalar_one=None)
+
+    boot_sess.execute = AsyncMock(side_effect=_track_exec)
+
+    @asynccontextmanager
+    async def _boot_sess_cm():
+        yield boot_sess
+
+    monkeypatch.setattr(bootstrap_mod, "AsyncSessionLocal", _boot_sess_cm)
+    monkeypatch.setattr(bootstrap_mod, "ensure_org_policies", AsyncMock(return_value={}))
+    await bootstrap_mod.bootstrap_database()
+    assert upgrade_saw_open_tx == [False]
+    assert any("UPDATE agent_session" in s for s in executed_sql)
+
+    # 4. fetch_finalize_context retries transient HTTP 409 during K8s container termination settle
+    attempts = 0
+
+    class _FakeClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def get(self, url: str, headers: dict[str, str]) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            req = httpx.Request("GET", url, headers=headers)
+            if attempts < 3:
+                return httpx.Response(409, json={"detail": "agent still terminating"}, request=req)
+            return httpx.Response(200, json={"blocked_paths": [".github/**"]}, request=req)
+
+    monkeypatch.setattr(broker_modes.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(broker_modes.asyncio, "sleep", AsyncMock())
+    fin_ctx = await broker_modes.fetch_finalize_context("http://api:8420", "gsr_fin_tok")
+    assert attempts == 3
+    assert fin_ctx == {"blocked_paths": [".github/**"]}
+
+

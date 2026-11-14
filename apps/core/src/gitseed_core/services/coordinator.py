@@ -61,7 +61,7 @@ logger = logging.getLogger("uvicorn.error")
 _PROVIDER_DEFAULT_MODEL: dict[str, str] = {
     "anthropic": "claude-sonnet-5-5",
     "openai": "gpt-5.4",
-    "google": "gemini-3.1-pro",
+    "google": "gemini-4-argon",
     "gemini": "gemini-4-argon",
     "antigravity": "gemini-4-argon",
     "xai": "grok-4.7",
@@ -135,6 +135,15 @@ async def _resolve_coordinator_model(
         accessible.append(b)
     if not accessible:
         return None, (agent.model if agent and agent.model else "default").strip() or "default"
+
+    # Prefer HTTP/LiteLLM-capable backends (API key / local Ollama / LM Studio) over
+    # Personal Mode CLI OAuth backends, whose subscription credentials never enter LiteLLM.
+    accessible.sort(
+        key=lambda b: (
+            1 if is_personal_mode_backend(b) else 0,
+            0 if bool((b.config or {}).get("is_sdlc_default")) else 1,
+        )
+    )
 
     requested = (agent.model if agent and agent.model else "default").strip()
     if requested and requested != "default":
@@ -760,6 +769,34 @@ async def chat_with_coordinator(
             reply=fallback_reply,
             agent_handle=handle,
             model="none",
+        )
+
+    if is_personal_mode_backend(backend):
+        personal_note = (
+            "Personal Mode CLI OAuth credentials run inside isolated stage and Live Agent Session "
+            "containers rather than the shared HTTP Model Gateway. Launch a Live Agent Session for "
+            "interactive CLI chat, or connect an API-key / local Ollama backend for live `@coordinator` responses."
+        )
+        if is_brainstorm:
+            fb_reply, fb_proposals = _build_fallback_brainstorm_proposals(
+                payload.messages,
+                focused_project,
+                referenced_files,
+                project_seeds,
+                payload.propose_seeds,
+                reason=personal_note,
+            )
+            return CoordinatorChatResponse(
+                reply=fb_reply,
+                agent_handle=handle,
+                model="personal-mode-cli",
+                proposed_seeds=fb_proposals,
+                referenced_files=referenced_files,
+            )
+        return CoordinatorChatResponse(
+            reply=f"> **Personal Mode (`cli_oauth`)**: {personal_note}\n\n{fallback_reply}",
+            agent_handle=handle,
+            model="personal-mode-cli",
         )
 
     await sync_backend_to_litellm(backend, extra_models=[resolved_model])

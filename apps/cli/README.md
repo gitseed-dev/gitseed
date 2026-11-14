@@ -11,8 +11,9 @@
 uv sync --all-packages
 uv run gitseed --help
 
-# Or install globally as a standalone tool (once published to PyPI, or from workspace wheels)
-uv tool install gitseed-cli
+# Or install globally onto your PATH from this repository checkout
+uv tool install --editable ./apps/cli --with ./packages/common
+# (or: pip install -e ./packages/common -e ./apps/cli)
 ```
 
 ---

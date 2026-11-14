@@ -60,3 +60,8 @@ generally happy to say yes to uses that help the community.
 *This policy may be updated from time to time. It is informed by the
 [Model Trademark Guidelines](https://modeltrademarkguidelines.org) (CC BY 3.0).*
 
+## Third-Party Marks
+
+All third-party trademarks, service marks, product names, and logos referenced in GitSeed documentation or user interfaces (including but not limited to Anthropic, Claude, Claude Code, OpenAI, Codex, Google, Gemini, Google Antigravity, xAI, Grok, GitHub, GitLab, Bitbucket, Atlassian, Docker, and Kubernetes) belong to their respective owners and are used purely for nominative identification of supported integrations. GitSeed is an independent project and is not affiliated with, endorsed by, or sponsored by any of these organizations.
+
+

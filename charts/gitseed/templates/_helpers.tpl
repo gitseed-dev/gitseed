@@ -124,6 +124,21 @@ PostgreSQL host
 {{- end }}
 
 {{/*
+Resolved cookie-less Sandbox Origin for Embedded VS Code webviews.
+Automatically derives http(s)://<ingress.sandboxHost> when Ingress is enabled with sandboxHost
+and web.sandboxOrigin was left at its localhost port-forward default.
+*/}}
+{{- define "gitseed.sandboxOrigin" -}}
+{{- $explicit := .Values.web.sandboxOrigin | default "" -}}
+{{- if and .Values.ingress.enabled .Values.ingress.sandboxHost (or (eq $explicit "") (eq $explicit "http://127.0.0.1:8423")) -}}
+{{- $scheme := ternary "https" "http" (gt (len (.Values.ingress.tls | default list)) 0) -}}
+{{- printf "%s://%s" $scheme .Values.ingress.sandboxHost -}}
+{{- else -}}
+{{- $explicit -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Redis / Valkey URL
 */}}
 {{- define "gitseed.redisUrl" -}}

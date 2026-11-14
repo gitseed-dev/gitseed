@@ -710,6 +710,16 @@ def _has_verified_provider_credentials(provider: str, bundle: dict[str, str]) ->
                 or lower_key.endswith("-oauth-token")
                 or "/keyring/" in lower_key
                 or lower_key.endswith("oauth_creds.json")
+                or (lower_key.endswith("jetski_state.pbtxt") and bool(lower_val.strip()))
+                or (lower_key.endswith("acp-auth-state.json") and bool(lower_val.strip()))
+                or (
+                    lower_key.endswith("auth.json")
+                    and (
+                        "keyring_items" in lower_val
+                        or "secret" in lower_val
+                        or "token" in lower_val
+                    )
+                )
             ):
                 return True
             if '"refresh_token"' in lower_val or '"access_token"' in lower_val:

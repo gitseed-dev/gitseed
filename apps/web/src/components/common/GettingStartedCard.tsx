@@ -24,12 +24,14 @@ import { useTranslation } from '../../context/I18nContext'
 import { getProviderSdlcStageHandles } from '../../utils/agents'
 import { getMissingCoreBackends } from '../../utils/backends'
 import { BackendDrawer } from '../modals/BackendDrawer'
+import { ProjectModal } from '../modals/ProjectModal'
 import { ProviderIcon } from './ProviderIcon'
 import { Tooltip } from './Tooltip'
 import type { Backend, BackendType } from '../../types'
 
 export interface GettingStartedCardProps {
   variant?: 'overview' | 'guide'
+  onNewProject?: () => void
   onNewSeed?: () => void
 }
 
@@ -44,6 +46,15 @@ interface QuickVendorOption {
 }
 
 const QUICK_INFERENCE_VENDORS: QuickVendorOption[] = [
+  {
+    id: 'ollama',
+    type: 'inference',
+    provider: 'ollama',
+    label: 'Local / OpenCode',
+    subtitle: 'Ollama, vLLM, or LM Studio',
+    defaultName: 'Local Inference',
+    handlePrefix: 'open',
+  },
   {
     id: 'anthropic',
     type: 'inference',
@@ -85,36 +96,19 @@ const QUICK_INFERENCE_VENDORS: QuickVendorOption[] = [
     type: 'inference',
     provider: 'xai',
     label: 'xAI Grok',
-    subtitle: 'API Key or CLI Login',
+    subtitle: 'API Key (via OpenCode)',
     defaultName: 'xAI Grok',
     handlePrefix: 'grok',
-  },
-  {
-    id: 'ollama',
-    type: 'inference',
-    provider: 'ollama',
-    label: 'Local / OpenCode',
-    subtitle: 'Ollama · LM Studio · vLLM',
-    defaultName: 'Local Models',
-    handlePrefix: 'open',
   },
 ]
 
 const QUICK_GIT_VENDORS: QuickVendorOption[] = [
   {
-    id: 'github-app',
-    type: 'git',
-    provider: 'github-app',
-    label: 'GitHub App',
-    subtitle: '1-Click Manifest Setup',
-    defaultName: 'GitHub App',
-  },
-  {
     id: 'github',
     type: 'git',
-    provider: 'github',
+    provider: 'github-app',
     label: 'GitHub',
-    subtitle: 'Browser OAuth or Token',
+    subtitle: 'GitHub App, OAuth, or Token',
     defaultName: 'GitHub',
   },
   {
@@ -137,6 +131,7 @@ const QUICK_GIT_VENDORS: QuickVendorOption[] = [
 
 export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
   variant = 'guide',
+  onNewProject,
   onNewSeed,
 }) => {
   const { t } = useTranslation()
@@ -154,6 +149,8 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
 
   const isAdmin = user?.org_role === 'admin'
   const [stepsManuallyExpanded, setStepsManuallyExpanded] = useState(false)
+  const [gitSectionExpanded, setGitSectionExpanded] = useState(false)
+  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false)
   const [drawerState, setDrawerState] = useState<{
     isOpen: boolean
     backendToEdit: Backend | null
@@ -232,7 +229,9 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
         b.type === vendor.type &&
         (vendor.provider === 'ollama'
           ? ['ollama', 'lmstudio', 'vllm', 'custom'].includes(b.provider.toLowerCase())
-          : b.provider.toLowerCase() === vendor.provider.toLowerCase())
+          : vendor.id === 'github'
+            ? ['github', 'github-app'].includes(b.provider.toLowerCase())
+            : b.provider.toLowerCase() === vendor.provider.toLowerCase())
     )
     setDrawerState({
       isOpen: true,
@@ -279,30 +278,42 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
 
     if (!projectsReady) {
       return (
-        <Card className="p-5 border border-zinc-200/80 dark:border-zinc-700/80 bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md rounded-2xl shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 dark:ring-1 dark:ring-white/[0.04]">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-teal-500/10 border border-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
-              <FolderGit2 size={18} />
+        <>
+          <Card className="p-5 border border-zinc-200/80 dark:border-zinc-700/80 bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md rounded-2xl shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 dark:ring-1 dark:ring-white/[0.04]">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-teal-500/10 border border-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
+                <FolderGit2 size={18} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold font-heading text-zinc-900 dark:text-zinc-100">
+                  {t('guide.steps.projectsTitle')}
+                </h3>
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  {t('guide.steps.projectsDesc')}
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-base font-bold font-heading text-zinc-900 dark:text-zinc-100">
-                {t('guide.steps.projectsTitle')}
-              </h3>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                {t('guide.steps.projectsDesc')}
-              </p>
-            </div>
-          </div>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setActiveView(VIEWS.PROJECTS)}
-            className="rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
-          >
-            <Plus size={14} />
-            <span>{t('projects.create')}</span>
-          </Button>
-        </Card>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                if (onNewProject) {
+                  onNewProject()
+                } else {
+                  setIsProjectModalOpen(true)
+                }
+              }}
+              className="rounded-xl text-sm font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <Plus size={14} />
+              <span>{t('projects.create')}</span>
+            </Button>
+          </Card>
+          <ProjectModal
+            isOpen={isProjectModalOpen}
+            onClose={() => setIsProjectModalOpen(false)}
+          />
+        </>
       )
     }
 
@@ -367,7 +378,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
     {
       step: '1',
       title: t('guide.steps.backendsTitle'),
-      desc: 'Connect an AI inference provider and compute runtime. Connect GitHub/GitLab or use On-Device Local Git.',
+      desc: t('guide.steps.backendsDesc'),
       ready: backendsReady,
       isCurrent: !backendsReady,
       locked: false,
@@ -387,7 +398,13 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
       lockedBadge: t('guide.lockedStep1Badge'),
       lockedCtaLabel: t('guide.completeStep1First'),
       actionLabel: t('projects.create'),
-      onClick: () => setActiveView(VIEWS.PROJECTS),
+      onClick: () => {
+        if (onNewProject) {
+          onNewProject()
+        } else {
+          setIsProjectModalOpen(true)
+        }
+      },
       icon: FolderGit2,
     },
     {
@@ -445,7 +462,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
             return (
               <div
                 key={item.step}
-                className={`p-4 rounded-xl border flex flex-col justify-between gap-4 transition-all ${
+                className={`p-4 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
                   item.ready
                     ? 'border-emerald-500/30 bg-emerald-500/[0.04] dark:bg-emerald-500/[0.07]'
                     : item.isCurrent
@@ -453,7 +470,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                       : 'border-dashed border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30 opacity-65'
                 }`}
               >
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <span
                       className={`inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider ${
@@ -476,7 +493,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                     </span>
 
                     {item.ready ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 shrink-0 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 shrink-0 whitespace-nowrap">
                         <CheckCircle2 size={12} />
                         <span>{t('guide.readyBadge')}</span>
                       </span>
@@ -487,18 +504,18 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                             ? `Missing: ${missingBackends.join(', ')}`
                             : undefined
                         }
-                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/25 shrink-0 whitespace-nowrap"
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/25 shrink-0 whitespace-nowrap"
                       >
                         <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
                         <span>{t('guide.requiredBadge')}</span>
                       </span>
                     ) : item.isCurrent ? (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/25 shrink-0 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/25 shrink-0 whitespace-nowrap">
                         <span className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse" />
                         <span>{t('guide.nextStepBadge')}</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-200/60 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-300/60 dark:border-zinc-700/70 shrink-0 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-zinc-200/60 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-300/60 dark:border-zinc-700/70 shrink-0 whitespace-nowrap">
                         <Lock size={11} />
                         <span>{item.lockedBadge}</span>
                       </span>
@@ -519,21 +536,38 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                   </p>
                 </div>
 
-                {item.isCurrent ? (
+                {item.step === '1' ? (
+                  item.ready ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDrawerState({
+                          isOpen: true,
+                          backendToEdit: null,
+                          defaultType: 'inference',
+                        })
+                      }
+                      className="inline-flex items-center gap-1 text-sm font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer pt-1"
+                    >
+                      <Plus size={14} />
+                      <span>Connect another</span>
+                    </button>
+                  ) : null
+                ) : item.isCurrent ? (
                   <Button
                     variant="primary"
                     size="sm"
                     onClick={item.onClick}
-                    className="w-full justify-center rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm shadow-teal-600/20 cursor-pointer"
+                    className="w-full justify-center rounded-xl text-sm font-semibold flex items-center gap-1.5 shadow-sm shadow-teal-600/20 cursor-pointer"
                   >
                     <span>{item.actionLabel}</span>
-                    <ArrowRight size={13} />
+                    <ArrowRight size={14} />
                   </Button>
                 ) : item.locked ? (
                   <button
                     type="button"
                     disabled
-                    className="w-full h-8 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100/70 dark:bg-zinc-800/50 text-zinc-400 dark:text-zinc-500 text-xs font-medium inline-flex items-center justify-center gap-1.5 cursor-not-allowed select-none"
+                    className="w-full h-9 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100/70 dark:bg-zinc-800/50 text-zinc-400 dark:text-zinc-500 text-xs font-medium inline-flex items-center justify-center gap-1.5 cursor-not-allowed select-none"
                   >
                     <Lock size={12} />
                     <span>{item.lockedCtaLabel}</span>
@@ -542,10 +576,10 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                   <button
                     type="button"
                     onClick={item.onClick}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer pt-1"
+                    className="inline-flex items-center gap-1 text-sm font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer pt-1"
                   >
                     <span>{item.actionLabel}</span>
-                    <ArrowRight size={13} />
+                    <ArrowRight size={14} />
                   </button>
                 )}
               </div>
@@ -554,27 +588,37 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
         </div>
 
         {/* Interactive Step 1 Quick Vendor Onboarding Panel */}
-        {(!backendsReady || (!projectsReady && enabledGitBackends.length === 0) || stepsManuallyExpanded) && (
-          <div className="rounded-2xl border border-zinc-200/80 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-950/50 p-4 sm:p-5 space-y-5">
-            {/* 1A: AI / Inference Providers */}
+        {(!allStepsReady || stepsManuallyExpanded) && (
+          <div className="rounded-2xl border border-zinc-200/80 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-950/50 p-4 sm:p-5 space-y-4">
+            {/* Step 1 Main Action: Inference Providers */}
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300">
-                      1A · Connect Inference Providers
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                    {enabledInferenceBackends.length > 0
+                      ? 'Inference providers'
+                      : 'Select an inference provider to connect'}
+                  </span>
+                  {enabledInferenceBackends.length > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+                      <Check size={12} />
+                      {enabledInferenceBackends.length} connected
                     </span>
-                    {enabledInferenceBackends.length > 0 && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
-                        <Check size={11} />
-                        {enabledInferenceBackends.length} connected
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                    Click a provider below to enter an API key or sign in via CLI OAuth. Connecting your first provider automatically seeds the 5 stage-dedicated SDLC agents.
-                  </p>
+                  )}
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400">
+                    {enabledInferenceBackends.length > 0
+                      ? '· Click another provider to connect or edit existing'
+                      : '· Local endpoint, API key, or CLI login'}
+                  </span>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveView(VIEWS.BACKENDS)}
+                  className="inline-flex items-center gap-1 text-sm font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer shrink-0"
+                >
+                  <span>{t('guide.steps.backendsAction')}</span>
+                  <ArrowRight size={14} />
+                </button>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
@@ -595,7 +639,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                       key={vendor.id}
                       type="button"
                       onClick={() => openQuickVendorSetup(vendor)}
-                      className={`group text-left p-3 rounded-xl border transition-all flex flex-col justify-between gap-2 cursor-pointer ${
+                      className={`group text-left p-3.5 rounded-xl border transition-all flex flex-col justify-between gap-2.5 cursor-pointer ${
                         connectedBackend
                           ? isPrimary
                             ? 'border-teal-500/60 bg-teal-500/[0.06] dark:bg-teal-500/[0.1] ring-1 ring-teal-500/25'
@@ -604,35 +648,39 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1.5">
-                        <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">
+                        <div className="w-8 h-8 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">
                           <ProviderIcon
                             provider={vendor.provider}
                             type="inference"
-                            size={15}
+                            size={16}
                           />
                         </div>
                         {connectedBackend ? (
                           <span
-                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
                               isPrimary
                                 ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30'
                                 : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
                             }`}
                           >
-                            <Check size={10} />
+                            <Check size={11} />
                             {isPrimary ? 'Primary' : 'Added'}
                           </span>
+                        ) : vendor.id === 'ollama' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/25">
+                            No API key needed
+                          </span>
                         ) : (
-                          <span className="text-[10px] font-medium text-zinc-400 group-hover:text-teal-600 dark:group-hover:text-teal-400">
+                          <span className="text-xs font-medium text-zinc-400 group-hover:text-teal-600 dark:group-hover:text-teal-400">
                             + Connect
                           </span>
                         )}
                       </div>
-                      <div>
-                        <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">
+                      <div className="space-y-0.5">
+                        <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate">
                           {vendor.label}
                         </div>
-                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                        <div className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
                           {vendor.subtitle}
                         </div>
                       </div>
@@ -643,11 +691,11 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
 
               {/* Primary SDLC Pipeline Provider Selector & Stage Agents Preview */}
               {primaryInferenceBackend && (
-                <div className="rounded-xl border border-teal-500/25 bg-white/90 dark:bg-zinc-900/90 p-3.5 space-y-2.5">
+                <div className="rounded-xl border border-teal-500/25 bg-white/90 dark:bg-zinc-900/90 p-4 space-y-2.5">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Sparkles size={14} className="text-teal-600 dark:text-teal-400 shrink-0" />
-                      <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                      <Sparkles size={15} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                      <span className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
                         Default SDLC Pipeline Provider:
                       </span>
                       {enabledInferenceBackends.length === 1 ? (
@@ -694,7 +742,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1.5 flex-wrap text-[11px] font-mono">
+                    <div className="flex items-center gap-1.5 flex-wrap text-xs font-mono">
                       {stageHandlesPreview.map((st) => (
                         <span
                           key={st.stage}
@@ -712,7 +760,7 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
                     </div>
                   </div>
 
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
                     The 5 stage agents above (plus <code className="font-mono">@coordinator</code>) are wired as your default SDLC pipeline for the selected primary provider. You can customize or mix agents per stage anytime in{' '}
                     <button
                       type="button"
@@ -727,125 +775,135 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
               )}
             </div>
 
-            {/* 1B: Git Providers */}
+            {/* 1B: Optional Git Providers (collapsed by default) */}
             <div className="pt-3 border-t border-zinc-200/70 dark:border-zinc-800/80 space-y-2.5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300">
-                    1B · Connect GitHub/GitLab or Use On-Device Local Git
+              <button
+                type="button"
+                aria-expanded={gitSectionExpanded}
+                onClick={() => setGitSectionExpanded((prev) => !prev)}
+                className="w-full flex items-center justify-between gap-2 text-left text-sm text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors cursor-pointer group"
+              >
+                <span className="flex items-center gap-2 flex-wrap">
+                  <span>
+                    <strong className="font-semibold text-zinc-800 dark:text-zinc-200">
+                      Optional:
+                    </strong>{' '}
+                    connect GitHub, GitLab, or Bitbucket for pull requests. On-Device Local Git works without it.
                   </span>
-                  {enabledGitBackends.length > 0 ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
-                      <Check size={11} />
+                  {enabledGitBackends.length > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+                      <Check size={12} />
                       {enabledGitBackends.length} connected
                     </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/25">
-                      <Check size={11} />
-                      On-Device Local Git built-in
-                    </span>
                   )}
+                </span>
+                <span className="inline-flex items-center gap-1 text-sm font-semibold text-teal-600 dark:text-teal-400 group-hover:underline shrink-0">
+                  <span>{gitSectionExpanded ? 'Hide' : 'Connect'}</span>
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform duration-150 ${
+                      gitSectionExpanded ? 'rotate-180' : ''
+                    }`}
+                  />
+                </span>
+              </button>
+
+              {gitSectionExpanded && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  {QUICK_GIT_VENDORS.map((vendor) => {
+                    const connectedGit = enabledGitBackends.find((b) =>
+                      vendor.id === 'github'
+                        ? ['github', 'github-app'].includes(b.provider.toLowerCase())
+                        : b.provider.toLowerCase() === vendor.provider.toLowerCase()
+                    )
+                    return (
+                      <button
+                        key={vendor.id}
+                        type="button"
+                        onClick={() => openQuickVendorSetup(vendor)}
+                        className={`group text-left p-3 rounded-xl border transition-all flex flex-col justify-between gap-2 cursor-pointer ${
+                          connectedGit
+                            ? 'border-emerald-500/40 bg-emerald-500/[0.04] dark:bg-emerald-500/[0.07]'
+                            : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-teal-500/50 hover:shadow-xs'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">
+                            <ProviderIcon
+                              provider={vendor.provider}
+                              type="git"
+                              size={15}
+                            />
+                          </div>
+                          {connectedGit ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                              <Check size={11} />
+                              Ready
+                            </span>
+                          ) : (
+                            <span className="text-xs font-medium text-zinc-400 group-hover:text-teal-600 dark:group-hover:text-teal-400">
+                              + Connect
+                            </span>
+                          )}
+                        </div>
+                        <div className="space-y-0.5">
+                          <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate">
+                            {vendor.label}
+                          </div>
+                          <div className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
+                            {vendor.subtitle}
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
-              </div>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Connect GitHub, GitLab, or Bitbucket for cloud pull requests, or skip cloud setup and link a local directory with On-Device Local Git directly in Step 2.
-              </p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {QUICK_GIT_VENDORS.map((vendor) => {
-                  const connectedGit = enabledGitBackends.find(
-                    (b) => b.provider.toLowerCase() === vendor.provider.toLowerCase()
-                  )
-                  return (
-                    <button
-                      key={vendor.id}
-                      type="button"
-                      onClick={() => openQuickVendorSetup(vendor)}
-                      className={`group text-left p-2.5 rounded-xl border transition-all flex flex-col justify-between gap-1.5 cursor-pointer ${
-                        connectedGit
-                          ? 'border-emerald-500/40 bg-emerald-500/[0.04] dark:bg-emerald-500/[0.07]'
-                          : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-teal-500/50 hover:shadow-xs'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1.5">
-                        <div className="w-6 h-6 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">
-                          <ProviderIcon
-                            provider={vendor.provider}
-                            type="git"
-                            size={14}
-                          />
-                        </div>
-                        {connectedGit ? (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                            <Check size={10} />
-                            Ready
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-medium text-zinc-400 group-hover:text-teal-600 dark:group-hover:text-teal-400">
-                            + Connect
-                          </span>
-                        )}
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">
-                          {vendor.label}
-                        </div>
-                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
-                          {vendor.subtitle}
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
+              )}
             </div>
 
-            {/* 1C: Compute Runtime */}
-            <div className="pt-3 border-t border-zinc-200/70 dark:border-zinc-800/80 space-y-2.5">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300">
-                  1C · Compute Runtime
-                </span>
-                {enabledComputeBackends.length > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
-                    <Check size={11} />
-                    Ready
+            {/* 1C: Compute Runtime (single compact line when ready) */}
+            <div className="pt-2.5 border-t border-zinc-200/70 dark:border-zinc-800/80 flex items-center justify-between gap-3 text-sm">
+              {enabledComputeBackends.length > 0 ? (
+                <div className="flex items-center gap-1.5 flex-wrap text-zinc-600 dark:text-zinc-300">
+                  <Check size={14} className="text-emerald-500 shrink-0" />
+                  <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                    {enabledComputeBackends[0].name} ready
                   </span>
-                )}
-              </div>
-              <div className="p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0">
-                    <ProviderIcon
-                      provider={enabledComputeBackends[0]?.provider || 'docker'}
-                      type="compute"
-                      size={15}
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">
-                      {enabledComputeBackends[0]?.name || 'Compute Backend'}
-                    </div>
-                    <div className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
-                      {enabledComputeBackends.length > 0
-                        ? 'Pre-seeded & active for SDLC runner jobs and sandboxes'
-                        : 'Configure Docker Engine or Kubernetes'}
-                    </div>
-                  </div>
+                  <span className="text-zinc-400 dark:text-zinc-600">·</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDrawerState({
+                        isOpen: true,
+                        backendToEdit: enabledComputeBackends[0] || null,
+                        defaultType: 'compute',
+                      })
+                    }
+                    className="font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                  >
+                    Configure
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setDrawerState({
-                      isOpen: true,
-                      backendToEdit: enabledComputeBackends[0] || null,
-                      defaultType: 'compute',
-                    })
-                  }
-                  className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline shrink-0 cursor-pointer"
-                >
-                  {enabledComputeBackends.length > 0 ? 'Configure' : '+ Add'}
-                </button>
-              </div>
+              ) : (
+                <div className="flex items-center justify-between w-full gap-3">
+                  <span className="text-rose-600 dark:text-rose-400 font-medium">
+                    No compute runtime connected (Docker or Kubernetes required)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDrawerState({
+                        isOpen: true,
+                        backendToEdit: null,
+                        defaultType: 'compute',
+                      })
+                    }
+                    className="font-semibold text-teal-600 dark:text-teal-400 hover:underline shrink-0 cursor-pointer"
+                  >
+                    + Add compute runtime
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -863,6 +921,11 @@ export const GettingStartedCard: React.FC<GettingStartedCardProps> = ({
         defaultType={drawerState.defaultType}
         defaultProvider={drawerState.defaultProvider}
         defaultName={drawerState.defaultName}
+      />
+
+      <ProjectModal
+        isOpen={isProjectModalOpen}
+        onClose={() => setIsProjectModalOpen(false)}
       />
     </>
   )

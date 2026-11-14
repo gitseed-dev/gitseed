@@ -1,11 +1,28 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { Bot, ChevronDown, ChevronUp, Code2, ExternalLink, Loader2, Maximize2, Square, Terminal, X } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  ChevronUp,
+  Code2,
+  Columns2,
+  ExternalLink,
+  Loader2,
+  Maximize2,
+  Square,
+  Terminal,
+  X,
+} from 'lucide-react'
 import { api, ApiError } from '../../api/client'
 import { VIEWS } from '../../constants'
 import { useAuth } from '../../context/AuthContext'
 import { useData } from '../../context/DataContext'
-import { dockKey, useSessionDock, type DockedSession } from '../../context/SessionDockContext'
+import {
+  dockKey,
+  MAX_SPLIT_PANES,
+  useSessionDock,
+  type DockedSession,
+} from '../../context/SessionDockContext'
 import { useTheme } from '../../context/ThemeContext'
 import { AgentProviderIcon } from '../common/ProviderIcon'
 import { ContextWindowBadge } from '../common/ContextWindowBadge'
@@ -17,6 +34,7 @@ import { resolveVsCodeIframeProps, safeExternalUrl } from '../../utils/gitUrls'
 import type { SessionListItem } from '../../types'
 
 const HEIGHT_KEY = 'gitseed.sessionDock.height'
+const SPLIT_RATIO_KEY = 'gitseed.sessionDock.splitRatio'
 const MIN_HEIGHT = 200
 const INACTIVE_DOCK_STATUSES = new Set([
   'sleeping',
@@ -33,6 +51,12 @@ function initialHeight(): number {
   return Math.round(window.innerHeight * 0.4)
 }
 
+function initialSplitRatio(): number {
+  const saved = Number(window.localStorage.getItem(SPLIT_RATIO_KEY))
+  if (Number.isFinite(saved) && saved >= 25 && saved <= 75) return saved
+  return 50
+}
+
 function statusDot(item: SessionListItem | undefined): string {
   if (!item) return 'bg-zinc-400'
   if (item.status === 'starting') return 'bg-teal-400 animate-pulse'
@@ -41,22 +65,37 @@ function statusDot(item: SessionListItem | undefined): string {
 }
 
 /**
- * Bottom dock for minimized sessions: slim chips that persist across pages; one expands into
- * a resizable drawer with the live terminal. The terminal only connects while expanded, and
- * the server keeps the process running, so collapsing/expanding resumes where it was.
+ * Bottom dock for minimized sessions: slim chips that persist across pages; one or more
+ * expand into a resizable drawer (supporting side-by-side split view for up to 3 sessions).
+ * Terminals only connect while expanded, and the server keeps the process running.
  */
 export const SessionDock: React.FC = () => {
   const { user } = useAuth()
   const { theme } = useTheme()
-  const { items, expandedKey, setExpanded, undock, updateTitle, updatePane } = useSessionDock()
+  const {
+    items,
+    expandedKeys,
+    setExpanded,
+    toggleSplit,
+    collapsePane,
+    collapseAll,
+    undock,
+    updateTitle,
+    updatePane,
+  } = useSessionDock()
   const { projects, agents, backends, activeView, activeDetailId, activeDetailTab, navigateToDetail } = useData()
   const [height, setHeight] = useState<number>(initialHeight)
+  const [splitRatio, setSplitRatio] = useState<number>(initialSplitRatio)
   const [notice, setNotice] = useState<string | null>(null)
   const [vscodeStartingKey, setVscodeStartingKey] = useState<string | null>(null)
+  const [splitPickerOpen, setSplitPickerOpen] = useState(false)
   // Sleeping agent sessions the user explicitly chose to wake (never woken just by expanding)
   const [resumed, setResumed] = useState<Set<string>>(() => new Set())
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
   const dragCleanupRef = useRef<(() => void) | null>(null)
+  const colDragCleanupRef = useRef<(() => void) | null>(null)
+  const panesContainerRef = useRef<HTMLDivElement | null>(null)
+  const splitPickerRef = useRef<HTMLDivElement | null>(null)
 
   // The session whose own page is open is shown there, not duplicated in the dock
   const pageKey =
@@ -115,19 +154,37 @@ export const SessionDock: React.FC = () => {
     return () => window.clearTimeout(t)
   }, [notice])
 
-  // Ctrl+` toggles the drawer (most recently docked session)
+  useEffect(() => {
+    if (!splitPickerOpen) return
+    const onDoc = (e: MouseEvent) => {
+      if (splitPickerRef.current && !splitPickerRef.current.contains(e.target as Node)) {
+        setSplitPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [splitPickerOpen])
+
+  // Ctrl+` toggles the drawer (most recently docked session or collapses all open panes)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey && e.key === '`')) return
       const candidates = items.filter((i) => dockKey(i.kind, i.id) !== pageKey)
       if (candidates.length === 0) return
       e.preventDefault()
-      const last = candidates[candidates.length - 1]
-      setExpanded(expandedKey ? null : dockKey(last.kind, last.id))
+      const hasVisibleExpanded = candidates.some((i) =>
+        expandedKeys.includes(dockKey(i.kind, i.id))
+      )
+      if (hasVisibleExpanded) {
+        collapseAll()
+      } else {
+        const last = candidates[candidates.length - 1]
+        setExpanded(dockKey(last.kind, last.id))
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [items, expandedKey, pageKey, setExpanded])
+  }, [items, expandedKeys, pageKey, setExpanded, collapseAll])
 
   const onDragStart = useCallback(
     (e: React.MouseEvent) => {
@@ -158,9 +215,38 @@ export const SessionDock: React.FC = () => {
     [height]
   )
 
+  const onColDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    colDragCleanupRef.current?.()
+    const container = panesContainerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0) return
+
+    const onMove = (ev: MouseEvent) => {
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100
+      const clamped = Math.min(75, Math.max(25, Math.round(pct * 10) / 10))
+      setSplitRatio(clamped)
+    }
+    const cleanup = () => {
+      colDragCleanupRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+    }
+    const onUp = () => {
+      cleanup()
+    }
+    colDragCleanupRef.current = cleanup
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
   useEffect(() => {
     return () => {
       dragCleanupRef.current?.()
+      colDragCleanupRef.current?.()
     }
   }, [])
 
@@ -168,27 +254,29 @@ export const SessionDock: React.FC = () => {
     window.localStorage.setItem(HEIGHT_KEY, String(height))
   }, [height])
 
+  useEffect(() => {
+    window.localStorage.setItem(SPLIT_RATIO_KEY, String(splitRatio))
+  }, [splitRatio])
+
   const visible = items.filter((i) => dockKey(i.kind, i.id) !== pageKey)
-  const expanded = visible.find((i) => dockKey(i.kind, i.id) === expandedKey) || null
+  const expandedItems = expandedKeys
+    .map((k) => visible.find((i) => dockKey(i.kind, i.id) === k))
+    .filter((i): i is DockedSession => Boolean(i))
+  const unexpandedItems = visible.filter((i) => !expandedItems.includes(i))
 
   useEffect(() => {
-    if (!expanded) {
+    if (expandedItems.length === 0) {
       dragCleanupRef.current?.()
+      colDragCleanupRef.current?.()
+      setSplitPickerOpen(false)
     }
-  }, [expanded])
+  }, [expandedItems.length])
 
   if (visible.length === 0 && !notice) return null
 
-  const resolvedExpandedVsCode = expanded?.vscodeUrl
-    ? resolveVsCodeIframeProps(expanded.vscodeUrl)
-    : null
-  const safeExpandedVsCodeHref = safeExternalUrl(resolvedExpandedVsCode?.url)
   const statusFor = (it: DockedSession) => statuses[items.indexOf(it)]?.data as SessionListItem | undefined
   const resolvePane = (it: DockedSession): 'terminal' | 'code' | 'vscode' =>
     it.pane || (it.title.startsWith('Editor ·') ? 'code' : 'terminal')
-  const expandedPane = expanded ? resolvePane(expanded) : 'terminal'
-  const expandedProject = expanded ? projects.find((p) => p.id === expanded.projectId) || null : null
-  const canContributeExpanded = canStartSessions(user, expandedProject)
 
   const selectDockPane = async (it: DockedSession, pane: 'terminal' | 'code' | 'vscode') => {
     const key = dockKey(it.kind, it.id)
@@ -219,7 +307,7 @@ export const SessionDock: React.FC = () => {
     const pane = resolvePane(it)
     const proj = projects.find((p) => p.id === it.projectId) || null
     const canManageItem = canStartSessions(user, proj)
-    setExpanded(null)
+    collapseAll()
     navigateToDetail(
       VIEWS.SESSIONS,
       it.kind,
@@ -228,157 +316,281 @@ export const SessionDock: React.FC = () => {
     )
   }
 
+  const isSplitMode = expandedItems.length > 1
+
   return (
     <div className="hidden md:flex flex-col shrink-0 border-t border-zinc-200 dark:border-zinc-800 bg-white/90 dark:bg-zinc-950/90 backdrop-blur relative z-20">
-      {expanded && (
+      {expandedItems.length > 0 && (
         <div className="flex flex-col" style={{ height }}>
           <div
             onMouseDown={onDragStart}
-            className="h-1.5 -mt-px cursor-row-resize hover:bg-teal-500/40 transition-colors"
-            title="Drag to resize"
+            className="h-1.5 -mt-px cursor-row-resize hover:bg-teal-500/40 transition-colors shrink-0"
+            title="Drag to resize height"
           />
-          <div className="px-3 py-1.5 flex items-center justify-between gap-2 border-b border-zinc-200/80 dark:border-zinc-800">
-            <div className="flex items-center gap-2 min-w-0 text-xs">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot(statusFor(expanded))}`} />
-              <span className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">{expanded.title}</span>
-              {statusFor(expanded)?.project_name && (
-                <span className="text-zinc-500 dark:text-zinc-400 truncate">· {statusFor(expanded)?.project_name}</span>
-              )}
-              {expanded.kind === 'chat' && statusFor(expanded)?.context_window && (
-                <ContextWindowBadge
-                  contextWindow={statusFor(expanded)?.context_window}
-                  variant="inline"
-                />
-              )}
-              {statusFor(expanded)?.is_running && (
-                <div className="ml-2 inline-flex rounded-lg p-0.5 bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-                  {(canContributeExpanded
-                    ? (['terminal', 'code', 'vscode'] as const)
-                    : (['terminal', 'code'] as const)
-                  ).map((p) => {
-                    const isStarting = p === 'vscode' && vscodeStartingKey === dockKey(expanded.kind, expanded.id)
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        disabled={isStarting}
-                        onClick={() => void selectDockPane(expanded, p)}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold cursor-pointer ${
-                          expandedPane === p
-                            ? 'bg-white dark:bg-zinc-800 text-teal-700 dark:text-teal-300 shadow-2xs'
-                            : 'text-zinc-500'
-                        }`}
-                      >
-                        {isStarting ? (
-                          <Loader2 size={11} className="animate-spin" />
-                        ) : p === 'terminal' ? (
-                          <Terminal size={11} />
-                        ) : (
-                          <Code2 size={11} />
-                        )}
-                        {p === 'code' ? 'Code' : p === 'vscode' ? 'VS Code' : 'Terminal'}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-              {canContributeExpanded && expandedPane === 'vscode' && safeExpandedVsCodeHref && (
-                <a
-                  href={safeExpandedVsCodeHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Open VS Code in a separate browser tab"
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold text-zinc-500 hover:text-teal-600 dark:hover:text-teal-300"
-                >
-                  <ExternalLink size={11} />
-                </a>
-              )}
-            </div>
-            <div className="flex items-center gap-0.5">
-              <DockIconButton title="Open full page" onClick={() => openFull(expanded)}>
-                <Maximize2 size={13} />
-              </DockIconButton>
-              <DockIconButton title="Collapse (Ctrl+`)" onClick={() => setExpanded(null)}>
-                <ChevronDown size={14} />
-              </DockIconButton>
-              <DockCloseMenu
-                item={expanded}
-                running={!!statusFor(expanded)?.is_running}
-                placement="below"
-                onRemove={() => undock(dockKey(expanded.kind, expanded.id))}
-                onStopped={() => {
-                  undock(dockKey(expanded.kind, expanded.id))
-                  setNotice(`Stopped “${expanded.title}”`)
-                }}
-                onError={setNotice}
-              />
-            </div>
-          </div>
-          {expanded.kind === 'chat' &&
-          statusFor(expanded) &&
-          !statusFor(expanded)?.is_running &&
-          !resumed.has(dockKey(expanded.kind, expanded.id)) ? (
-            <SessionResumePrompt
-              agentHandle={expanded.agentHandle}
-              onResume={() => setResumed((s) => new Set(s).add(dockKey(expanded.kind, expanded.id)))}
-              className="flex-1 min-h-0"
-            />
-          ) : statusFor(expanded)?.is_running && expandedPane === 'vscode' && resolvedExpandedVsCode ? (
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-zinc-950">
-              {!resolvedExpandedVsCode.sandbox.includes('allow-same-origin') && (
-                <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
-                  <span>
-                    Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
-                  </span>
-                  {safeExpandedVsCodeHref && (
-                    <a
-                      href={safeExpandedVsCodeHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-semibold underline shrink-0"
-                    >
-                      Open in new tab
-                    </a>
+
+          <div
+            ref={panesContainerRef}
+            className="flex-1 min-h-0 flex flex-row overflow-hidden"
+          >
+            {expandedItems.map((paneItem, paneIdx) => {
+              const key = dockKey(paneItem.kind, paneItem.id)
+              const liveStatus = statusFor(paneItem)
+              const activePane = resolvePane(paneItem)
+              const paneProject = projects.find((p) => p.id === paneItem.projectId) || null
+              const canContributePane = canStartSessions(user, paneProject)
+              const resolvedVsCode = paneItem.vscodeUrl
+                ? resolveVsCodeIframeProps(paneItem.vscodeUrl)
+                : null
+              const safeVsCodeHref = safeExternalUrl(resolvedVsCode?.url)
+              const isLastPane = paneIdx === expandedItems.length - 1
+              const canAddSplit =
+                isLastPane &&
+                unexpandedItems.length > 0 &&
+                expandedItems.length < MAX_SPLIT_PANES
+
+              const widthStyle =
+                expandedItems.length === 2
+                  ? { width: `${paneIdx === 0 ? splitRatio : 100 - splitRatio}%` }
+                  : undefined
+
+              return (
+                <React.Fragment key={key}>
+                  {paneIdx > 0 && expandedItems.length === 2 && (
+                    <div
+                      onMouseDown={onColDragStart}
+                      onDoubleClick={() => setSplitRatio(50)}
+                      className="w-1.5 -mx-px cursor-col-resize bg-zinc-200/80 dark:bg-zinc-800 hover:bg-teal-500/50 transition-colors shrink-0 z-10"
+                      title="Drag to resize split · Double-click to reset 50/50"
+                    />
                   )}
-                </div>
-              )}
-              <iframe
-                key={`vscode-${dockKey(expanded.kind, expanded.id)}`}
-                src={resolvedExpandedVsCode.url}
-                title={`VS Code · ${expanded.title}`}
-                sandbox={resolvedExpandedVsCode.sandbox}
-                allow="clipboard-read; clipboard-write;"
-                className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
-              />
-            </div>
-          ) : statusFor(expanded)?.is_running && expandedPane === 'code' ? (
-            <SessionEditorPane
-              key={`editor-${dockKey(expanded.kind, expanded.id)}`}
-              projectId={expanded.projectId}
-              kind={expanded.kind}
-              sessionId={expanded.id}
-              canContribute={canContributeExpanded}
-              onOpenPush={() => openFull(expanded)}
-              className="flex-1 min-h-0"
-            />
-          ) : statusFor(expanded) ? (
-            <SessionTerminal
-              key={dockKey(expanded.kind, expanded.id)}
-              url={api.projects.sessionPtyUrl(expanded.projectId, expanded.kind, expanded.id)}
-              connectingLabel={expanded.kind === 'chat' && expanded.agentHandle ? `Resuming @${expanded.agentHandle}…` : undefined}
-              className="flex-1 min-h-0"
-            />
-          ) : (
-            <div className="flex-1 min-h-0 bg-zinc-950" />
-          )}
+                  {paneIdx > 0 && expandedItems.length !== 2 && (
+                    <div className="w-px bg-zinc-200 dark:bg-zinc-800 shrink-0" />
+                  )}
+
+                  <div
+                    style={widthStyle}
+                    className={`flex flex-col min-w-0 min-h-0 ${
+                      expandedItems.length === 2 ? 'shrink-0' : 'flex-1'
+                    }`}
+                  >
+                    {/* Per-Pane Header */}
+                    <div className="px-3 py-1.5 flex items-center justify-between gap-2 border-b border-zinc-200/80 dark:border-zinc-800 shrink-0">
+                      <div className="flex items-center gap-2 min-w-0 text-xs">
+                        {isSplitMode && (
+                          <span className="w-4 h-4 rounded bg-teal-500/15 border border-teal-500/30 text-[10px] font-mono font-bold text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
+                            {paneIdx + 1}
+                          </span>
+                        )}
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot(liveStatus)}`} />
+                        <span className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                          {paneItem.title}
+                        </span>
+                        {liveStatus?.project_name && (
+                          <span className="text-zinc-500 dark:text-zinc-400 truncate hidden sm:inline">
+                            · {liveStatus.project_name}
+                          </span>
+                        )}
+                        {paneItem.kind === 'chat' && liveStatus?.context_window && (
+                          <ContextWindowBadge
+                            contextWindow={liveStatus.context_window}
+                            variant="inline"
+                          />
+                        )}
+                        {liveStatus?.is_running && (
+                          <div className="ml-1 inline-flex rounded-lg p-0.5 bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shrink-0">
+                            {(canContributePane
+                              ? (['terminal', 'code', 'vscode'] as const)
+                              : (['terminal', 'code'] as const)
+                            ).map((p) => {
+                              const isStarting = p === 'vscode' && vscodeStartingKey === key
+                              return (
+                                <button
+                                  key={p}
+                                  type="button"
+                                  disabled={isStarting}
+                                  onClick={() => void selectDockPane(paneItem, p)}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold cursor-pointer ${
+                                    activePane === p
+                                      ? 'bg-white dark:bg-zinc-800 text-teal-700 dark:text-teal-300 shadow-2xs'
+                                      : 'text-zinc-500'
+                                  }`}
+                                >
+                                  {isStarting ? (
+                                    <Loader2 size={11} className="animate-spin" />
+                                  ) : p === 'terminal' ? (
+                                    <Terminal size={11} />
+                                  ) : (
+                                    <Code2 size={11} />
+                                  )}
+                                  {p === 'code' ? 'Code' : p === 'vscode' ? 'VS Code' : 'Terminal'}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                        {canContributePane && activePane === 'vscode' && safeVsCodeHref && (
+                          <a
+                            href={safeVsCodeHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open VS Code in a separate browser tab"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold text-zinc-500 hover:text-teal-600 dark:hover:text-teal-300 shrink-0"
+                          >
+                            <ExternalLink size={11} />
+                          </a>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        {canAddSplit && (
+                          <div ref={splitPickerRef} className="relative flex">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (unexpandedItems.length === 1) {
+                                  const target = unexpandedItems[0]
+                                  toggleSplit(dockKey(target.kind, target.id))
+                                } else {
+                                  setSplitPickerOpen((v) => !v)
+                                }
+                              }}
+                              title={
+                                unexpandedItems.length === 1
+                                  ? `Split side-by-side with “${unexpandedItems[0].title}”`
+                                  : 'Add another docked session side-by-side'
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold text-teal-700 dark:text-teal-300 hover:bg-teal-500/10 cursor-pointer"
+                            >
+                              <Columns2 size={13} />
+                              <span className="hidden lg:inline">Split</span>
+                            </button>
+                            {splitPickerOpen && unexpandedItems.length > 1 && (
+                              <div className="absolute right-0 top-full mt-1.5 z-50 w-60 p-1 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg text-xs">
+                                <div className="px-2.5 py-1.5 text-[11px] font-semibold text-zinc-400 border-b border-zinc-100 dark:border-zinc-800">
+                                  Open side-by-side
+                                </div>
+                                {unexpandedItems.map((cand) => {
+                                  const candKey = dockKey(cand.kind, cand.id)
+                                  return (
+                                    <button
+                                      key={candKey}
+                                      type="button"
+                                      onClick={() => {
+                                        setSplitPickerOpen(false)
+                                        toggleSplit(candKey)
+                                      }}
+                                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer text-left"
+                                    >
+                                      <Columns2 size={12} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                                      <span className="font-medium text-zinc-900 dark:text-zinc-100 truncate">
+                                        {cand.title}
+                                      </span>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <DockIconButton title="Open full page" onClick={() => openFull(paneItem)}>
+                          <Maximize2 size={13} />
+                        </DockIconButton>
+                        <DockIconButton
+                          title={isSplitMode ? 'Collapse this pane' : 'Collapse (Ctrl+`)'}
+                          onClick={() => collapsePane(key)}
+                        >
+                          <ChevronDown size={14} />
+                        </DockIconButton>
+                        <DockCloseMenu
+                          item={paneItem}
+                          running={!!liveStatus?.is_running}
+                          placement="below"
+                          onRemove={() => undock(key)}
+                          onStopped={() => {
+                            undock(key)
+                            setNotice(`Stopped “${paneItem.title}”`)
+                          }}
+                          onError={setNotice}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Per-Pane Body */}
+                    {paneItem.kind === 'chat' &&
+                    liveStatus &&
+                    !liveStatus.is_running &&
+                    !resumed.has(key) ? (
+                      <SessionResumePrompt
+                        agentHandle={paneItem.agentHandle}
+                        onResume={() => setResumed((s) => new Set(s).add(key))}
+                        className="flex-1 min-h-0"
+                      />
+                    ) : liveStatus?.is_running && activePane === 'vscode' && resolvedVsCode ? (
+                      <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-zinc-950">
+                        {!resolvedVsCode.sandbox.includes('allow-same-origin') && (
+                          <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
+                            <span>
+                              Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
+                            </span>
+                            {safeVsCodeHref && (
+                              <a
+                                href={safeVsCodeHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-semibold underline shrink-0"
+                              >
+                                Open in new tab
+                              </a>
+                            )}
+                          </div>
+                        )}
+                        <iframe
+                          key={`vscode-${key}`}
+                          src={resolvedVsCode.url}
+                          title={`VS Code · ${paneItem.title}`}
+                          sandbox={resolvedVsCode.sandbox}
+                          allow="clipboard-read; clipboard-write;"
+                          className="flex-1 min-h-0 w-full border-0 bg-zinc-950"
+                        />
+                      </div>
+                    ) : liveStatus?.is_running && activePane === 'code' ? (
+                      <SessionEditorPane
+                        key={`editor-${key}`}
+                        projectId={paneItem.projectId}
+                        kind={paneItem.kind}
+                        sessionId={paneItem.id}
+                        canContribute={canContributePane}
+                        onOpenPush={() => openFull(paneItem)}
+                        className="flex-1 min-h-0"
+                      />
+                    ) : liveStatus ? (
+                      <SessionTerminal
+                        key={key}
+                        url={api.projects.sessionPtyUrl(paneItem.projectId, paneItem.kind, paneItem.id)}
+                        connectingLabel={
+                          paneItem.kind === 'chat' && paneItem.agentHandle
+                            ? `Resuming @${paneItem.agentHandle}…`
+                            : undefined
+                        }
+                        className="flex-1 min-h-0"
+                      />
+                    ) : (
+                      <div className="flex-1 min-h-0 bg-zinc-950" />
+                    )}
+                  </div>
+                </React.Fragment>
+              )
+            })}
+          </div>
         </div>
       )}
 
-      {/* No overflow clipping here: the close menu pops up above the chips (max 3 fit easily) */}
+      {/* No overflow clipping here: the close menu pops up above the chips */}
       <div className="h-9 px-2 flex items-center gap-1.5 min-w-0">
         {visible.map((it) => {
           const key = dockKey(it.kind, it.id)
-          const isOpen = key === expandedKey
+          const splitIndex = expandedItems.findIndex((e) => dockKey(e.kind, e.id) === key)
+          const isOpen = splitIndex !== -1
           const itemPane = resolvePane(it)
           const liveItem = statusFor(it)
           const matchedAgent =
@@ -389,10 +601,15 @@ export const SessionDock: React.FC = () => {
                     (liveItem?.agent_handle && a.handle.toLowerCase() === liveItem.agent_handle.toLowerCase())
                 ) || null
               : null
+          const canToggleSplit =
+            !isOpen &&
+            expandedItems.length > 0 &&
+            expandedItems.length < MAX_SPLIT_PANES
+
           return (
             <div
               key={key}
-              className={`group shrink-0 max-w-[260px] h-7 pl-2 pr-1 flex items-center gap-1.5 rounded-lg border text-xs transition ${
+              className={`group shrink-0 max-w-[280px] h-7 pl-2 pr-1 flex items-center gap-1 rounded-lg border text-xs transition ${
                 isOpen
                   ? 'border-teal-500/50 bg-teal-500/10 text-teal-800 dark:text-teal-200'
                   : 'border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-900'
@@ -400,10 +617,31 @@ export const SessionDock: React.FC = () => {
             >
               <button
                 type="button"
-                onClick={() => setExpanded(isOpen ? null : key)}
+                onClick={(e) => {
+                  if (e.shiftKey || e.metaKey || e.ctrlKey) {
+                    toggleSplit(key)
+                    return
+                  }
+                  if (isOpen) {
+                    collapsePane(key)
+                  } else {
+                    setExpanded(key)
+                  }
+                }}
                 className="flex items-center gap-1.5 min-w-0 cursor-pointer"
-                title={isOpen ? 'Collapse' : 'Expand'}
+                title={
+                  isOpen
+                    ? 'Collapse pane'
+                    : expandedItems.length > 0
+                      ? 'Switch to session (Shift+Click to open side-by-side)'
+                      : 'Expand session'
+                }
               >
+                {isSplitMode && isOpen && (
+                  <span className="w-3.5 h-3.5 rounded bg-teal-500/20 text-[10px] font-mono font-bold text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
+                    {splitIndex + 1}
+                  </span>
+                )}
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(liveItem)}`} />
                 {it.kind === 'chat' ? (
                   matchedAgent ? (
@@ -417,8 +655,25 @@ export const SessionDock: React.FC = () => {
                   <Terminal size={12} className="shrink-0" />
                 )}
                 <span className="truncate font-medium">{it.title}</span>
-                {isOpen ? <ChevronDown size={12} className="shrink-0 opacity-60" /> : <ChevronUp size={12} className="shrink-0 opacity-60" />}
+                {isOpen ? (
+                  <ChevronDown size={12} className="shrink-0 opacity-60" />
+                ) : (
+                  <ChevronUp size={12} className="shrink-0 opacity-60" />
+                )}
               </button>
+
+              {canToggleSplit && (
+                <button
+                  type="button"
+                  onClick={() => toggleSplit(key)}
+                  title="Open side-by-side"
+                  aria-label={`Open ${it.title} side-by-side`}
+                  className="p-1 rounded-md text-zinc-400 hover:text-teal-600 dark:hover:text-teal-300 hover:bg-teal-500/10 cursor-pointer shrink-0"
+                >
+                  <Columns2 size={11} />
+                </button>
+              )}
+
               <DockCloseMenu
                 item={it}
                 running={!!statusFor(it)?.is_running}
@@ -434,7 +689,23 @@ export const SessionDock: React.FC = () => {
             </div>
           )
         })}
-        {notice && <span className="ml-auto pr-2 text-[11px] text-zinc-500 dark:text-zinc-400 shrink-0">{notice}</span>}
+
+        {isSplitMode && (
+          <button
+            type="button"
+            onClick={collapseAll}
+            title="Collapse all split panes (Ctrl+`)"
+            className="ml-1 px-2 py-1 rounded-md text-[11px] font-semibold text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-900 cursor-pointer shrink-0"
+          >
+            Collapse all
+          </button>
+        )}
+
+        {notice && (
+          <span className="ml-auto pr-2 text-[11px] text-zinc-500 dark:text-zinc-400 shrink-0">
+            {notice}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -463,7 +734,12 @@ const DockCloseMenu: React.FC<{
     const onDoc = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
-    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false) } }
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setOpen(false)
+      }
+    }
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onEsc)
     return () => {
@@ -512,7 +788,9 @@ const DockCloseMenu: React.FC<{
             className="w-full flex flex-col items-start px-2.5 py-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer text-left"
           >
             <span className="font-semibold text-zinc-900 dark:text-zinc-100">Remove from dock</span>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">Keeps running; reopen it from Sessions</span>
+            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              Keeps running; reopen it from Sessions
+            </span>
           </button>
           <button
             type="button"
@@ -525,7 +803,9 @@ const DockCloseMenu: React.FC<{
               {stopping ? 'Stopping…' : 'Stop session'}
             </span>
             <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
-              {item.kind === 'chat' ? 'Ends the agent and puts the workspace to sleep' : 'Ends the terminal and collects artifacts'}
+              {item.kind === 'chat'
+                ? 'Ends the agent and puts the workspace to sleep'
+                : 'Ends the terminal and collects artifacts'}
             </span>
           </button>
         </div>
@@ -534,7 +814,11 @@ const DockCloseMenu: React.FC<{
   )
 }
 
-const DockIconButton: React.FC<{ title: string; onClick: () => void; children: React.ReactNode }> = ({ title, onClick, children }) => (
+const DockIconButton: React.FC<{ title: string; onClick: () => void; children: React.ReactNode }> = ({
+  title,
+  onClick,
+  children,
+}) => (
   <button
     type="button"
     title={title}

@@ -8,7 +8,6 @@ import { StageBadge } from './StageBadge'
 import { useData } from '../../context/DataContext'
 import { useTranslation } from '../../context/I18nContext'
 import { VIEWS } from '../../constants'
-import { getMissingCoreBackends } from '../../utils/backends'
 import {
   formatRelativeTime,
   formatUsd,
@@ -64,17 +63,10 @@ export const AgentsWorkingCard: React.FC<AgentsWorkingCardProps> = ({
     runs,
     agents,
     projects,
-    backends,
-    isInitialLoading,
     selectedProject,
     navigateToDetail,
     setActiveView,
   } = useData()
-
-  const backendsReady = useMemo(
-    () => isInitialLoading || getMissingCoreBackends(backends).length === 0,
-    [backends, isInitialLoading]
-  )
 
   const sourceSeeds = propSeeds ?? contextSeeds
   const shouldHideProject = hideProjectBadge ?? Boolean(selectedProject)
@@ -136,9 +128,7 @@ export const AgentsWorkingCard: React.FC<AgentsWorkingCardProps> = ({
               {t('dashboard.agentsWorkingTitle')}
             </span>
             <span className="text-zinc-500 dark:text-zinc-400 truncate">
-              {!backendsReady
-                ? `· ${t('dashboard.agentsWaitingForBackendsTitle')}`
-                : `· No agents running${queuedSeeds.length ? ` · ${queuedSeeds.length} queued` : ''}`}
+              {`· No agents running${queuedSeeds.length ? ` · ${queuedSeeds.length} queued` : ''}`}
             </span>
           </div>
           {onViewAll && queuedSeeds.length > 0 && (
@@ -200,15 +190,10 @@ export const AgentsWorkingCard: React.FC<AgentsWorkingCardProps> = ({
             <Bot size={20} />
           </div>
           <h4 className="font-heading text-sm font-bold text-zinc-900 dark:text-zinc-100">
-            {!backendsReady
-              ? t('dashboard.agentsWaitingForBackendsTitle')
-              : t('dashboard.agentsWorkingEmpty')}
+            {t('dashboard.agentsWorkingEmpty')}
           </h4>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mt-1 leading-relaxed">
-            {emptyReason ||
-              (!backendsReady
-                ? t('dashboard.agentsWaitingForBackendsDesc')
-                : t('dashboard.agentsWorkingEmptyDesc'))}
+            {emptyReason || t('dashboard.agentsWorkingEmptyDesc')}
           </p>
         </div>
       ) : (

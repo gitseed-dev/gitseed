@@ -1097,6 +1097,14 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
         .all()
     )
     review_or_merge_seeds.sort(key=lambda s: _PR_LAST_CHECKED_AT.get(s.id, 0.0))
+    if len(_PR_LAST_CHECKED_AT) > 512 or len(_LAST_PR_READINESS_CACHE) > 512:
+        active_ids = {s.id for s in review_or_merge_seeds}
+        for cached_id in list(_PR_LAST_CHECKED_AT):
+            if cached_id not in active_ids:
+                _PR_LAST_CHECKED_AT.pop(cached_id, None)
+        for cached_id in list(_LAST_PR_READINESS_CACHE):
+            if cached_id not in active_ids:
+                _LAST_PR_READINESS_CACHE.pop(cached_id, None)
     for seed in review_or_merge_seeds[:15]:
         _PR_LAST_CHECKED_AT[seed.id] = time.monotonic()
         project = await session.get(Project, seed.project_id)

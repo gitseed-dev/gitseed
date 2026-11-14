@@ -336,11 +336,13 @@ async def create_backend(
                     existing_models if isinstance(existing_models, list) else [],
                     legacy_models if isinstance(legacy_models, list) else [],
                     discovered_models,
+                    preferred_default=str(initial_config.get("default_model") or "").strip() or None,
                 )
                 initial_config["models"] = merged_models
                 initial_config["discovered_models"] = [
                     m["id"] for m in merged_models if m.get("enabled", True)
                 ]
+                _normalize_backend_models_default(initial_config)
                 if auth_mode == "cli_oauth":
                     if cleaned_secrets.get("cli_auth_bundle") or cleaned_secrets.get("oauth_token"):
                         initial_config["cli_auth_status"] = "authenticated"
@@ -354,6 +356,11 @@ async def create_backend(
                 backend.config = dict(initial_config)
         except Exception:
             pass
+
+    if type == BackendType.INFERENCE and isinstance(backend.config, dict):
+        norm_init_cfg = dict(backend.config)
+        _normalize_backend_models_default(norm_init_cfg)
+        backend.config = norm_init_cfg
 
     session.add(backend)
     await session.commit()
@@ -385,6 +392,11 @@ async def update_backend(
     target_enabled = enabled if enabled is not None else backend.enabled
     target_cfg = dict(config if config is not None else (backend.config or {}))
     if backend.type == BackendType.INFERENCE:
+        _normalize_backend_models_default(target_cfg)
+        if config is not None:
+            config = target_cfg
+        else:
+            backend.config = target_cfg
         effective_auth = str(target_cfg.get("auth_mode") or "api_key").strip().lower()
         if effective_auth == "cli_oauth":
             if target_enabled and not settings.GITSEED_ALLOW_PERSONAL_CLI_OAUTH:
@@ -1529,11 +1541,22 @@ async def test_backend_connection(
                     existing_models if isinstance(existing_models, list) else [],
                     legacy_models if isinstance(legacy_models, list) else [],
                     discovered_models,
+                    preferred_default=str(cfg.get("default_model") or "").strip() or None,
                 )
                 cfg["models"] = merged_models
                 cfg["discovered_models"] = [
                     m["id"] for m in merged_models if m.get("enabled", True)
                 ]
+                default_entry = next(
+                    (
+                        m["id"]
+                        for m in merged_models
+                        if m.get("enabled", True) and m.get("is_default")
+                    ),
+                    None,
+                )
+                if default_entry:
+                    cfg["default_model"] = default_entry
                 backend.config = cfg
         except Exception:
             pass
@@ -1547,37 +1570,52 @@ async def test_backend_connection(
 
 _DEFAULT_CLOUD_MODELS: dict[str, list[dict[str, Any]]] = {
     "anthropic": [
-        {"id": "claude-sonnet-4-5", "owned_by": "anthropic"},
-        {"id": "claude-opus-4-5", "owned_by": "anthropic"},
-        {"id": "claude-haiku-4-5", "owned_by": "anthropic"},
-        {"id": "claude-sonnet-4-20250514", "owned_by": "anthropic"},
-        {"id": "claude-opus-4-20250514", "owned_by": "anthropic"},
-        {"id": "claude-3-7-sonnet-latest", "owned_by": "anthropic"},
+        {"id": "claude-sonnet-5-5", "owned_by": "anthropic", "is_default": True},
+        {"id": "claude-opus-5-5", "owned_by": "anthropic"},
+        {"id": "claude-haiku-5-5", "owned_by": "anthropic"},
+        {"id": "claude-sonnet-4-6", "owned_by": "anthropic"},
+        {"id": "claude-opus-4-6", "owned_by": "anthropic"},
     ],
     "openai": [
-        {"id": "gpt-4.1", "owned_by": "openai"},
-        {"id": "gpt-4o", "owned_by": "openai"},
-        {"id": "o3", "owned_by": "openai"},
-        {"id": "o4-mini", "owned_by": "openai"},
-        {"id": "codex-mini-latest", "owned_by": "openai"},
-        {"id": "gpt-5.4", "owned_by": "openai"},
+        {"id": "gpt-5.4", "owned_by": "openai", "is_default": True},
+        {"id": "gpt-5.3-codex", "owned_by": "openai"},
+        {"id": "gpt-5.2", "owned_by": "openai"},
+        {"id": "gpt-5.2-codex", "owned_by": "openai"},
+        {"id": "gpt-5.2-pro", "owned_by": "openai"},
     ],
     "gemini": [
-        {"id": "gemini-2.5-pro", "owned_by": "google"},
-        {"id": "gemini-2.5-flash", "owned_by": "google"},
-        {"id": "gemini-2.5-flash-lite", "owned_by": "google"},
-        {"id": "gemini-2.0-flash", "owned_by": "google"},
+        {"id": "gemini-4-argon", "owned_by": "google", "is_default": True},
+        {"id": "gemini-4-hydrogen", "owned_by": "google"},
+        {"id": "gemini-4-carbon", "owned_by": "google"},
+        {"id": "gemini-3.8-flash", "owned_by": "google"},
+        {"id": "gemini-3.5-flash", "owned_by": "google"},
+        {"id": "gemini-3.1-pro", "owned_by": "google"},
+        {"id": "gemini-3.1-flash-lite", "owned_by": "google"},
     ],
     "antigravity": [
-        {"id": "gemini-2.5-pro", "owned_by": "antigravity"},
-        {"id": "gemini-2.5-flash", "owned_by": "antigravity"},
-        {"id": "gemini-2.5-flash-lite", "owned_by": "antigravity"},
+        {"id": "gemini-4-argon", "owned_by": "antigravity", "is_default": True},
+        {"id": "gemini-4-hydrogen", "owned_by": "antigravity"},
+        {"id": "gemini-4-carbon", "owned_by": "antigravity"},
+        {"id": "gemini-3.8-flash", "owned_by": "antigravity"},
+        {"id": "gemini-3.5-flash", "owned_by": "antigravity"},
+        {"id": "gemini-3.1-pro", "owned_by": "antigravity"},
+        {"id": "pro", "owned_by": "antigravity"},
+        {"id": "flash", "owned_by": "antigravity"},
+        {"id": "flash_lite", "owned_by": "antigravity"},
     ],
     "xai": [
-        {"id": "grok-3", "owned_by": "xai"},
-        {"id": "grok-3-mini", "owned_by": "xai"},
-        {"id": "grok-2-latest", "owned_by": "xai"},
+        {"id": "grok-4.7", "owned_by": "xai", "is_default": True},
+        {"id": "grok-4.6", "owned_by": "xai"},
+        {"id": "grok-4.5", "owned_by": "xai"},
+        {"id": "grok-4.3", "owned_by": "xai"},
+        {"id": "grok-4.20-reasoning", "owned_by": "xai"},
     ],
+}
+
+_KNOWN_MODEL_PRIORITY: dict[str, int] = {
+    entry["id"].lower(): idx
+    for provider_models in _DEFAULT_CLOUD_MODELS.values()
+    for idx, entry in enumerate(provider_models)
 }
 
 _OPENAI_EXCLUDE_PREFIXES = (
@@ -1591,21 +1629,127 @@ _OPENAI_EXCLUDE_PREFIXES = (
     "davinci-",
     "gpt-image-",
     "chatgpt-4o-",
+    "gpt-3.5-",
+    "gpt-4-0",
+    "gpt-4-1106",
+    "gpt-4-vision",
+    "gpt-4-turbo",
+    "gpt-4o-2024",
+    "gpt-4o-mini-2024",
+    "gpt-4o-audio",
+    "gpt-4o-realtime",
+    "gpt-4o-transcribe",
+    "gpt-4o-search",
+    "o1-preview",
+    "o1-mini",
+    "computer-use-",
 )
+
+_OPENAI_EXCLUDE_SUBSTRINGS = (
+    "-realtime-",
+    "-audio-",
+    "-transcribe",
+    "-search-preview",
+    "-tts",
+)
+
+_GEMINI_EXCLUDE_SUBSTRINGS = (
+    "embedding",
+    "aqa",
+    "gemini-1.0",
+    "gemini-1.5",
+    "gemini-2.0",
+    "gemini-exp",
+    "imagen",
+    "veo",
+    "learnlm",
+    "gemma",
+    "-tts",
+    "-image",
+    "-vision",
+)
+
+
+def _normalize_backend_models_default(cfg: dict[str, Any]) -> None:
+    """Ensure `cfg['models']` and `cfg['default_model']` agree on a single enabled default model."""
+    models = cfg.get("models")
+    if not isinstance(models, list) or not models:
+        return
+    explicit_cfg_default = str(cfg.get("default_model") or "").strip().lower()
+    chosen_key: str | None = None
+
+    for item in models:
+        if not isinstance(item, dict) or not item.get("enabled", True):
+            continue
+        mid = str(item.get("id") or "").strip()
+        if not mid:
+            continue
+        if bool(item.get("is_default")):
+            chosen_key = mid.lower()
+            break
+
+    if chosen_key is None and explicit_cfg_default:
+        for item in models:
+            if not isinstance(item, dict) or not item.get("enabled", True):
+                continue
+            mid = str(item.get("id") or "").strip()
+            if mid and mid.lower() == explicit_cfg_default:
+                chosen_key = mid.lower()
+                break
+
+    if chosen_key is None:
+        for item in models:
+            if not isinstance(item, dict) or not item.get("enabled", True):
+                continue
+            mid = str(item.get("id") or "").strip()
+            if mid:
+                chosen_key = mid.lower()
+                break
+
+    chosen_id: str | None = None
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        mid = str(item.get("id") or "").strip()
+        is_def = bool(
+            mid
+            and item.get("enabled", True)
+            and chosen_key is not None
+            and mid.lower() == chosen_key
+        )
+        item["is_default"] = is_def
+        if is_def and chosen_id is None:
+            chosen_id = mid
+
+    if chosen_id:
+        cfg["default_model"] = chosen_id
 
 
 def _merge_discovered_models(
     existing: list[Any],
     legacy_discovered: list[Any],
     discovered: list[dict[str, Any]],
+    *,
+    preferred_default: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Merge newly discovered models with existing model entries, preserving enabled flags."""
+    """Merge newly discovered models with existing model entries, preserving enabled & default flags."""
     existing_by_key: dict[str, dict[str, Any]] = {}
-    for item in existing:
+    existing_order: dict[str, int] = {}
+    existing_default_key: str | None = (
+        preferred_default.strip().lower()
+        if isinstance(preferred_default, str) and preferred_default.strip()
+        else None
+    )
+
+    for idx, item in enumerate(existing):
         if isinstance(item, dict) and isinstance(item.get("id"), str):
             mid = item["id"].strip()
             if mid:
-                existing_by_key[mid.lower()] = item
+                key = mid.lower()
+                existing_by_key[key] = item
+                existing_order.setdefault(key, idx)
+                if bool(item.get("is_default")) and item.get("enabled", True):
+                    existing_default_key = key
     for item in legacy_discovered:
         if isinstance(item, str) and item.strip():
             mid = item.strip()
@@ -1615,8 +1759,10 @@ def _merge_discovered_models(
 
     merged: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
+    discovered_order: dict[str, int] = {}
+    discovered_default_key: str | None = None
 
-    for m in discovered:
+    for idx, m in enumerate(discovered):
         mid = str(m.get("id", "")).strip()
         if not mid:
             continue
@@ -1624,9 +1770,12 @@ def _merge_discovered_models(
         if key in seen_keys:
             continue
         seen_keys.add(key)
+        discovered_order[key] = idx
         prev = existing_by_key.get(key)
         default_enabled = "embed" not in key
         enabled = bool(prev.get("enabled", default_enabled)) if prev else default_enabled
+        if discovered_default_key is None and bool(m.get("is_default")) and enabled:
+            discovered_default_key = key
         merged.append(
             {
                 "id": mid,
@@ -1649,7 +1798,41 @@ def _merge_discovered_models(
                 }
             )
 
-    merged.sort(key=lambda item: str(item.get("id", "")).lower())
+    active_default_key = existing_default_key or discovered_default_key
+
+    def _sort_key(item: dict[str, Any]) -> tuple[int, int, str]:
+        key = str(item.get("id", "")).strip().lower()
+        is_def = 0 if (active_default_key and key == active_default_key and item.get("enabled", True)) else 1
+        if key in _KNOWN_MODEL_PRIORITY:
+            rank = _KNOWN_MODEL_PRIORITY[key]
+        elif key in discovered_order:
+            rank = 100 + discovered_order[key]
+        elif key in existing_order:
+            rank = 500 + existing_order[key]
+        else:
+            rank = 1000
+        return (is_def, rank, key)
+
+    merged.sort(key=_sort_key)
+
+    chosen_default_key: str | None = None
+    if active_default_key and any(
+        str(m.get("id", "")).lower() == active_default_key and m.get("enabled", True)
+        for m in merged
+    ):
+        chosen_default_key = active_default_key
+    else:
+        first_enabled = next((m for m in merged if m.get("enabled", True)), None)
+        if first_enabled is not None:
+            chosen_default_key = str(first_enabled.get("id", "")).lower()
+
+    for m in merged:
+        m["is_default"] = bool(
+            chosen_default_key
+            and m.get("enabled", True)
+            and str(m.get("id", "")).lower() == chosen_default_key
+        )
+
     return merged
 
 
@@ -1663,7 +1846,7 @@ async def _fetch_backend_models(
     auth_mode = str((backend.config or {}).get("auth_mode") or "api_key").strip().lower()
     api_key = secrets_map.get("api_key", "")
     if auth_mode == "cli_oauth" and not api_key and provider in _DEFAULT_CLOUD_MODELS:
-        return list(_DEFAULT_CLOUD_MODELS[provider])
+        return [dict(m) for m in _DEFAULT_CLOUD_MODELS[provider]]
     headers: dict[str, str] = {}
 
     if provider == "anthropic":
@@ -1689,7 +1872,7 @@ async def _fetch_backend_models(
             headers["Authorization"] = f"Bearer {api_key}"
     elif provider in ("gemini", "antigravity"):
         if not api_key and provider == "antigravity":
-            return list(_DEFAULT_CLOUD_MODELS["antigravity"])
+            return [dict(m) for m in _DEFAULT_CLOUD_MODELS["antigravity"]]
         base = endpoint or "https://generativelanguage.googleapis.com/v1beta"
         if base.endswith("/openai"):
             url = f"{base}/models"
@@ -1744,24 +1927,35 @@ async def _fetch_backend_models(
                     for item in payload["models"]:
                         if isinstance(item, dict) and isinstance(item.get("name"), str):
                             mid = item["name"].strip().removeprefix("models/")
-                            if not mid or not mid.startswith("gemini"):
+                            mid_low = mid.lower()
+                            if not mid or not mid_low.startswith("gemini"):
                                 continue
-                            if "embedding" in mid.lower() or "aqa" in mid.lower():
+                            if any(sub in mid_low for sub in _GEMINI_EXCLUDE_SUBSTRINGS):
                                 continue
                             discovered.append(
                                 {
                                     "id": mid,
-                                    "owned_by": "google",
+                                    "owned_by": "antigravity" if provider == "antigravity" else "google",
                                 }
                             )
+                    if discovered and provider in _DEFAULT_CLOUD_MODELS:
+                        seen_disc = {m["id"].lower() for m in discovered}
+                        curated_first = [dict(m) for m in _DEFAULT_CLOUD_MODELS[provider]]
+                        curated_keys = {m["id"].lower() for m in curated_first}
+                        discovered = [
+                            *curated_first,
+                            *(m for m in discovered if m["id"].lower() not in curated_keys and m["id"].lower() in seen_disc),
+                        ]
                 elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
                     for item in payload["data"]:
                         if isinstance(item, dict) and isinstance(item.get("id"), str):
                             mid = item["id"].strip().removeprefix("models/")
+                            mid_low = mid.lower()
                             if not mid:
                                 continue
-                            if provider == "openai" and mid.lower().startswith(
-                                _OPENAI_EXCLUDE_PREFIXES
+                            if provider == "openai" and (
+                                mid_low.startswith(_OPENAI_EXCLUDE_PREFIXES)
+                                or any(sub in mid_low for sub in _OPENAI_EXCLUDE_SUBSTRINGS)
                             ):
                                 continue
                             discovered.append(
@@ -1778,7 +1972,7 @@ async def _fetch_backend_models(
         pass
 
     if not discovered and provider in _DEFAULT_CLOUD_MODELS:
-        return list(_DEFAULT_CLOUD_MODELS[provider])
+        return [dict(m) for m in _DEFAULT_CLOUD_MODELS[provider]]
 
     return discovered
 
@@ -1802,11 +1996,22 @@ async def discover_backend_models(
         existing_models if isinstance(existing_models, list) else [],
         legacy_models if isinstance(legacy_models, list) else [],
         discovered,
+        preferred_default=str(cfg.get("default_model") or "").strip() or None,
     )
     cfg["models"] = merged
     cfg["discovered_models"] = [
         m["id"] for m in merged if m.get("enabled", True)
     ]
+    default_entry = next(
+        (
+            m["id"]
+            for m in merged
+            if m.get("enabled", True) and m.get("is_default")
+        ),
+        None,
+    )
+    if default_entry:
+        cfg["default_model"] = default_entry
     backend.config = cfg
     backend.updated_at = datetime.now(UTC)
 
@@ -2437,7 +2642,13 @@ def resolve_provider_sdlc_profile(
     if provider == "gemini":
         return "gemini", "Gemini", AgentRuntime.GEMINI, "default"
     if provider == "xai":
-        return "grok", "Grok", AgentRuntime.GROK_BUILD, "default"
+        cfg = backend.config or {}
+        explicit_rt = str(cfg.get("runtime") or "").strip().lower()
+        if explicit_rt == AgentRuntime.GROK_BUILD.value or is_personal_mode_backend(backend):
+            return "grok", "Grok", AgentRuntime.GROK_BUILD, "default"
+        enabled_models = extract_enabled_model_ids(backend)
+        default_model = enabled_models[0] if enabled_models else "grok-4.7"
+        return "grok", "Grok", AgentRuntime.OPENCODE, default_model
 
     enabled_models = extract_enabled_model_ids(backend)
     default_model = enabled_models[0] if enabled_models else "default"
@@ -2457,7 +2668,7 @@ def _is_inference_backend_ready(backend: Backend) -> bool:
             or "oauth_token" in secret_keys
         )
     provider = (backend.provider or "").strip().lower()
-    if provider in ("ollama", "lmstudio", "vllm", "custom"):
+    if provider in ("ollama", "lmstudio", "vllm", "custom", "antigravity"):
         return True
     return bool(get_secret_keys(backend))
 
@@ -2637,8 +2848,8 @@ async def maybe_auto_provision_sdlc_agents(
     session: AsyncSession,
     backend: Backend,
 ) -> None:
-    """Automatically seed the 5 provider-prefixed SDLC stage agents when a ready inference backend is saved."""
-    if not _is_inference_backend_ready(backend):
+    """Automatically seed the 5 provider-prefixed SDLC stage agents when an inference backend is saved."""
+    if backend.type != BackendType.INFERENCE or not backend.enabled:
         return
     cfg = dict(backend.config or {})
     auto_create_agents = cfg.get("auto_create_agents", True) is not False
@@ -2659,6 +2870,17 @@ async def maybe_auto_provision_sdlc_agents(
             user_count = 0
         if user_count > 1 and not settings.ALLOW_PERSONAL_MODE_IN_MULTI_USER_ORGS:
             return
+
+    if not _is_inference_backend_ready(backend):
+        if auto_create_agents:
+            await provision_sdlc_agents_for_backend(
+                session,
+                backend,
+                force_switch=False,
+                assign_policies=False,
+                overwrite_existing=False,
+            )
+        return
 
     org_policies = await ensure_org_policies(session)
     any_missing_stage_agent = any(p.agent_id is None for p in org_policies.values())

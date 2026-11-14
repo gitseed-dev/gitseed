@@ -150,7 +150,7 @@ export const NewSessionMenu: React.FC<NewSessionMenuProps> = ({
               >
                 <span className="flex items-center gap-2.5">
                   <Sprout size={14} className="text-teal-600 dark:text-teal-400 shrink-0" />
-                  <span>New Seed</span>
+                  <span>Create a seed</span>
                 </span>
                 <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400">
                   Pipeline

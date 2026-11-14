@@ -809,8 +809,8 @@ async def _run_cli_with_steering(
             )
             logger.error(err_msg)
             return 127, "", err_msg
-        logger.info(
-            "CLI binary '%s' not found on PATH; synthesizing output via Model Gateway",
+        logger.warning(
+            "CLI binary '%s' not found on PATH; synthesizing non-editing stage output via Model Gateway fallback",
             adapter.binary_name,
         )
         ok = await synthesize_output_via_gateway(

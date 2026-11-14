@@ -57,32 +57,67 @@ export const BackendModelsTab: React.FC<BackendModelsTabProps> = ({
     [models]
   )
 
+  const defaultModelId = useMemo(() => {
+    const explicit = models.find((m) => m.enabled && m.is_default)
+    if (explicit) return explicit.id
+    return models.find((m) => m.enabled)?.id || null
+  }, [models])
+
   const filteredModels = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const list = q
+    return q
       ? models.filter(
           (m) =>
             m.id.toLowerCase().includes(q) ||
             (m.owned_by || '').toLowerCase().includes(q)
         )
       : [...models]
-    return list.sort((a, b) =>
-      a.id.localeCompare(b.id, undefined, { sensitivity: 'base' })
-    )
   }, [models, search])
 
+  const normalizeDefaultFlag = (
+    list: ModelBackendEntry[],
+    preferredKey?: string | null
+  ): ModelBackendEntry[] => {
+    const targetKey =
+      (preferredKey &&
+        list.some(
+          (m) => m.enabled && m.id.toLowerCase() === preferredKey.toLowerCase()
+        ) &&
+        preferredKey.toLowerCase()) ||
+      list.find((m) => m.enabled && m.is_default)?.id.toLowerCase() ||
+      list.find((m) => m.enabled)?.id.toLowerCase() ||
+      null
+
+    return list.map((m) => ({
+      ...m,
+      is_default: Boolean(
+        targetKey && m.enabled && m.id.toLowerCase() === targetKey
+      ),
+    }))
+  }
+
   const handleToggleModel = (modelId: string) => {
-    onChangeModels(
-      models.map((m) =>
-        m.id.toLowerCase() === modelId.toLowerCase()
-          ? { ...m, enabled: !m.enabled }
-          : m
-      )
+    const toggled = models.map((m) =>
+      m.id.toLowerCase() === modelId.toLowerCase()
+        ? { ...m, enabled: !m.enabled }
+        : m
     )
+    onChangeModels(normalizeDefaultFlag(toggled))
+  }
+
+  const handleSetDefaultModel = (modelId: string) => {
+    const key = modelId.toLowerCase()
+    const updated = models.map((m) =>
+      m.id.toLowerCase() === key
+        ? { ...m, enabled: true, is_default: true }
+        : { ...m, is_default: false }
+    )
+    onChangeModels(normalizeDefaultFlag(updated, key))
   }
 
   const handleSetAllEnabled = (enabled: boolean) => {
-    onChangeModels(models.map((m) => ({ ...m, enabled })))
+    const updated = models.map((m) => ({ ...m, enabled }))
+    onChangeModels(normalizeDefaultFlag(updated))
   }
 
   const handleAddCustomModel = () => {
@@ -93,12 +128,10 @@ export const BackendModelsTab: React.FC<BackendModelsTabProps> = ({
       setShowCustomInput(false)
       return
     }
-    const next = [
+    const next = normalizeDefaultFlag([
       ...models,
       { id: trimmed, owned_by: provider, enabled: true },
-    ].sort((a, b) =>
-      a.id.localeCompare(b.id, undefined, { sensitivity: 'base' })
-    )
+    ])
     onChangeModels(next)
     setCustomModelId('')
     setShowCustomInput(false)
@@ -111,8 +144,8 @@ export const BackendModelsTab: React.FC<BackendModelsTabProps> = ({
           <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
             Available Models ({enabledCount}/{models.length} enabled)
           </h4>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-            Enabled models appear in the Target Model selector when configuring stage and utility agents.
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+            Enabled models appear in the Target Model selector. Organization policies, project policies, and agents set to <code className="font-mono">default</code> automatically use the model marked <span className="font-semibold text-teal-600 dark:text-teal-400">Default</span>.
           </p>
         </div>
 
@@ -253,55 +286,79 @@ export const BackendModelsTab: React.FC<BackendModelsTabProps> = ({
         </div>
       ) : (
         <div className="flex flex-col divide-y divide-zinc-200/70 dark:divide-zinc-700/60 rounded-xl border border-zinc-200 dark:border-zinc-700/80 overflow-hidden">
-          {filteredModels.map((model) => (
-            <div
-              key={model.id}
-              className={`px-3.5 py-2.5 flex items-center justify-between gap-3 transition-colors ${
-                model.enabled
-                  ? 'bg-white dark:bg-zinc-900/60'
-                  : 'bg-zinc-50/70 dark:bg-zinc-800/30 opacity-65'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Cpu
-                  size={15}
-                  className={
-                    model.enabled
-                      ? 'text-teal-600 dark:text-teal-400 shrink-0'
-                      : 'text-zinc-400 shrink-0'
-                  }
-                />
-                <div className="min-w-0">
-                  <div className="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-                    {model.id}
-                  </div>
-                  {model.owned_by && (
-                    <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 font-mono">
-                      {model.owned_by}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                role="switch"
-                aria-checked={model.enabled}
-                onClick={() => handleToggleModel(model.id)}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+          {filteredModels.map((model) => {
+            const isDefault =
+              Boolean(model.enabled) &&
+              Boolean(defaultModelId) &&
+              model.id.toLowerCase() === defaultModelId?.toLowerCase()
+            return (
+              <div
+                key={model.id}
+                className={`px-3.5 py-2.5 flex items-center justify-between gap-3 transition-colors ${
                   model.enabled
-                    ? 'bg-teal-600 dark:bg-teal-500'
-                    : 'bg-zinc-300 dark:bg-zinc-700'
+                    ? 'bg-white dark:bg-zinc-900/60'
+                    : 'bg-zinc-50/70 dark:bg-zinc-800/30 opacity-65'
                 }`}
               >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition duration-200 ease-in-out ${
-                    model.enabled ? 'translate-x-4' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-          ))}
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Cpu
+                    size={15}
+                    className={
+                      model.enabled
+                        ? 'text-teal-600 dark:text-teal-400 shrink-0'
+                        : 'text-zinc-400 shrink-0'
+                    }
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-mono font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                        {model.id}
+                      </span>
+                      {isDefault && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-sans font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30 shrink-0">
+                          Default
+                        </span>
+                      )}
+                    </div>
+                    {model.owned_by && (
+                      <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 font-mono">
+                        {model.owned_by}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5 shrink-0">
+                  {!isDefault && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetDefaultModel(model.id)}
+                      className="px-2 py-1 rounded-lg text-xs font-semibold text-zinc-500 hover:text-teal-600 dark:text-zinc-400 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                    >
+                      Set default
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={model.enabled}
+                    onClick={() => handleToggleModel(model.id)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      model.enabled
+                        ? 'bg-teal-600 dark:bg-teal-500'
+                        : 'bg-zinc-300 dark:bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition duration-200 ease-in-out ${
+                        model.enabled ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

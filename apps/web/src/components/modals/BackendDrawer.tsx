@@ -211,10 +211,11 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       setCapacity(initialType === 'compute' ? 2 : initialType === 'inference' ? 4 : null)
       setCommandArgs('')
       setModelEntries(
-        initialCloudModels.map((id) => ({
+        initialCloudModels.map((id, idx) => ({
           id,
           owned_by: initialProvider,
           enabled: true,
+          is_default: idx === 0,
         }))
       )
       setAppId('')
@@ -268,10 +269,11 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     if (type === 'inference' && !currentBackend) {
       const cloudDefaults = DEFAULT_CLOUD_MODELS[nextProvider] || []
       setModelEntries(
-        cloudDefaults.map((id) => ({
+        cloudDefaults.map((id, idx) => ({
           id,
           owned_by: nextProvider,
           enabled: true,
+          is_default: idx === 0,
         }))
       )
     }
@@ -304,6 +306,12 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       base.discovered_models = modelEntries
         .filter((m) => m.enabled)
         .map((m) => m.id)
+      const defaultEntry =
+        modelEntries.find((m) => m.enabled && m.is_default) ||
+        modelEntries.find((m) => m.enabled)
+      if (defaultEntry) {
+        base.default_model = defaultEntry.id
+      }
       base.auto_create_agents = autoCreateAgents
       base.set_sdlc_default = setSdlcDefault
       base.is_sdlc_default = setSdlcDefault

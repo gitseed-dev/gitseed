@@ -1525,7 +1525,7 @@ async def stop_runner_agent_phase(
     """Ensure the untrusted `agent` container has stopped before `finalize` copies `/workspace`.
 
     In Docker, stops/kills ONLY the `agent` container (`gitseed-run-<run_id>`) without deleting it
-    so container logs remain available for run finalization. In Kubernetes, waits up to 6s for the
+    so container logs remain available for run finalization. In Kubernetes, waits up to 15s for the
     `agent` container in the Job Pod to reach `terminated` state, raising `RuntimeError` if a rogue
     process forged `.agent-done` while keeping `agent` running.
     """
@@ -1534,7 +1534,7 @@ async def stop_runner_agent_phase(
         client, base_url, default_ns = _k8s_client_for_backend(backend)
         target_ns, name = _split_k8s_ref(default_ns, effective_ref)
         async with client:
-            for _ in range(12):
+            for _ in range(30):
                 pods_resp = await client.get(
                     f"{base_url}/api/v1/namespaces/{quote(target_ns, safe='')}/pods"
                     f"?labelSelector=job-name%3D{quote(name, safe='')}"

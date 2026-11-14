@@ -160,14 +160,18 @@ async def fetch_finalize_context(
     finalize_token: str,
 ) -> dict[str, Any]:
     """Fetch trusted finalize context (base_heads, blocked_paths, repositories) from Core."""
+    url = f"{api_url.rstrip('/')}/api/v1/runner/finalize-context"
+    headers = {"Authorization": f"Bearer {finalize_token}"}
     async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.get(
-            f"{api_url.rstrip('/')}/api/v1/runner/finalize-context",
-            headers={"Authorization": f"Bearer {finalize_token}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data if isinstance(data, dict) else {}
+        for attempt in range(6):
+            resp = await client.get(url, headers=headers)
+            if resp.status_code in (409, 502, 503, 504) and attempt < 5:
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            return data if isinstance(data, dict) else {}
+    return {}
 
 
 async def request_git_push_credential(

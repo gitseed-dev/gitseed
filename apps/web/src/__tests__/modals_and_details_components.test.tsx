@@ -79,23 +79,23 @@ describe('Modal Subcomponents (src/components/modals/*)', () => {
         <BackendConfigTab
           isEditing={true}
           name="GitHub Enterprise"
-          setName={() => {}}
+          setName={() => { }}
           type="git"
           provider="github"
-          onProviderChange={() => {}}
+          onProviderChange={() => { }}
           endpoint="https://api.github.com"
-          setEndpoint={() => {}}
+          setEndpoint={() => { }}
           secrets={{ token: '' }}
-          onSecretChange={() => {}}
+          onSecretChange={() => { }}
           existingSecretKeys={['token']}
           commandArgs=""
-          setCommandArgs={() => {}}
+          setCommandArgs={() => { }}
           appId=""
-          setAppId={() => {}}
+          setAppId={() => { }}
           installationId=""
-          setInstallationId={() => {}}
+          setInstallationId={() => { }}
           enabled={true}
-          setEnabled={() => {}}
+          setEnabled={() => { }}
         />
         <BackendModelsTab
           isEditing={true}
@@ -112,9 +112,9 @@ describe('Modal Subcomponents (src/components/modals/*)', () => {
               enabled: false,
             },
           ]}
-          onChangeModels={() => {}}
+          onChangeModels={() => { }}
           isSyncing={false}
-          onSyncFromProvider={() => {}}
+          onSyncFromProvider={() => { }}
         />
         <BackendRepositoriesTab
           isEditing={true}
@@ -126,52 +126,52 @@ describe('Modal Subcomponents (src/components/modals/*)', () => {
               enabled: true,
             },
           ]}
-          onChangeRepositories={() => {}}
+          onChangeRepositories={() => { }}
           isSyncing={false}
-          onSyncFromProvider={() => {}}
+          onSyncFromProvider={() => { }}
         />
         <BackendCapacityTab
           type="inference"
           capacity={4}
-          setCapacity={() => {}}
+          setCapacity={() => { }}
         />
         <BackendAccessTab
           accessRestricted={true}
-          setAccessRestricted={() => {}}
+          setAccessRestricted={() => { }}
           selectedAgentIds={['a1']}
-          onToggleAgent={() => {}}
+          onToggleAgent={() => { }}
           agents={mockAgents}
           usedProjects={mockProjects}
-          onNavigateProject={() => {}}
+          onNavigateProject={() => { }}
         />
         <AgentForm
           isEditing={true}
           selectedTemplate="architect"
-          onSelectTemplate={() => {}}
+          onSelectTemplate={() => { }}
           name="Architect"
-          onNameChange={() => {}}
+          onNameChange={() => { }}
           handle="architect"
-          onHandleChange={() => {}}
-          setIsHandleCustom={() => {}}
+          onHandleChange={() => { }}
+          setIsHandleCustom={() => { }}
           kind="stage"
-          onKindChange={() => {}}
+          onKindChange={() => { }}
           runtime="claude-code"
-          onRuntimeChange={() => {}}
+          onRuntimeChange={() => { }}
           model="claude-sonnet-4-20250514"
-          onModelChange={() => {}}
+          onModelChange={() => { }}
           instructions="You are the Architect."
-          onInstructionsChange={() => {}}
+          onInstructionsChange={() => { }}
           enabled={true}
-          onEnabledChange={() => {}}
+          onEnabledChange={() => { }}
           selectedSkillIds={['sk1']}
-          onToggleSkill={() => {}}
+          onToggleSkill={() => { }}
           availableSkills={mockSkills}
           tools={[]}
-          onToggleToolBackend={() => {}}
+          onToggleToolBackend={() => { }}
           backends={mockBackends}
           selectedBackendIds={['b-model']}
-          onToggleRestrictedBackend={() => {}}
-          onNavigateToBackends={() => {}}
+          onToggleRestrictedBackend={() => { }}
+          onNavigateToBackends={() => { }}
         />
         <SkillsTable
           skills={mockSkills}
@@ -179,9 +179,9 @@ describe('Modal Subcomponents (src/components/modals/*)', () => {
           selectedSkillId="sk1"
           sortKey="name"
           sortDirection="asc"
-          onSort={() => {}}
-          onSelectSkill={() => {}}
-          onDeleteSkill={() => {}}
+          onSort={() => { }}
+          onSelectSkill={() => { }}
+          onDeleteSkill={() => { }}
         />
       </div>
     )
@@ -193,9 +193,9 @@ describe('Modal Subcomponents (src/components/modals/*)', () => {
 
   it('renders SeedModal with compact prompt and default chips', () => {
     const html = renderWithProviders(
-      <SeedModal isOpen={true} onClose={() => {}} />
+      <SeedModal isOpen={true} onClose={() => { }} />
     )
-    assert.ok(html.includes('New seed in') || html === '')
+    assert.ok(html.includes('Create a seed in') || html === '')
   })
 })
 
@@ -210,7 +210,7 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           runs={mockRuns}
           canApprove={true}
           canContribute={true}
-          onRefresh={async () => {}}
+          onRefresh={async () => { }}
         />
         <SeedOverviewTab
           seed={mockSeeds[0]}
@@ -221,15 +221,15 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           comments={mockComments}
           canContribute={true}
           canManageProject={true}
-          onEditSeed={() => {}}
-          onRefresh={async () => {}}
+          onEditSeed={() => { }}
+          onRefresh={async () => { }}
         />
         <SeedTasksTab
           seed={mockSeeds[0]}
           tasks={mockSeedTasks}
           planAgentHandle="@architect"
           canContribute={true}
-          onRefresh={async () => {}}
+          onRefresh={async () => { }}
         />
         <SeedRunsTab
           seed={mockSeeds[0]}
@@ -240,22 +240,22 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           effectivePolicies={mockPolicies}
           canContribute={true}
           isDispatching={false}
-          onDispatchRun={() => {}}
+          onDispatchRun={() => { }}
         />
         <SeedChangesTab
           seed={mockSeeds[0]}
           project={mockProjects[0]}
           repos={mockRepos}
           selectedRepoId={1}
-          onSelectRepoId={() => {}}
+          onSelectRepoId={() => { }}
           changes={mockChanges}
           isLoading={false}
           isFetching={false}
           error={null}
           canContribute={true}
-          onRefresh={() => {}}
-          onBrowseCode={() => {}}
-          onRunSandbox={() => {}}
+          onRefresh={() => { }}
+          onBrowseCode={() => { }}
+          onRunSandbox={() => { }}
         />
         <SeedDiscussionCard
           seedId="s1"
@@ -263,7 +263,7 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           canContribute={true}
           canManageProject={true}
           resolveActorName={() => 'Ada Lovelace'}
-          onRefresh={async () => {}}
+          onRefresh={async () => { }}
         />
         <SeedMetadataSidebar
           seed={mockSeeds[0]}
@@ -272,7 +272,7 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           runs={mockRuns}
           canContribute={true}
           autonomyNotice={null}
-          onAutonomyChange={() => {}}
+          onAutonomyChange={() => { }}
           resolveActorName={() => 'Ada Lovelace'}
         />
       </div>
@@ -296,8 +296,8 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
         comments={mockComments}
         canContribute={true}
         canManageProject={true}
-        onEditSeed={() => {}}
-        onRefresh={async () => {}}
+        onEditSeed={() => { }}
+        onRefresh={async () => { }}
       />
     )
     assert.ok(longSpecHtml.includes('Show full specification'))
@@ -332,9 +332,9 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           repos={mockRepos}
           effectiveMonthlyBudget={500}
           canManage={true}
-          onOpenSeeds={() => {}}
-          onOpenCode={() => {}}
-          onOpenSettings={() => {}}
+          onOpenSeeds={() => { }}
+          onOpenCode={() => { }}
+          onOpenSettings={() => { }}
         />
         <ProjectMembersTab
           project={mockProjects[0]}
@@ -357,10 +357,10 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           backends={mockBackends}
           canManage={true}
           confirmArchiveOpen={false}
-          setConfirmArchiveOpen={() => {}}
-          onToggleBackendsRestricted={async () => {}}
-          onToggleAllowedBackend={async () => {}}
-          onArchiveOrRestore={async () => {}}
+          setConfirmArchiveOpen={() => { }}
+          onToggleBackendsRestricted={async () => { }}
+          onToggleAllowedBackend={async () => { }}
+          onArchiveOrRestore={async () => { }}
         />
         <RepoClonePopover
           repo={mockRepos[0]}
@@ -390,22 +390,22 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           currentExternalUrl="https://github.com/acme/core-platform/blob/main/src/index.ts"
           providerLabel="GitHub"
           theme="dark"
-          onNavigateUp={() => {}}
+          onNavigateUp={() => { }}
         />
         <SandboxSessionInspector
           projectId="p1"
           session={mockSandboxSession}
           canContribute={true}
           stoppingId={null}
-          onStopSession={() => {}}
-          onSendInput={async () => {}}
+          onStopSession={() => { }}
+          onSendInput={async () => { }}
         />
         <ProjectSandboxTab
           project={mockProjects[0]}
           repos={mockRepos}
           projectSeeds={mockSeeds}
           canContribute={true}
-          onOpenSettings={() => {}}
+          onOpenSettings={() => { }}
         />
         <ProjectSettingsTab
           project={mockProjects[0]}
@@ -415,7 +415,7 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
         <ProjectCodeTab
           project={mockProjects[0]}
           repos={mockRepos}
-          onOpenSettings={() => {}}
+          onOpenSettings={() => { }}
         />
       </div>
     )
@@ -434,29 +434,29 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
             userId: 'u2',
             url: 'http://localhost:5173/accept-invite?token=abc',
           }}
-          onReinvite={() => {}}
-          onRevokeInvite={() => {}}
+          onReinvite={() => { }}
+          onRevokeInvite={() => { }}
         />
         <UserProfileEditForm
           profileName="Ada Lovelace"
-          onChangeProfileName={() => {}}
+          onChangeProfileName={() => { }}
           profilePreferredName="Ada"
-          onChangeProfilePreferredName={() => {}}
+          onChangeProfilePreferredName={() => { }}
           isSaving={false}
-          onSave={() => {}}
-          onCancel={() => {}}
+          onSave={() => { }}
+          onCancel={() => { }}
         />
         <UserPasswordChangeForm
           currentPassword=""
-          onChangeCurrentPassword={() => {}}
+          onChangeCurrentPassword={() => { }}
           newPassword=""
-          onChangeNewPassword={() => {}}
+          onChangeNewPassword={() => { }}
           confirmNewPassword=""
-          onChangeConfirmNewPassword={() => {}}
+          onChangeConfirmNewPassword={() => { }}
           passwordError={null}
           isSaving={false}
-          onSave={() => {}}
-          onCancel={() => {}}
+          onSave={() => { }}
+          onCancel={() => { }}
         />
         <UserProjectsSection
           userStatus="active"
@@ -472,14 +472,14 @@ describe('Detail Components: Seed, Project, and User (src/components/details/*)'
           projectPoliciesByProject={{ p1: mockPolicies }}
           orgPolicies={mockPolicies}
           canManageProject={() => true}
-          onNavigateProject={() => {}}
-          onChangeProjectRole={() => {}}
-          onAddProject={() => {}}
+          onNavigateProject={() => { }}
+          onChangeProjectRole={() => { }}
+          onAddProject={() => { }}
         />
         <UserTokensSection
           tokens={mockTokens}
           maxPatLifetimeDays={90}
-          onError={() => {}}
+          onError={() => { }}
         />
       </div>
     )

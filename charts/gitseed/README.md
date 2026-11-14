@@ -55,5 +55,24 @@ Open `http://localhost:8421`.
 When exposing GitSeed behind a custom TLS Ingress or reverse proxy instead of `localhost` port-forwarding, configure **two distinct origins** so embedded `openvscode-server` webviews never share the `gitseed_session` cookie origin:
 
 - `web.publicUrl`: Your primary Web UI origin (e.g., `https://gitseed.example.com`).
-- `web.sandboxOrigin`: A separate origin dedicated exclusively to `/api/v1/vscode/*` (e.g., `https://sandbox.gitseed.example.com`).
-- `web.corsOrigins`: Allowed browser origins matching `web.publicUrl` (e.g., `["https://gitseed.example.com"]`).
+- `ingress.sandboxHost` / `web.sandboxOrigin`: A separate origin dedicated exclusively to `/api/v1/vscode/*` (e.g., `sandbox.gitseed.example.com` / `https://sandbox.gitseed.example.com`). When `ingress.enabled=true` and `ingress.sandboxHost` is set, the chart automatically derives `SANDBOX_ORIGIN` unless `web.sandboxOrigin` is explicitly overridden.
+- `web.corsOrigins`: Allowed browser origins matching `web.publicUrl` (e.g., `"https://gitseed.example.com"`).
+
+## GitOps Secret Contract (`auth.existingSecret`)
+
+When setting `auth.existingSecret` (recommended for ArgoCD / Flux alongside `gitops.requireExistingSecret=true`), pre-create an `Opaque` Kubernetes `Secret` in the release namespace containing these 9 keys:
+
+- `GITSEED_SECRET_KEY`: High-entropy secret (`>= 32` characters) used for Fernet secret encryption and token signing.
+- `GITSEED_ADMIN_PASSWORD`: Initial bootstrap administrator password (or empty string `""` to auto-generate and log once).
+- `POSTGRES_PASSWORD`: PostgreSQL password (`>= 16` characters).
+- `DATABASE_URL`: `postgresql+psycopg://<user>:<url-encoded-pass>@<host>:<port>/<db>`
+- `LITELLM_MASTER_KEY`: LiteLLM proxy master key (`>= 16` characters, e.g. `sk-gitseed-<random>`).
+- `LITELLM_SALT_KEY`: LiteLLM encryption salt key (`>= 16` characters, immutable once models are stored in DB).
+- `LITELLM_DATABASE_URL`: `postgresql://<user>:<url-encoded-pass>@<host>:<port>/<litellm_db>`
+- `VALKEY_PASSWORD`: Valkey/Redis password (`>= 16` characters).
+- `REDIS_URL`: `redis://:<url-encoded-valkey-pass>@<valkey-host>:<port>/0`
+
+## Kubernetes Compute Runtime Notes
+
+- **3-Phase SDLC Stage Jobs, Interactive PTY Sandboxes & Live Agent Sessions** run natively on In-Cluster Kubernetes Jobs/Pods.
+- **Model Authentication**: Configure **API-key** (or self-hosted HTTP) inference backends on Kubernetes deployments (or paste a pre-authenticated JSON CLI OAuth bundle); interactive containerized CLI OAuth sign-in helpers and embedded `openvscode-server` browser tabs require a Docker compute backend.

@@ -18,6 +18,7 @@ export const OverviewView: React.FC = () => {
   const { user } = useAuth()
   const {
     seeds,
+    allSeeds,
     runs,
     events,
     backends,
@@ -40,6 +41,13 @@ export const OverviewView: React.FC = () => {
   const projectsReady = useMemo(
     () => isInitialLoading || projects.some((p) => !p.archived_at),
     [projects, isInitialLoading]
+  )
+  const showOperationalSections = useMemo(
+    () =>
+      backendsReady &&
+      projectsReady &&
+      (allSeeds.length > 0 || runs.length > 0 || events.length > 0),
+    [backendsReady, projectsReady, allSeeds.length, runs.length, events.length]
   )
 
   const firstName = useMemo(() => {
@@ -129,20 +137,24 @@ export const OverviewView: React.FC = () => {
         onNewSeed={() => setIsSeedModalOpen(true)}
       />
 
-      <SdlcPipelineStrip seeds={seeds} className="sticky top-0 z-20" />
-      <OperatorReviewPanel seeds={seeds} showNominalState />
-      {/* What's happening now: full width, a single line when idle */}
-      <AgentsWorkingCard seeds={seeds} showMySessions compactWhenIdle />
-      {/* History: usage and activity side by side, starting at the same height */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        <SpendTrendCard
-          seeds={seeds}
-          runs={runs}
-          monthlyBudgetUsd={selectedProjectObj?.monthly_budget}
-          showSeedBreakdown
-        />
-        <RecentActivityCard events={events} />
-      </div>
+      {showOperationalSections && (
+        <>
+          <SdlcPipelineStrip seeds={seeds} className="sticky top-0 z-20" />
+          <OperatorReviewPanel seeds={seeds} showNominalState />
+          {/* What's happening now: full width, a single line when idle */}
+          <AgentsWorkingCard seeds={seeds} showMySessions compactWhenIdle />
+          {/* History: usage and activity side by side, starting at the same height */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            <SpendTrendCard
+              seeds={seeds}
+              runs={runs}
+              monthlyBudgetUsd={selectedProjectObj?.monthly_budget}
+              showSeedBreakdown
+            />
+            <RecentActivityCard events={events} />
+          </div>
+        </>
+      )}
 
       <SeedModal
         isOpen={isSeedModalOpen}

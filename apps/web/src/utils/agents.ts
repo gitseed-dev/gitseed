@@ -7,7 +7,7 @@ import type {
   SeedStage,
   StagePolicy,
 } from '../types'
-import { getEnabledBackendModels } from './backends'
+import { getBackendDefaultModel, getEnabledBackendModels } from './backends'
 
 export interface RuntimeBuiltInModelOption {
   value: string
@@ -58,8 +58,6 @@ export const AGENT_RUNTIME_DEFINITIONS: AgentRuntimeDefinition[] = [
       { value: 'claude-haiku-5-5', label: 'claude-haiku-5-5 (Claude Haiku 5.5)' },
       { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6 (Claude Sonnet 4.6)' },
       { value: 'claude-opus-4-6', label: 'claude-opus-4-6 (Claude Opus 4.6)' },
-      { value: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5 (Claude Sonnet 4.5)' },
-      { value: 'claude-opus-4-5', label: 'claude-opus-4-5 (Claude Opus 4.5)' },
     ],
   },
   {
@@ -80,10 +78,6 @@ export const AGENT_RUNTIME_DEFINITIONS: AgentRuntimeDefinition[] = [
       { value: 'gpt-5.2-codex', label: 'gpt-5.2-codex (GPT-5.2 Codex)' },
       { value: 'gpt-5.2', label: 'gpt-5.2' },
       { value: 'gpt-5.2-pro', label: 'gpt-5.2-pro' },
-      { value: 'gpt-5.1-codex-max', label: 'gpt-5.1-codex-max' },
-      { value: 'gpt-5.1-codex', label: 'gpt-5.1-codex' },
-      { value: 'o3', label: 'o3' },
-      { value: 'o3-pro', label: 'o3-pro' },
     ],
   },
   {
@@ -96,18 +90,19 @@ export const AGENT_RUNTIME_DEFINITIONS: AgentRuntimeDefinition[] = [
     nativeProvider: 'antigravity',
     nativeProviderLabel: 'Antigravity',
     authSummary:
-    'Uses Antigravity built-in model tiers (default, pro, flash, flash_lite) and authenticates via an Antigravity backend or ~/.gemini/antigravity-cli.',
+      'Uses Antigravity built-in model tiers (default, pro, flash, flash_lite) and authenticates via an Antigravity backend or ~/.gemini/antigravity-cli.',
     builtInModels: [
       { value: 'default', label: 'default (Antigravity Default / inherit)' },
-      { value: 'pro', label: 'pro (Antigravity Pro Tier)' },
-      { value: 'flash', label: 'flash (Antigravity Flash Tier)' },
-      { value: 'flash_lite', label: 'flash_lite (Antigravity Flash-Lite Tier)' },
       { value: 'gemini-4-argon', label: 'gemini-4-argon (Gemini 4 Argon)' },
+      { value: 'gemini-4-hydrogen', label: 'gemini-4-hydrogen (Gemini 4 Hydrogen)' },
       { value: 'gemini-4-carbon', label: 'gemini-4-carbon (Gemini 4 Carbon)' },
       { value: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Gemini 3.8 Flash)' },
       { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Gemini 3.5 Flash)' },
       { value: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Gemini 3.1 Pro)' },
       { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Gemini 3.1 Flash-Lite)' },
+      { value: 'pro', label: 'pro (Antigravity Pro Tier)' },
+      { value: 'flash', label: 'flash (Antigravity Flash Tier)' },
+      { value: 'flash_lite', label: 'flash_lite (Antigravity Flash-Lite Tier)' },
     ],
   },
   {
@@ -124,13 +119,12 @@ export const AGENT_RUNTIME_DEFINITIONS: AgentRuntimeDefinition[] = [
     builtInModels: [
       { value: 'default', label: 'default (Gemini CLI Default)' },
       { value: 'gemini-4-argon', label: 'gemini-4-argon (Gemini 4 Argon)' },
+      { value: 'gemini-4-hydrogen', label: 'gemini-4-hydrogen (Gemini 4 Hydrogen)' },
       { value: 'gemini-4-carbon', label: 'gemini-4-carbon (Gemini 4 Carbon)' },
       { value: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Gemini 3.8 Flash)' },
       { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Gemini 3.5 Flash)' },
       { value: 'gemini-3.1-pro', label: 'gemini-3.1-pro (Gemini 3.1 Pro)' },
       { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Gemini 3.1 Flash-Lite)' },
-      { value: 'gemini-3-pro', label: 'gemini-3-pro (Gemini 3 Pro)' },
-      { value: 'gemini-3-flash', label: 'gemini-3-flash (Gemini 3 Flash)' },
     ],
   },
   {
@@ -240,7 +234,7 @@ export function getProviderAgentPrefix(provider: string): {
     case 'gemini':
       return { handlePrefix: 'gemini', displayPrefix: 'Gemini', runtime: 'gemini' }
     case 'xai':
-      return { handlePrefix: 'grok', displayPrefix: 'Grok', runtime: 'grok-build' }
+      return { handlePrefix: 'grok', displayPrefix: 'Grok', runtime: 'opencode' }
     default:
       return { handlePrefix: 'open', displayPrefix: 'OpenCode', runtime: 'opencode' }
   }
@@ -295,6 +289,51 @@ export function getAgentAssignedStages(
     .filter((p) => p.agent_id === agentId)
     .map((p) => p.stage)
     .sort((a, b) => (order[a] ?? 99) - (order[b] ?? 99))
+}
+
+const TEMPLATE_OR_ROLE_TO_STAGE: Record<string, SeedStage> = {
+  ideator: 'ideate',
+  ideate: 'ideate',
+  planner: 'plan',
+  plan: 'plan',
+  coder: 'execute',
+  execute: 'execute',
+  reviewer: 'review',
+  review: 'review',
+  merger: 'merge',
+  merge: 'merge',
+}
+
+export function getAgentTargetStage(agent: Agent): SeedStage | null {
+  const tpl = (agent.template || '').trim().toLowerCase()
+  if (tpl && TEMPLATE_OR_ROLE_TO_STAGE[tpl]) {
+    return TEMPLATE_OR_ROLE_TO_STAGE[tpl]
+  }
+  const handle = (agent.handle || '').trim().toLowerCase()
+  const tokens = handle.split(/[^a-z0-9]+/).filter(Boolean)
+  for (const token of tokens) {
+    if (TEMPLATE_OR_ROLE_TO_STAGE[token]) {
+      return TEMPLATE_OR_ROLE_TO_STAGE[token]
+    }
+  }
+  return null
+}
+
+export function filterStageAgentsForStage(
+  agents: Agent[],
+  stage: SeedStage,
+  preserveAgentIds?: Array<string | null | undefined>
+): Agent[] {
+  const preserved = new Set(
+    (preserveAgentIds || []).filter((id): id is string => Boolean(id))
+  )
+  const candidates = agents.filter((a) => !a.archived_at && a.kind === 'stage')
+  const matched = candidates.filter((agent) => {
+    if (preserved.has(agent.id)) return true
+    const targetStage = getAgentTargetStage(agent)
+    return targetStage === null || targetStage === stage
+  })
+  return matched.length > 0 ? matched : candidates
 }
 
 export function getAgentActiveRuns(agentId: string, runs: Run[]): Run[] {
@@ -361,7 +400,16 @@ export function getCompatibleModelBackends(
           : b.provider.toLowerCase() === 'litellm'
             ? 1
             : 2
-      return rankA - rankB
+      if (rankA !== rankB) return rankA - rankB
+      const defA = a.config?.is_sdlc_default ? 0 : 1
+      const defB = b.config?.is_sdlc_default ? 0 : 1
+      return defA - defB
+    })
+  } else {
+    filtered.sort((a, b) => {
+      const defA = a.config?.is_sdlc_default ? 0 : 1
+      const defB = b.config?.is_sdlc_default ? 0 : 1
+      return defA - defB
     })
   }
   return filtered
@@ -373,6 +421,8 @@ export function getConfiguredModelOptions(
 ): ConfiguredModelOption[] {
   const rtDef = getRuntimeDefinition(runtime)
   const compatible = getCompatibleModelBackends(runtime, backends)
+  const primaryDefaultModel =
+    compatible.length > 0 ? getBackendDefaultModel(compatible[0]) : null
 
   if (runtime === 'opencode') {
     if (compatible.length === 0) {
@@ -381,8 +431,9 @@ export function getConfiguredModelOptions(
     const options: ConfiguredModelOption[] = [
       {
         value: 'default',
-        label:
-          compatible.length === 1
+        label: primaryDefaultModel
+          ? `default (${primaryDefaultModel} · ${compatible[0].name})`
+          : compatible.length === 1
             ? `default (${compatible[0].name} default)`
             : 'default (Backend default model)',
         backendName: compatible[0].name,
@@ -398,7 +449,9 @@ export function getConfiguredModelOptions(
           seen.add(modelId)
           options.push({
             value: modelId,
-            label: `${modelId} (${b.name})`,
+            label: entry.is_default
+              ? `${modelId} (${b.name} · Default)`
+              : `${modelId} (${b.name})`,
             backendName: b.name,
             group: 'backend',
           })
@@ -415,7 +468,10 @@ export function getConfiguredModelOptions(
     seen.add(builtIn.value)
     options.push({
       value: builtIn.value,
-      label: builtIn.label,
+      label:
+        builtIn.value === 'default' && primaryDefaultModel && compatible[0]
+          ? `default (${primaryDefaultModel} · ${compatible[0].name})`
+          : builtIn.label,
       backendName: rtDef.shortLabel,
       group: 'builtin',
     })
@@ -429,7 +485,9 @@ export function getConfiguredModelOptions(
         seen.add(modelId)
         options.push({
           value: modelId,
-          label: `${modelId} (${b.name})`,
+          label: entry.is_default
+            ? `${modelId} (${b.name} · Default)`
+            : `${modelId} (${b.name})`,
           backendName: b.name,
           group: 'backend',
         })

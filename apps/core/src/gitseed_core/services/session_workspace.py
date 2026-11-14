@@ -65,6 +65,7 @@ from gitseed_core.services.errors import Invalid
 from gitseed_core.services.gateway import (
     _litellm_headers,
     finalize_run_litellm_key,
+    is_personal_mode_backend,
     sync_backend_to_litellm,
 )
 from gitseed_core.services.git_auth import resolve_git_backend_token
@@ -1022,7 +1023,7 @@ async def draft_push_summary(
         min_crit = ideate_pol.min_acceptance_criteria or 1
         max_crit = ideate_pol.max_acceptance_criteria or 6
         backend, model = await _resolve_coordinator_model(session, None, project)
-        if backend is None:
+        if backend is None or is_personal_mode_backend(backend):
             return title, summary, criteria, "fallback"
         await sync_backend_to_litellm(backend, extra_models=[model])
 

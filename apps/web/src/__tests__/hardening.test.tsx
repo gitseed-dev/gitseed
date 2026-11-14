@@ -17,6 +17,7 @@ import {
 } from '../components/common/MonacoCodeEditor'
 import { GettingStartedCard } from '../components/common/GettingStartedCard'
 import { SeedMetadataSidebar } from '../components/details/seed/SeedMetadataSidebar'
+import { SessionDock } from '../components/sessions/SessionDock'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import {
   resolveVsCodeIframeProps,
@@ -365,8 +366,20 @@ describe('DataContext Seed Pagination Limit & Local Workspaces Client', () => {
     )
 
     assert.ok(
+      html.includes('Connect inference'),
+      'Expected Step 1 to be titled Connect inference'
+    )
+    assert.ok(
+      html.includes('Create a seed'),
+      'Expected Step 3 to be titled Create a seed'
+    )
+    assert.ok(
       html.includes('On-Device Local Git'),
       'Expected GettingStartedCard to note On-Device Local Git'
+    )
+    assert.ok(
+      html.includes('Local Docker ready'),
+      'Expected 1C compute runtime to render as a compact single line'
     )
     assert.ok(
       html.includes('1/3'),
@@ -710,5 +723,89 @@ describe('External URL Sanitization, VS Code Iframe Sandbox, LCS Diff & Ed25519 
       public_key_pem: pem,
     })
     assert.equal(untrustedKeyResult.status, 'invalid')
+  })
+
+  it('renders side-by-side split panes in SessionDock when multiple expandedKeys are persisted', () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    mockStorage.setItem('gitseed_auth_user', JSON.stringify(mockUser))
+    mockStorage.setItem(
+      `gitseed.sessionDock.${mockUser.id}`,
+      JSON.stringify({
+        items: [
+          {
+            kind: 'terminal',
+            id: 'sbx-1',
+            projectId: 'p1',
+            title: 'Terminal · main · 10:00',
+            pane: 'terminal',
+          },
+          {
+            kind: 'chat',
+            id: 'ses-2',
+            projectId: 'p1',
+            title: 'Agent · @coder · 10:01',
+            agentHandle: 'coder',
+            pane: 'terminal',
+          },
+          {
+            kind: 'terminal',
+            id: 'sbx-3',
+            projectId: 'p1',
+            title: 'Terminal · feat · 10:02',
+            pane: 'terminal',
+          },
+        ],
+        expandedKeys: ['terminal:sbx-1', 'chat:ses-2'],
+        expandedKey: 'terminal:sbx-1',
+      })
+    )
+
+    const html = renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(
+          I18nProvider,
+          null,
+          React.createElement(
+            StatusProvider,
+            null,
+            React.createElement(
+              AuthProvider,
+              { initialUser: mockUser },
+              React.createElement(
+                ThemeProvider,
+                null,
+                React.createElement(
+                  DataProvider,
+                  null,
+                  React.createElement(
+                    SessionDockProvider,
+                    null,
+                    React.createElement(SessionDock)
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+
+    assert.ok(
+      html.includes('Terminal · main · 10:00') &&
+        html.includes('Agent · @coder · 10:01'),
+      'Expected both expanded split sessions to render in SessionDock'
+    )
+    assert.ok(
+      html.includes('Collapse all'),
+      'Expected Collapse all button when in side-by-side split mode'
+    )
+    assert.ok(
+      html.includes('Open Terminal · feat · 10:02 side-by-side'),
+      'Expected third unexpanded chip to offer side-by-side split button'
+    )
   })
 })

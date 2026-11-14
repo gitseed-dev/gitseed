@@ -11,8 +11,12 @@ help:     ## list available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-init:     ## generate .env with strong random secrets
+init:     ## generate .env with strong random secrets (on Windows PowerShell: .\scripts\init.ps1)
+ifeq ($(OS),Windows_NT)
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/init.ps1
+else
 	./scripts/init.sh
+endif
 
 setup:    ## install all dependencies
 	uv sync --all-packages

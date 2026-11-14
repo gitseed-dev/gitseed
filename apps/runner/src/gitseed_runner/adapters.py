@@ -987,13 +987,7 @@ class ClaudeCodeAdapter(RuntimeAdapter):
         return "claude"
 
     def _normalized_claude_model(self) -> str:
-        raw = (self.model or "").strip()
-        legacy_map = {
-            "claude-sonnet-5-5": "claude-sonnet-4-5",
-            "claude-opus-5": "claude-opus-4-1",
-            "claude-haiku-5": "claude-haiku-4-5",
-        }
-        return legacy_map.get(raw, raw)
+        return (self.model or "").strip()
 
     def prepare_workspace(self) -> dict[str, str]:
         self.restore_cli_auth_bundle()
@@ -1138,6 +1132,7 @@ class CodexAdapter(RuntimeAdapter):
             return env
 
         model_name = self.model if self.model and self.model != "default" else "default"
+        wire_api = str(self.gateway.get("wire_api") or "responses").strip() or "responses"
         config_toml = "\n".join(
             [
                 f'model = {json.dumps(model_name)}',
@@ -1147,7 +1142,7 @@ class CodexAdapter(RuntimeAdapter):
                 'name = "GitSeed LiteLLM Proxy"',
                 f'base_url = {json.dumps(self.gateway_base_url)}',
                 'env_key = "OPENAI_API_KEY"',
-                'wire_api = "chat"',
+                f"wire_api = {json.dumps(wire_api)}",
                 "",
                 *mcp_lines,
             ]
@@ -1193,13 +1188,13 @@ class CodexAdapter(RuntimeAdapter):
 
 
 def _normalize_google_cli_model(raw_model: str | None) -> str:
-    """Normalize model aliases and legacy placeholder names for `agy` and `gemini` CLIs."""
+    """Normalize short tier aliases for `agy` and `gemini` CLIs while preserving concrete model IDs."""
     normalized = (raw_model or "").strip()
     if normalized in ("default", ""):
         return ""
-    if normalized in ("flash", "flash_lite", "gemini-3.8-flash", "gemini-3.5-flash"):
+    if normalized in ("flash", "flash_lite"):
         return "gemini-2.5-flash"
-    if normalized in ("pro", "inherit", "gemini-4-argon", "gemini-4-carbon"):
+    if normalized in ("pro", "inherit"):
         return "gemini-2.5-pro"
     return normalized
 

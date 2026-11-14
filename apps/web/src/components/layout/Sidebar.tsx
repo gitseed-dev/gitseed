@@ -25,7 +25,6 @@ import { useData } from '../../context/DataContext'
 import { useTranslation } from '../../context/I18nContext'
 import { SEED_NEEDS_ATTENTION_STATUSES, VIEWS } from '../../constants'
 import { getMissingCoreBackends } from '../../utils/backends'
-import { getUncoveredStages } from '../../utils/policies'
 
 const getCoordinatorShortcut = () => {
   const isMac =
@@ -40,8 +39,6 @@ export const Sidebar: React.FC = () => {
     setActiveView,
     seeds: ideas,
     backends,
-    agents,
-    policies,
     isInitialLoading,
     showGuideInSidebar,
     openSearchModal,
@@ -113,11 +110,6 @@ export const Sidebar: React.FC = () => {
           ? `Setup incomplete: connect ${missingBackendTypes.slice(0, -1).join(', ')}, and ${missingBackendTypes[missingBackendTypes.length - 1]} backends`
           : undefined
 
-  const hasCoverageGap = useMemo(
-    () => !isInitialLoading && getUncoveredStages(policies, agents).length > 0,
-    [policies, agents, isInitialLoading]
-  )
-
   const coreNavItems: SidebarNavItemConfig[] = [
     {
       id: VIEWS.DASHBOARD,
@@ -153,10 +145,6 @@ export const Sidebar: React.FC = () => {
           id: VIEWS.ROUTES,
           label: t('nav.routes'),
           icon: Workflow,
-          badgeType: hasCoverageGap ? 'dot' : undefined,
-          badgeVariant: 'red',
-          badgeTooltip:
-            t('agents.stageCoverage.uncovered') || 'Stage coverage gap',
         },
         { id: VIEWS.USERS, label: t('nav.users'), icon: Users },
         { id: VIEWS.SETTINGS, label: t('nav.settings'), icon: Settings },

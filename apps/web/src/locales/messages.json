@@ -56,7 +56,7 @@
       "actions": {
         "focus": "Focus",
         "unfocus": "Unfocus",
-        "createSeed": "New seed"
+        "createSeed": "Create a seed"
       },
       "spendBySeedTitle": "Top 5 seeds by spend"
     },
@@ -140,7 +140,7 @@
     "greetingMorning": "Good morning, {name}",
     "greetingAfternoon": "Good afternoon, {name}",
     "greetingEvening": "Good evening, {name}",
-    "ingestSeed": "New seed",
+    "ingestSeed": "Create a seed",
     "attentionTitle": "Needs you",
     "allNominal": "You’re all caught up",
     "allNominalDesc": "Nothing needs your approval right now.",
@@ -148,7 +148,7 @@
     "statusLineReviewItems": "{count} need you",
     "statusLineReviewItemOne": "1 needs you",
     "statusLineAllNominal": "All systems healthy",
-    "statusLineAwaitingBackends": "Setup required · Pre-configured agents waiting for backend connection",
+    "statusLineAwaitingBackends": "Setup required · Connect an inference backend to get started",
     "statusLineAwaitingProject": "Backends connected · Agents standing by · Create a project to link a repository",
     "statusLineAgentsWorking": "{count} agents working",
     "statusLineAgentWorkingOne": "1 agent working",
@@ -521,14 +521,14 @@
     "completeStep1First": "Complete Step 1 first",
     "completeStep2First": "Complete Step 2 first",
     "steps": {
-      "backendsTitle": "Connect Git & Inference",
-      "backendsDesc": "Register a Git provider (GitHub, GitLab, Bitbucket) and an Inference provider so your pre-configured agents can access repositories and LLMs.",
-      "backendsAction": "Configure Backends",
+      "backendsTitle": "Connect inference",
+      "backendsDesc": "Connect an inference backend (local Ollama, API key, or CLI login) to power your stage agents.",
+      "backendsAction": "All backends",
       "projectsTitle": "Create a project",
       "projectsDesc": "Link one or more repositories from your Git backend, set a monthly spend budget, and add team members.",
-      "seedsTitle": "Plant a Seed",
+      "seedsTitle": "Create a seed",
       "seedsDesc": "Write a requirement or bugfix, pick an autonomy level, and watch it progress from Ideate to Merge.",
-      "seedsAction": "Open Seeds"
+      "seedsAction": "Create a seed"
     },
     "viewStageSeeds": "View {stage} seeds",
     "stageAgentRoleLabel": "Agent's Job",
@@ -549,13 +549,13 @@
       "policiesDesc": "Stage Policies (pol_...) map each of the 5 SDLC stages to an assigned Agent, configure autonomy, required approvals, minimum approver role, self-approval rules, and cap retries and run timeouts.",
       "backendsTitle": "Backends & Guardrails",
       "backendsSubtitle": "What powers execution",
-      "backendsDesc": "Backends connect Git providers, LLM model endpoints, and compute runners. Spend caps and checkpoints pause execution automatically if a Seed approaches its budget."
+      "backendsDesc": "Backends connect Git providers, inference endpoints, and compute runners. Spend caps and checkpoints pause execution automatically if a Seed approaches its budget."
     },
     "setupCompleteBanner": "Setup complete",
     "showSteps": "Show steps",
     "hideSteps": "Hide steps",
-    "memberWaitForAdminBackends": "An admin needs to connect a Git backend before seeds can run.",
-    "memberCreateFirstSeedTitle": "Create your first seed"
+    "memberWaitForAdminBackends": "An admin needs to connect an inference backend before seeds can run.",
+    "memberCreateFirstSeedTitle": "Create a seed"
   },
   "settings": {
     "title": "Settings",
@@ -677,8 +677,8 @@
   "seeds": {
     "title": "Seeds",
     "subtitle": "Track requirements, plans, and agent execution across Ideate → Plan → Execute → Review → Merge.",
-    "create": "New seed",
-    "createFirst": "New seed",
+    "create": "Create a seed",
+    "createFirst": "Create a seed",
     "searchPlaceholder": "Search seeds...",
     "emptyTitle": "No seeds yet",
     "emptySubtitle": "Create your first seed to see it move through Ideate → Plan → Execute → Review → Merge with your configured agents and stage gates.",

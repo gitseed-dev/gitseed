@@ -221,6 +221,8 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
   const supportsCliOAuth =
     (type === 'inference' || type === 'git') && Boolean(providerDef.supportsCliOAuth)
   const isGitHubApp = type === 'git' && provider === 'github-app'
+  const isGitHubFamily =
+    type === 'git' && (provider === 'github' || provider === 'github-app')
   const effectiveAuthMode = supportsCliOAuth ? authMode : 'api_key'
   const resolvedAuthHelpUrl = safeExternalUrl(
     resolveProviderAuthHelpUrl(
@@ -234,9 +236,16 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
     gitAppHtmlUrl ? `${gitAppHtmlUrl.replace(/\/$/, '')}/installations/new` : null
   )
   const safeCliAuthUrl = safeExternalUrl(cliAuthSession?.auth_url)
-  const providersForType = [...(BACKEND_PROVIDER_DEFINITIONS[type] || [])].sort((a, b) =>
-    a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
-  )
+  const providersForType = [...(BACKEND_PROVIDER_DEFINITIONS[type] || [])]
+    .filter((p) => !(type === 'git' && p.value === 'github'))
+    .map((p) =>
+      type === 'git' && p.value === 'github-app'
+        ? { ...p, label: 'GitHub' }
+        : p
+    )
+    .sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+    )
 
   useEffect(() => {
     if (!isProviderMenuOpen) return
@@ -305,7 +314,9 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
           >
             <span className="flex items-center gap-2.5 min-w-0">
               <ProviderIcon provider={provider} type={type} size={15} />
-              <span className="truncate">{providerDef.label}</span>
+              <span className="truncate">
+                {isGitHubFamily && !isEditing ? 'GitHub' : providerDef.label}
+              </span>
             </span>
             {!isEditing && (
               <ChevronDown
@@ -323,7 +334,9 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
               className="absolute z-40 left-0 right-0 mt-1.5 max-h-72 overflow-y-auto rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 shadow-xl py-1.5 flex flex-col gap-0.5"
             >
               {providersForType.map((p) => {
-                const isSelected = p.value === provider
+                const isSelected =
+                  p.value === provider ||
+                  (type === 'git' && p.value === 'github-app' && isGitHubFamily)
                 return (
                   <button
                     key={p.value}
@@ -517,6 +530,61 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
             </span>
           </div>
 
+          {isGitHubFamily && !isEditing && (
+            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/80">
+              <button
+                type="button"
+                onClick={() => {
+                  if (provider !== 'github-app') {
+                    onProviderChange('github-app')
+                  }
+                }}
+                className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  provider === 'github-app'
+                    ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs border border-zinc-200/80 dark:border-zinc-700'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
+                }`}
+              >
+                <Sparkles size={13} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                <span>GitHub App</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (provider !== 'github') {
+                    onProviderChange('github')
+                  }
+                  onAuthModeChange?.('cli_oauth')
+                }}
+                className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  provider === 'github' && effectiveAuthMode === 'cli_oauth'
+                    ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs border border-zinc-200/80 dark:border-zinc-700'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
+                }`}
+              >
+                <Sparkles size={13} className="shrink-0" />
+                <span>Browser OAuth</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (provider !== 'github') {
+                    onProviderChange('github')
+                  }
+                  onAuthModeChange?.('api_key')
+                }}
+                className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  provider === 'github' && effectiveAuthMode === 'api_key'
+                    ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs border border-zinc-200/80 dark:border-zinc-700'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
+                }`}
+              >
+                <KeyRound size={13} className="shrink-0" />
+                <span>Access Token</span>
+              </button>
+            </div>
+          )}
+
           {isGitHubApp && onGitAppSetupModeChange && (
             <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/80">
               <button
@@ -663,7 +731,7 @@ export const BackendConfigTab: React.FC<BackendConfigTabProps> = ({
             </div>
           ) : null}
 
-          {supportsCliOAuth && onAuthModeChange && (
+          {supportsCliOAuth && !(isGitHubFamily && !isEditing) && onAuthModeChange && (
             <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/80">
               <button
                 type="button"

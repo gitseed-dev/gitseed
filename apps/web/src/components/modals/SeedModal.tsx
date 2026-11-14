@@ -34,6 +34,7 @@ import { Tooltip } from '../common/Tooltip'
 import { VoiceDictationButton } from '../common/VoiceDictationButton'
 import { useAuth } from '../../context/AuthContext'
 import { useData } from '../../context/DataContext'
+import { filterStageAgentsForStage } from '../../utils/agents'
 import { canUserContributeToProject } from '../../utils/projects'
 import { AUTONOMY_LABELS } from '../../utils/seeds'
 import type { Seed, SeedAutonomy } from '../../types'
@@ -394,14 +395,12 @@ export const SeedModal: React.FC<SeedModalProps> = ({
 
   const availableExtraIdeateAgents = useMemo(
     () =>
-      agents.filter(
-        (a) =>
-          !a.archived_at &&
-          a.enabled &&
-          a.kind === 'stage' &&
-          a.id !== ideatePolicy?.agent_id
-      ),
-    [agents, ideatePolicy]
+      filterStageAgentsForStage(
+        agents.filter((a) => !a.archived_at && a.enabled && a.kind === 'stage'),
+        'ideate',
+        extraIdeateAgentIds
+      ).filter((a) => a.id !== ideatePolicy?.agent_id),
+    [agents, ideatePolicy, extraIdeateAgentIds]
   )
 
   // Second opinions apply to Ideate; hide when Fast-Track skips Ideate
@@ -762,8 +761,8 @@ export const SeedModal: React.FC<SeedModalProps> = ({
     <span className="inline-flex items-center gap-2 flex-wrap">
       <span>
         {relatedToSeed
-          ? `New related seed · #${relatedToSeed.number} in`
-          : 'New seed in'}
+          ? `Create related seed · #${relatedToSeed.number} in`
+          : 'Create a seed in'}
       </span>
       <div className="relative inline-block" data-seed-menu>
         <button

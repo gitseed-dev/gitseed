@@ -19,7 +19,7 @@ data:
   GITSEED_ADMIN_EMAIL: {{ .Values.auth.adminEmail | quote }}
   GITSEED_ADMIN_NAME: {{ .Values.auth.adminName | quote }}
   PUBLIC_WEB_URL: {{ .Values.web.publicUrl | quote }}
-  SANDBOX_ORIGIN: {{ .Values.web.sandboxOrigin | quote }}
+  SANDBOX_ORIGIN: {{ include "gitseed.sandboxOrigin" . | quote }}
   CORS_ORIGINS: {{ .Values.web.corsOrigins | quote }}
   GITSEED_MCP_ALLOWED_ORIGINS: {{ printf "%s,%s" .Values.web.publicUrl .Values.web.corsOrigins | quote }}
   SCHEDULER_POLL_SECONDS: {{ .Values.scheduler.pollSeconds | quote }}

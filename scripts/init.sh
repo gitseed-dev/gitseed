@@ -10,6 +10,8 @@ ENV_FILE="${GITSEED_ENV_FILE:-${REPO_ROOT}/.env}"
 WORKSPACES_DIR="${GITSEED_WORKSPACES_DIR:-$(dirname -- "$ENV_FILE")/data/workspaces}"
 
 mkdir -p "$WORKSPACES_DIR"
+# Restrict newly created .env and temporary files to owner-only (0600) from creation
+umask 077
 
 rand_hex() {
     bytes="${1:-32}"
@@ -25,9 +27,16 @@ rand_hex() {
 
 if [ ! -f "$ENV_FILE" ]; then
     if [ -f "$ENV_EXAMPLE" ]; then
-        cp "$ENV_EXAMPLE" "$ENV_FILE"
+        tr -d '\r' < "$ENV_EXAMPLE" > "$ENV_FILE"
     else
         : > "$ENV_FILE"
+    fi
+else
+    tmp_crlf="${ENV_FILE}.crlf.$$"
+    if tr -d '\r' < "$ENV_FILE" > "$tmp_crlf" 2>/dev/null; then
+        mv "$tmp_crlf" "$ENV_FILE"
+    else
+        rm -f "$tmp_crlf"
     fi
 fi
 
@@ -38,7 +47,7 @@ get_env_val() {
     if [ ! -f "$ENV_FILE" ]; then
         return 0
     fi
-    grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | tail -n 1 | cut -d'=' -f2- || true
+    grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | tail -n 1 | cut -d'=' -f2- | tr -d '\r' || true
 }
 
 set_env_val() {
