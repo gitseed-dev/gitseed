@@ -14,12 +14,9 @@ Self-hosted, vendor-neutral control plane for AI software engineering. Run **Ope
 
 [**Quickstart**](#quickstart) · [**Why GitSeed?**](#why-gitseed) · [**How It Works**](#how-it-works-the-5-stage-sdlc) · [**Models & Personal Mode**](#frontier-models-personal-mode--local-open-weight-llms) · [**Security & Receipts**](#broker-enforced-security--signed-governance-receipts) · [**CLI & TUI**](#developer-cli-gitseed) · [**MCP Server**](#mcp-server-gitseed-mcp) · [**Architecture**](#architecture--monorepo-layout) · [**Concepts**](./docs/concepts.md)
 
-<!-- Uncomment when demo GIF/video is ready:
-<br />
-<img src="./docs/assets/demo.gif" alt="GitSeed Demo: Idea to Governed Pull Request" width="880" />
--->
-
 </div>
+
+https://github.com/user-attachments/assets/67b63c58-e663-4dc9-94ab-fbe65c0fecd6
 
 ---
 
