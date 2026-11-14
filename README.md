@@ -6,7 +6,7 @@
 
 <h3>Your SDLC, run by agents, governed by you.</h3>
 
-Self-hosted, vendor-neutral control plane for AI software engineering. Run **OpenCode**, **Claude Code**, **Codex**, **Antigravity**, **Gemini**, and **Grok Build** inside isolated 3-phase containers (`prepare` → `agent` → `finalize`) on your own infrastructure, complete with Ed25519-signed PR **Governance Receipts**, parallel 3-model **Second Opinions**, and live docked sandbox rescue.
+Self-hosted, vendor-neutral control plane for AI software engineering. Run **Claude Code**, **Codex**, **Gemini**, **OpenCode**, and more inside isolated 3-phase containers (`prepare` → `agent` → `finalize`) on your own infrastructure, complete with Ed25519-signed PR **Governance Receipts**, parallel 3-model **Second Opinions**, and live docked sandbox rescue.
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-5FD6C6.svg)](./LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](./pyproject.toml)
@@ -16,9 +16,7 @@ Self-hosted, vendor-neutral control plane for AI software engineering. Run **Ope
 
 </div>
 
-<!-- Paste bare GitHub user-attachments .mp4 URL on its own line below (outside <div> so GitHub renders the native video player):
-https://github.com/user-attachments/assets/YOUR-ASSET-UUID-HERE
--->
+https://github.com/user-attachments/assets/9d0242be-21e1-4ae0-8b82-43e528eb3c2a
 
 ---
 
@@ -34,13 +32,11 @@ docker compose up -d --build  # starts Web UI (:8421), API (:8420), MCP (:8422),
 
 ### First 60 Seconds in the UI
 
-Sign in at [`http://localhost:8421`](http://localhost:8421) using `GITSEED_ADMIN_EMAIL` (`admin@gitseed.local`) and `GITSEED_ADMIN_PASSWORD` from `.env` (generated and printed by `./scripts/init.sh`), then complete the **3-step onboarding card** on the Overview dashboard:
-
-1. **Step 1 — Connect inference**:
-   - Click a provider card—**Local / OpenCode** (`No API key needed` — Ollama, vLLM, or LM Studio), a cloud **API key** (`Claude Code`, `Antigravity`, `OpenAI Codex`, `Google Gemini`, `xAI Grok`), or single-user **Personal Mode CLI Login**. Connecting your first inference backend automatically wires all 5 stage agents (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`) plus `@coordinator`, and lets you pick a **Default** model in the backend's **Models** tab.
-   - *(Optional)* Expand the Git row to connect **GitHub** (App, OAuth, or Token), **GitLab**, or **Bitbucket** for cloud pull requests—or skip it and use built-in **On-Device Local Git**. **Local Docker** compute is pre-configured and ready out of the box.
-2. **Step 2 — Create a project**: Link a remote repository or a **Local Folder** on disk, set a monthly spend budget, and optionally customize stage policies.
-3. **Step 3 — Create a seed**: Write a requirement or bugfix and run it through the 5-stage SDLC (`Ideate → Plan → Execute → Review → Merge`), toggle **⚡ Fast-Track** (`Execute → Review → Merge`) for quick changes, or request **2–3 parallel model opinions**—or click **`+ New ▾`** anytime to launch a live Coding Agent session, Browser PTY terminal, or embedded VS Code Web workspace.
+1. **Sign in at [`http://localhost:8421`](http://localhost:8421)** using the `admin@gitseed.local` credentials printed by `./scripts/init.sh` (or set `GITSEED_ADMIN_PASSWORD` in `.env` beforehand).
+2. **Connect a Model & Repo (1-Click Wizard)**:
+   - Pick an API key (Anthropic, OpenAI, Gemini, xAI), local **Ollama / vLLM**, or single-user **Personal Mode CLI OAuth** (`Claude Code`, `Codex`, `Gemini`, `Antigravity`, `Grok`). This automatically provisions all 5 stage agents (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`) plus `@coordinator`.
+   - Connect Git via **1-Click GitHub App**, GitLab/Bitbucket token, or point directly at a **Local Folder** on disk.
+3. **Plant Your First Seed**: Create a project and submit a prompt (full 5-stage pipeline, **⚡ Fast-Track** straight to code, or **2–3 parallel model opinions**), or click **`+ New ▾`** to open a live Coding Agent chat, Browser PTY terminal, or embedded VS Code Web session.
 
 <details>
 <summary><strong>Kubernetes (Helm) Deployment &amp; Service Port Map</strong></summary>
@@ -73,7 +69,7 @@ helm upgrade --install gitseed ./charts/gitseed \
 
 ## Why GitSeed?
 
-**Why not just run `claude`, `codex`, or `opencode` locally?** Local CLIs are great for interactive work, but they run on your host with your SSH keys, cloud credentials, and push access, and they leave no record of what ran or who approved it. GitSeed runs those same CLIs in isolated containers where agents never see your Git credentials, with approval gates, cross-model second opinions, spend limits, and a signed receipt on every PR. You can still drop into a live shell when you need to.
+Ad-hoc coding prompts work for single files, but shipping production software with agents requires isolated execution, untrusted-agent containment, review gates, provenance, and spend controls:
 
 - **Untrusted Agent, Trusted Broker (`prepare` → `agent` → `finalize`)**: Coding agents run with zero Git credentials behind an SSRF-hardened `egress-proxy`; a separate read-only `finalize` container enforces `blocked_paths` and added-line secret scanning before pushing.
 - **Ed25519-Signed PR Governance Receipts**: Every Pull Request receives a cryptographically signed receipt (`gitseed.receipt.v1`) attesting to the locked spec, models, spend mode, security scans, and human approvals, verifiable offline via `gitseed receipt verify`.
@@ -120,12 +116,12 @@ Need to ship a straightforward bugfix? Toggle **⚡ Fast-Track** to jump straigh
 
 ## Frontier Models, Personal Mode & Local Open-Weight LLMs
 
-Every stage agent (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`, `@coordinator`, or custom agents) can be independently bound to a different CLI runtime and inference backend (or set to `default` to inherit the backend's selected **Default** model), with transparent labeling of **enforced** vs. **estimated** spend controls:
+Every stage agent (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`, `@coordinator`, or custom agents) can be independently bound to a different CLI runtime and model backend, with transparent labeling of **enforced** vs. **estimated** spend controls:
 
 | Tier | Supported Providers & Engines | Agent Runtimes (`AgentRuntime`) | Spend Control & Governance Mode |
 | :--- | :--- | :--- | :--- |
-| **Team & Enterprise Cloud APIs (BYOK / LiteLLM)** | **Anthropic** (*Claude 5.5 / 4.6*), **OpenAI** (*GPT-5.4 / Codex*), **Google** (*Gemini 4 Argon / Hydrogen / Carbon*), **xAI** (*Grok 4.3 / 4.20*), **LiteLLM**, **Custom OpenAI Gateways** | `opencode`, `claude-code`, `codex`, `antigravity`, `gemini`, `grok-build` | **Enforced (`enforced`)**: Per-run LiteLLM virtual keys hard-capped at `min(monthly_remaining, seed_cap_remaining, checkpoint_remaining)`. |
-| **Personal Mode (Single-User Subscription OAuth)** | **Claude Pro / Max**, **ChatGPT Plus / Pro**, **Gemini Code Assist**, **Google Antigravity** | `claude-code`, `codex`, `antigravity`, `gemini` | **Estimated (`estimated`)**: Owner-bound (`owner_user_id`) single-user OAuth bundle encrypted at rest. Spend is estimated from CLI token telemetry and bounded by broker-enforced container timeouts (`timeout_minutes`) and turn limits (`--max-turns` where supported by the CLI). |
+| **Team & Enterprise Cloud APIs (BYOK / LiteLLM)** | **Anthropic** (Claude), **OpenAI**, **Google Gemini**, **xAI (Grok)**, **LiteLLM**, **Custom OpenAI Gateways** | `opencode`, `claude-code`, `codex`, `antigravity`, `gemini`, `grok-build` | **Enforced (`enforced`)**: Per-run LiteLLM virtual keys hard-capped at `min(monthly_remaining, seed_cap_remaining, checkpoint_remaining)`. |
+| **Personal Mode (Single-User Subscription OAuth)** | **Claude Pro / Max**, **ChatGPT Plus / Pro**, **Gemini Code Assist**, **Google Antigravity**, **xAI Grok** | `claude-code`, `codex`, `antigravity`, `gemini`, `grok-build` | **Estimated (`estimated`)**: Owner-bound (`owner_user_id`) single-user OAuth bundle encrypted at rest. Spend is estimated from CLI token telemetry and bounded by broker-enforced container timeouts (`timeout_minutes`) and turn limits (`--max-turns` where supported by the CLI). |
 | **Local & Open-Weight LLMs (Air-Gapped / On-Prem)** | **Ollama** (`:11434`), **vLLM** (`:8000/v1`), **LM Studio** (`:1234/v1`) running open-weight models (*Qwen3-Coder*, *DeepSeek-V3 / R1*, *Llama 4*, *Codestral*, *Gemma 3*) | `opencode` (universal open-source agent runtime) | **Enforced (`enforced`)** via LiteLLM gateway with zero marginal cloud token cost and full air-gapped data sovereignty. |
 
 > [!IMPORTANT]
@@ -153,13 +149,9 @@ See [**`SECURITY.md`**](./SECURITY.md) for the complete Threat Model, Enforced v
 
 ## Developer CLI (`gitseed`)
 
-Install the CLI & interactive TUI (`gitseed tui`) directly from your local repository clone via `uv` or `pip` (or run inside the container with `docker compose exec api gitseed`):
+Install the CLI & interactive TUI (`gitseed tui`) via `uv` or `pip` (or invoke via `docker compose exec api gitseed`):
 
 ```bash
-# Install `gitseed` onto your PATH from this repository (via uv or pip)
-uv tool install --editable ./apps/cli --with ./packages/common
-# (or: pip install -e ./packages/common -e ./apps/cli)
-
 # Authenticate against your control plane
 gitseed login http://localhost:8420
 
@@ -204,15 +196,14 @@ All inspection commands support `-o table` (default), `-o wide`, `-o json`, and 
 Connect **Claude Code**, **Cursor**, **Windsurf**, or **Antigravity** directly to GitSeed so your IDE agent can inspect seeds, read run logs, manage live agent sessions, and approve stage gates:
 
 ```bash
-# Option 1: Connect directly to the running Docker Compose loopback HTTP endpoint (zero local install):
-# URL: http://127.0.0.1:8422/mcp (Header: Authorization: Bearer gsp_your_pat_token)
-
-# Option 2: stdio transport (install `gitseed-mcp` from this repository first)
-uv tool install --editable ./apps/mcp --with ./packages/common
+# stdio transport (local CLI binary)
 claude mcp add gitseed \
   -e GITSEED_API_URL=http://localhost:8420 \
   -e GITSEED_TOKEN=gsp_your_pat_token \
   -- gitseed-mcp
+
+# Or connect to the running Docker Compose loopback HTTP endpoint:
+# URL: http://127.0.0.1:8422/mcp (Header: Authorization: Bearer gsp_...)
 ```
 
 Every MCP tool includes explicit `ToolAnnotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), plus optional `--toolsets` and `--read-only` scoping so MCP clients can automatically allow read-only queries while prompting before state mutations. See [`apps/mcp/README.md`](./apps/mcp/README.md) for all 65 available MCP tools, resources, and prompts.
@@ -291,9 +282,8 @@ See [**`docs/architecture.md`**](./docs/architecture.md) and [**`docs/concepts.m
 The root [`Dockerfile`](./Dockerfile) packages the entire control plane into `gitseed/gitseed`, selectable via container command (`api | web | scheduler | egress-proxy | mcp | cli | migrate | help`):
 
 ```bash
-# Build both images (same as `make build`; omit INCLUDE_PROPRIETARY_CLIS=true for redistributed/FOSS-only images)
 docker build -t gitseed/gitseed:dev .
-docker build --build-arg INCLUDE_PROPRIETARY_CLIS=true -t gitseed/runner:dev ./apps/runner
+docker build -t gitseed/runner:dev ./apps/runner
 docker run --rm gitseed/gitseed:dev help
 ```
 
@@ -323,5 +313,4 @@ pnpm --filter web build
 - **Trademarks**: "GitSeed" and the GitSeed logo are trademarks of Trent Seed. The Apache License, Version 2.0 does not grant permission to use the GitSeed name, brand, or logo for derivative products or hosted services. See [`TRADEMARKS.md`](./TRADEMARKS.md) for what's allowed.
 - **Privacy**: Self-hosted GitSeed sends zero telemetry; your code, prompts, and credentials stay on your infrastructure. See [`PRIVACY.md`](./PRIVACY.md).
 - **Contributions**: External pull requests require accepting the [GitSeed Contributor License Agreement](./CLA.md) (one PR comment, handled by a bot). See [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
-- **Third-party agent CLIs & model providers**: GitSeed orchestrates third-party tools (e.g., OpenCode, Claude Code, OpenAI Codex, Google Antigravity, Gemini CLI, Grok Build) and model APIs that have their own licenses and terms of service. Proprietary vendor CLIs (such as Claude Code and Google Antigravity, installed locally at image build time unless `INCLUDE_PROPRIETARY_CLIS=false`) are not part of GitSeed's Apache-2.0 source distribution; redistributed container images must omit proprietary vendor CLIs. You are responsible for complying with each provider's terms, including any restrictions on using consumer subscriptions with third-party tools.
-- **Third-party trademarks & non-affiliation**: GitSeed is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google, xAI, GitHub, GitLab, Atlassian, Docker, or any other third-party provider referenced in this repository. All third-party product names, logos, and brands are property of their respective owners and are used solely for identification and compatibility purposes.
+- **Third-party agent CLIs & model providers**: GitSeed orchestrates third-party tools (e.g., Claude Code, Codex, Gemini CLI) and model APIs that have their own licenses and terms of service. Claude Code is proprietary (installed locally at image build time unless `INCLUDE_PROPRIETARY_CLIS=false`) and is not part of GitSeed's Apache-2.0 source distribution; redistributed container images must omit proprietary vendor CLIs. You are responsible for complying with each provider's terms, including any restrictions on using consumer subscriptions with third-party tools.
