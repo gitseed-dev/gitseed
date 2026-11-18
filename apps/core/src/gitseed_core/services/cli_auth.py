@@ -1126,6 +1126,9 @@ async def start_cli_auth_session(
     cfg.setdefault("personal_mode_owner_user_id", admin.id)
     cfg.setdefault("personal_mode_acknowledged_at", datetime.now(UTC).isoformat())
     backend.config = cfg
+    await session.commit()
+    await session.refresh(backend)
+    await maybe_auto_provision_sdlc_agents(session, backend)
 
     compute_backend = await _select_docker_compute_backend(session)
     if compute_backend.provider.lower() != "docker":

@@ -1245,4 +1245,42 @@ async def test_xai_opencode_default_and_coordinator_personal_mode_and_bootstrap_
     assert attempts == 3
     assert fin_ctx == {"blocked_paths": [".github/**"]}
 
+    # 5. Secondary Antigravity backend with auto_create_agents=True provisions @agy-* stage agents
+    #    even in multi-user orgs or via ensure_missing_backend_stage_agents reconciliation
+    agy_secondary = Backend(
+        id="bnd_agy_sec",
+        name="Antigravity Personal",
+        type=BackendType.INFERENCE,
+        provider="antigravity",
+        config={
+            "auth_mode": "cli_oauth",
+            "personal_mode": True,
+            "personal_mode_acknowledged": True,
+            "auto_create_agents": True,
+            "set_sdlc_default": False,
+        },
+        enabled=True,
+    )
+    multi_sess = _make_session()
+    multi_sess.scalar = AsyncMock(return_value=2)  # 2 users in org
+    provision_spy = AsyncMock(return_value=[])
+    monkeypatch.setattr(backends_svc, "provision_sdlc_agents_for_backend", provision_spy)
+    await backends_svc.maybe_auto_provision_sdlc_agents(multi_sess, agy_secondary)
+    provision_spy.assert_awaited_once_with(
+        multi_sess,
+        agy_secondary,
+        force_switch=False,
+        assign_policies=False,
+        overwrite_existing=False,
+    )
+    reconcile_sess = _make_session()
+    reconcile_sess.execute = AsyncMock(return_value=_exec_result(scalars_all=[agy_secondary]))
+    provision_spy.reset_mock()
+    reconciled = await backends_svc.ensure_missing_backend_stage_agents(
+        reconcile_sess, existing_agents=[]
+    )
+    assert reconciled is True
+    provision_spy.assert_awaited_once()
+
+
 

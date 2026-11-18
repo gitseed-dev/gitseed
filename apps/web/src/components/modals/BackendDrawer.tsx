@@ -16,6 +16,7 @@ import { BackendModelsTab } from './backend/BackendModelsTab'
 import { BackendRepositoriesTab } from './backend/BackendRepositoriesTab'
 import { VIEWS } from '../../constants'
 import { useData } from '../../context/DataContext'
+import { getProviderSdlcStageHandles } from '../../utils/agents'
 import {
   BACKEND_PROVIDER_DEFINITIONS,
   DEFAULT_CLOUD_MODELS,
@@ -354,6 +355,25 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     return base
   }
 
+  const expectedStageHandles = useMemo(
+    () =>
+      type === 'inference'
+        ? getProviderSdlcStageHandles(provider).map((item) =>
+            item.handle.replace(/^@/, '').toLowerCase()
+          )
+        : [],
+    [provider, type]
+  )
+  const missingStageAgentsCount = useMemo(() => {
+    if (type !== 'inference' || expectedStageHandles.length === 0) return 0
+    const activeHandles = new Set(
+      agents
+        .filter((a) => !a.archived_at && a.enabled)
+        .map((a) => a.handle.toLowerCase())
+    )
+    return expectedStageHandles.filter((h) => !activeHandles.has(h)).length
+  }, [agents, expectedStageHandles, type])
+
   const isDirty = useMemo(() => {
     if (!currentBackend) return true
     if (name.trim() !== currentBackend.name) return true
@@ -373,6 +393,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
 
     const origCfg = currentBackend.config || {}
     if (type === 'inference') {
+      if (autoCreateAgents && missingStageAgentsCount > 0) return true
       const origAuthMode =
         origCfg.auth_mode === 'cli_oauth' ||
         origCfg.auth_mode === 'device_oauth' ||
@@ -468,6 +489,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     autoCreateAgents,
     setSdlcDefault,
     personalModeAcknowledged,
+    missingStageAgentsCount,
   ])
 
   const providerDef = getProviderDefinition(type, provider)
@@ -523,7 +545,8 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       !currentBackend ||
       !cliAuthSession ||
       cliAuthSession.status !== 'awaiting_user' ||
-      cliAuthSession.authenticated
+      cliAuthSession.authenticated ||
+      isSubmittingCliAuthCode
     ) {
       return
     }
@@ -558,7 +581,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       }
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [cliAuthSession, currentBackend, isOpen, queryClient])
+  }, [cliAuthSession, currentBackend, isOpen, isSubmittingCliAuthCode, queryClient])
 
   const handleStartCliAuth = async () => {
     if (requiresPersonalModeAck) {
@@ -569,11 +592,11 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     setIsStartingCliAuth(true)
     try {
       let targetBackend = currentBackend
+      const effectiveName = name.trim() || providerDef.label
+      if (!name.trim()) {
+        setName(effectiveName)
+      }
       if (!targetBackend) {
-        const effectiveName = name.trim() || providerDef.label
-        if (!name.trim()) {
-          setName(effectiveName)
-        }
         const effectiveCapacity =
           type === 'compute' || type === 'inference'
             ? capacity ?? (type === 'compute' ? 2 : 4)
@@ -591,7 +614,25 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
         })
         setLocalBackend(created)
         targetBackend = created
-        await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.backends }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.agents }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.policies }),
+        ])
+      } else {
+        const updated = await api.backends.update(targetBackend.id, {
+          name: effectiveName,
+          endpoint: type === 'git' ? endpoint.trim() || providerDef.defaultEndpoint : null,
+          config: buildConfigPayload(),
+          enabled,
+        })
+        setLocalBackend(updated)
+        targetBackend = updated
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.backends }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.agents }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.policies }),
+        ])
       }
       const res = await api.backends.startCliAuth(targetBackend.id)
       setCliAuthSession({
@@ -1037,7 +1078,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       return
     }
 
-    if (isInlineCreatedClean && localBackend) {
+    if (isInlineCreatedClean && localBackend && type !== 'inference') {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.backends }),
         queryClient.invalidateQueries({ queryKey: queryKeys.agents }),

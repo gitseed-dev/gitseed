@@ -260,7 +260,7 @@ async def list_agents(
     enabled: bool | None = None,
     include_archived: bool = False,
 ) -> list[Agent]:
-    """List agents ordered by handle."""
+    """List agents ordered by handle, reconciling any missing stage agents for enabled inference backends."""
     stmt = select(Agent)
     if not include_archived:
         stmt = stmt.where(col(Agent.archived_at).is_(None))
@@ -270,7 +270,13 @@ async def list_agents(
         stmt = stmt.where(Agent.enabled == enabled)
 
     stmt = stmt.order_by(col(Agent.handle).asc())
-    return list((await session.execute(stmt)).scalars().all())
+    agents = list((await session.execute(stmt)).scalars().all())
+    if kind is None and enabled is None and isinstance(session, AsyncSession):
+        from gitseed_core.services.backends import ensure_missing_backend_stage_agents
+
+        if await ensure_missing_backend_stage_agents(session, existing_agents=agents):
+            agents = list((await session.execute(stmt)).scalars().all())
+    return agents
 
 
 async def get_agent(

@@ -1565,6 +1565,8 @@ async def test_backend_connection(
     await session.refresh(backend)
     if backend.type == BackendType.INFERENCE:
         await sync_backend_to_litellm(backend)
+        if (backend.config or {}).get("auto_create_agents") is True:
+            await maybe_auto_provision_sdlc_agents(session, backend)
     return backend
 
 
@@ -2018,6 +2020,8 @@ async def discover_backend_models(
     await session.commit()
     await session.refresh(backend)
     await sync_backend_to_litellm(backend)
+    if (backend.config or {}).get("auto_create_agents") is True:
+        await maybe_auto_provision_sdlc_agents(session, backend)
     return backend
 
 
@@ -2818,7 +2822,22 @@ async def provision_sdlc_agents_for_backend(
                 enabled=True,
             )
             session.add(target_agent)
-            await session.flush()
+            try:
+                await session.flush()
+            except IntegrityError:
+                await session.rollback()
+                target_agent = (
+                    await session.execute(
+                        select(Agent)
+                        .where(Agent.handle == target_handle)
+                        .order_by(
+                            col(Agent.archived_at).is_not(None).asc(),
+                            col(Agent.created_at).asc(),
+                        )
+                    )
+                ).scalars().first()
+                if target_agent is None:
+                    raise
         elif overwrite_existing:
             existing_mb = getattr(target_agent, "models_backend_id", None)
             if not (is_personal and existing_mb and existing_mb != backend.id):
@@ -2829,6 +2848,13 @@ async def provision_sdlc_agents_for_backend(
                 target_agent.enabled = True
                 target_agent.archived_at = None
                 target_agent.updated_at = datetime.now(UTC)
+        elif target_agent.archived_at is not None or not target_agent.enabled:
+            target_agent.name = target_name
+            target_agent.template = role_slug
+            target_agent.runtime = runtime
+            target_agent.enabled = True
+            target_agent.archived_at = None
+            target_agent.updated_at = datetime.now(UTC)
 
         if pol is not None and (
             (pol.agent_id is None and assign_policies)
@@ -2836,6 +2862,15 @@ async def provision_sdlc_agents_for_backend(
         ):
             pol.agent_id = target_agent.id
             pol.updated_at = datetime.now(UTC)
+
+        if backend.access_restricted and backend.id and target_agent.id:
+            existing_grant = await session.get(
+                AgentBackend, (target_agent.id, backend.id)
+            )
+            if existing_grant is None:
+                session.add(
+                    AgentBackend(agent_id=target_agent.id, backend_id=backend.id)
+                )
 
         provisioned_agents.append(target_agent)
 
@@ -2860,6 +2895,7 @@ async def maybe_auto_provision_sdlc_agents(
     is_personal = is_personal_mode_backend(backend) or (
         str(cfg.get("auth_mode") or "").strip().lower() == "cli_oauth"
     )
+    multi_user_personal_restricted = False
     if is_personal:
         if not settings.GITSEED_ALLOW_PERSONAL_CLI_OAUTH:
             return
@@ -2869,9 +2905,11 @@ async def maybe_auto_provision_sdlc_agents(
         except Exception:
             user_count = 0
         if user_count > 1 and not settings.ALLOW_PERSONAL_MODE_IN_MULTI_USER_ORGS:
-            return
+            multi_user_personal_restricted = True
 
-    if not _is_inference_backend_ready(backend):
+    if not _is_inference_backend_ready(backend) or multi_user_personal_restricted:
+        if multi_user_personal_restricted and cfg.get("auto_create_agents") is not True:
+            return
         if auto_create_agents:
             await provision_sdlc_agents_for_backend(
                 session,
@@ -2928,6 +2966,86 @@ async def maybe_auto_provision_sdlc_agents(
         assign_policies=should_assign_policies,
         overwrite_existing=should_assign_policies,
     )
+
+
+async def ensure_missing_backend_stage_agents(
+    session: AsyncSession,
+    existing_agents: list[Agent] | None = None,
+) -> bool:
+    """Ensure every enabled inference backend with `auto_create_agents != False` has its 5 SDLC stage agents."""
+    try:
+        exec_res = await session.execute(
+            select(Backend).where(
+                Backend.type == BackendType.INFERENCE,
+                col(Backend.enabled).is_(True),
+            )
+        )
+        scalars_obj = exec_res.scalars() if hasattr(exec_res, "scalars") else None
+        raw_backends = (
+            list(scalars_obj.all())
+            if scalars_obj is not None and hasattr(scalars_obj, "all")
+            else []
+        )
+    except Exception:
+        return False
+
+    inference_backends = [
+        b
+        for b in raw_backends
+        if isinstance(b, Backend)
+        and b.type == BackendType.INFERENCE
+        and b.enabled
+        and (b.config or {}).get("auto_create_agents", True) is not False
+    ]
+    if not inference_backends:
+        return False
+
+    if existing_agents is None:
+        try:
+            agt_res = await session.execute(
+                select(Agent).where(col(Agent.archived_at).is_(None))
+            )
+            agt_scalars = agt_res.scalars() if hasattr(agt_res, "scalars") else None
+            existing_agents = (
+                list(agt_scalars.all())
+                if agt_scalars is not None and hasattr(agt_scalars, "all")
+                else []
+            )
+        except Exception:
+            existing_agents = []
+
+    active_handles = {
+        a.handle.strip().lower()
+        for a in existing_agents
+        if isinstance(a, Agent)
+        and a.archived_at is None
+        and a.enabled
+        and isinstance(a.handle, str)
+    }
+
+    provisioned_any = False
+    for b in inference_backends:
+        handle_prefix, _, _, _ = resolve_provider_sdlc_profile(b)
+        expected_handles = {
+            f"{handle_prefix}-{role_slug}" for _, role_slug, _, _ in _SDLC_STAGE_ROLES
+        }
+        if not expected_handles.issubset(active_handles):
+            try:
+                created = await provision_sdlc_agents_for_backend(
+                    session,
+                    b,
+                    force_switch=False,
+                    assign_policies=False,
+                    overwrite_existing=False,
+                )
+                for ag in created:
+                    if isinstance(ag, Agent) and isinstance(ag.handle, str):
+                        active_handles.add(ag.handle.strip().lower())
+                provisioned_any = True
+            except Exception:
+                continue
+
+    return provisioned_any
 
 
 async def set_sdlc_default_backend(

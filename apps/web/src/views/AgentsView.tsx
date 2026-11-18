@@ -381,7 +381,7 @@ export const AgentsView: React.FC = () => {
   const { paginatedItems: pagedAgents, paginationProps: agentsPagination } =
     usePagination({
       items: sortedAgents,
-      initialPageSize: 10,
+      initialPageSize: 20,
     })
 
   const { paginatedItems: pagedSkills, paginationProps: skillsPagination } =
