@@ -224,11 +224,14 @@ jobs:
           uv build packages/common --out-dir dist
           uv build apps/cli --out-dir dist
           uv build apps/mcp --out-dir dist
+          rm -f dist/.gitignore
           ls -la dist
           python3 - <<'PY'
           import pathlib, tarfile, zipfile
-          dist_files = sorted(pathlib.Path("dist").iterdir())
-          assert len(dist_files) == 6, f"Expected 6 artifacts (3 wheels + 3 sdists), got {len(dist_files)}"
+          dist_files = sorted(
+              p for p in pathlib.Path("dist").iterdir() if p.name.endswith((".whl", ".tar.gz"))
+          )
+          assert len(dist_files) == 6, f"Expected 6 artifacts (3 wheels + 3 sdists), got {len(dist_files)}: {[p.name for p in dist_files]}"
           for artifact in dist_files:
               if artifact.suffix == ".whl":
                   with zipfile.ZipFile(artifact) as zf:
@@ -263,7 +266,7 @@ jobs:
       contents: read
     steps:
       - name: Download built Python distributions
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: python-dist
           path: dist
