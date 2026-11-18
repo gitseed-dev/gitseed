@@ -358,12 +358,12 @@ export const ProjectRepositoriesCard: React.FC<
                           {repo.full_name}
                         </span>
                         {isLocalRepo && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
                             On-Device Local
                           </span>
                         )}
                         {repo.is_primary ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25">
                             <Star size={10} className="fill-current" />
                             Primary
                           </span>
@@ -461,7 +461,7 @@ export const ProjectRepositoriesCard: React.FC<
                         <button
                           type="button"
                           onClick={() => setRepoMode('existing')}
-                          className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                          className={`px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                             repoMode === 'existing'
                               ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -472,7 +472,7 @@ export const ProjectRepositoriesCard: React.FC<
                         <button
                           type="button"
                           onClick={() => setRepoMode('create')}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                             repoMode === 'create'
                               ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -486,7 +486,7 @@ export const ProjectRepositoriesCard: React.FC<
                     <button
                       type="button"
                       onClick={() => setRepoMode('local')}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                         repoMode === 'local'
                           ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                           : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -565,7 +565,7 @@ export const ProjectRepositoriesCard: React.FC<
             {repoMode === 'local' ? (
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
                 <div className="sm:col-span-7">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                     Local Workspace Directory <span className="text-zinc-400">(optional)</span>
                   </label>
                   <input
@@ -577,7 +577,7 @@ export const ProjectRepositoriesCard: React.FC<
                   />
                 </div>
                 <div className="sm:col-span-3">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                     Default Branch
                   </label>
                   <input
@@ -604,7 +604,7 @@ export const ProjectRepositoriesCard: React.FC<
             ) : repoMode === 'create' ? (
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
                 <div className="sm:col-span-4">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                     Git Provider
                   </label>
                   <select
@@ -621,7 +621,7 @@ export const ProjectRepositoriesCard: React.FC<
                 </div>
 
                 <div className="sm:col-span-4">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                     New Repository Name (or org/repo)
                   </label>
                   <input
@@ -634,14 +634,14 @@ export const ProjectRepositoriesCard: React.FC<
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                     Visibility
                   </label>
                   <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80">
                     <button
                       type="button"
                       onClick={() => setNewRepoPrivate(true)}
-                      className={`py-1 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
+                      className={`py-1 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
                         newRepoPrivate
                           ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300'
                           : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -653,7 +653,7 @@ export const ProjectRepositoriesCard: React.FC<
                     <button
                       type="button"
                       onClick={() => setNewRepoPrivate(false)}
-                      className={`py-1 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
+                      className={`py-1 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition cursor-pointer ${
                         !newRepoPrivate
                           ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300'
                           : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -681,7 +681,7 @@ export const ProjectRepositoriesCard: React.FC<
             ) : (
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
               <div className="sm:col-span-4">
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                   Git Provider
                 </label>
                 <select
@@ -704,7 +704,7 @@ export const ProjectRepositoriesCard: React.FC<
 
               <div className="sm:col-span-4">
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">
                     Repository
                   </label>
                   {availableBackendRepos.length > 0 && useCustomRepoInput && (
@@ -714,7 +714,7 @@ export const ProjectRepositoriesCard: React.FC<
                         setUseCustomRepoInput(false)
                         setFullName('')
                       }}
-                      className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                      className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
                     >
                       Select from list
                     </button>
@@ -760,7 +760,7 @@ export const ProjectRepositoriesCard: React.FC<
               </div>
 
               <div className="sm:col-span-2">
-                <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                   Default Branch
                 </label>
                 <input

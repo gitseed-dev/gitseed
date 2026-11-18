@@ -160,7 +160,7 @@ export const ProjectPoliciesTab: React.FC<ProjectPoliciesTabProps> = ({
                         <div className="flex items-center gap-2">
                           <StageBadge stage={pol.stage} />
                           {isOverridden ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25 shrink-0">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25 shrink-0">
                               {overrideCount === 1
                                 ? t('details.project.settingsConfig.oneOverride')
                                 : t('details.project.settingsConfig.overridesCount', {
@@ -168,14 +168,14 @@ export const ProjectPoliciesTab: React.FC<ProjectPoliciesTabProps> = ({
                                   })}
                             </span>
                           ) : (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80 shrink-0">
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80 shrink-0">
                               {t('details.project.settingsConfig.inherited')}
                             </span>
                           )}
                         </div>
                         <p
                           title={meta.shortDescription}
-                          className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate mt-1"
+                          className="text-xs text-zinc-500 dark:text-zinc-400 truncate mt-1"
                         >
                           {meta.shortDescription}
                         </p>
@@ -228,7 +228,7 @@ export const ProjectPoliciesTab: React.FC<ProjectPoliciesTabProps> = ({
                             {formatRoleLabel(pol.min_approver_role)}
                           </span>
                         </div>
-                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400 pl-5 truncate">
+                        <div className="text-xs text-zinc-500 dark:text-zinc-400 pl-5 truncate">
                           {pol.allow_self_approval
                             ? 'Self-ok'
                             : 'Distinct approver'}
@@ -273,7 +273,7 @@ export const ProjectPoliciesTab: React.FC<ProjectPoliciesTabProps> = ({
                         )}
                         {(pol.instructions || pol.inherited_instructions) && (
                           <span
-                            className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80"
+                            className="ml-1 px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80"
                             title={pol.instructions ? 'Has project stage instructions' : 'Uses organization stage instructions'}
                           >
                             Instructions
@@ -302,7 +302,7 @@ export const ProjectPoliciesTab: React.FC<ProjectPoliciesTabProps> = ({
                           <span>{t('routes.table.enforced')}</span>
                         </span>
                         {meta.isRequired && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
                             <Lock size={9} />
                             <span>Required</span>
                           </span>

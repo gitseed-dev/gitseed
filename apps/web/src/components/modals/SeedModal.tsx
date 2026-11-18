@@ -13,7 +13,7 @@ import {
   formatFileSize,
   validateAttachments,
 } from '../seeds/AttachmentPicker'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   AlertTriangle,
@@ -34,6 +34,7 @@ import { Tooltip } from '../common/Tooltip'
 import { VoiceDictationButton } from '../common/VoiceDictationButton'
 import { useAuth } from '../../context/AuthContext'
 import { useData } from '../../context/DataContext'
+import { filterStageAgentsForStage } from '../../utils/agents'
 import { canUserContributeToProject } from '../../utils/projects'
 import { AUTONOMY_LABELS } from '../../utils/seeds'
 import type { Seed, SeedAutonomy } from '../../types'
@@ -394,14 +395,12 @@ export const SeedModal: React.FC<SeedModalProps> = ({
 
   const availableExtraIdeateAgents = useMemo(
     () =>
-      agents.filter(
-        (a) =>
-          !a.archived_at &&
-          a.enabled &&
-          a.kind === 'stage' &&
-          a.id !== ideatePolicy?.agent_id
-      ),
-    [agents, ideatePolicy]
+      filterStageAgentsForStage(
+        agents.filter((a) => !a.archived_at && a.enabled && a.kind === 'stage'),
+        'ideate',
+        extraIdeateAgentIds
+      ).filter((a) => a.id !== ideatePolicy?.agent_id),
+    [agents, ideatePolicy, extraIdeateAgentIds]
   )
 
   // Second opinions apply to Ideate; hide when Fast-Track skips Ideate
@@ -433,10 +432,26 @@ export const SeedModal: React.FC<SeedModalProps> = ({
     })
   }
 
-  const selectedProjHasRepos = useMemo(
+  const cachedProjectRepos = projectId
+    ? projectReposByProject[projectId]
+    : undefined
+
+  const { data: fetchedProjectRepos } = useQuery({
+    queryKey: queryKeys.projectRepos(projectId || '__none__'),
+    queryFn: () => api.projects.listRepos(projectId),
+    enabled: isOpen && Boolean(projectId) && cachedProjectRepos === undefined,
+    staleTime: 300_000,
+  })
+
+  const resolvedProjectRepos = cachedProjectRepos ?? fetchedProjectRepos
+  const selectedProjMissingRepos = useMemo(
     () =>
-      Boolean(projectId && (projectReposByProject[projectId] || []).length > 0),
-    [projectId, projectReposByProject]
+      Boolean(
+        selectedProj &&
+          resolvedProjectRepos !== undefined &&
+          resolvedProjectRepos.length === 0
+      ),
+    [selectedProj, resolvedProjectRepos]
   )
 
   const budgetDefaultHint = useMemo(() => {
@@ -762,8 +777,8 @@ export const SeedModal: React.FC<SeedModalProps> = ({
     <span className="inline-flex items-center gap-2 flex-wrap">
       <span>
         {relatedToSeed
-          ? `New related seed · #${relatedToSeed.number} in`
-          : 'New seed in'}
+          ? `Create related seed · #${relatedToSeed.number} in`
+          : 'Create a seed in'}
       </span>
       <div className="relative inline-block" data-seed-menu>
         <button
@@ -840,7 +855,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
           </div>
         )}
 
-        {selectedProj && !selectedProjHasRepos && (
+        {selectedProj && selectedProjMissingRepos && (
           <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 font-medium flex items-start gap-2">
             <AlertCircle
               size={15}
@@ -1051,7 +1066,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
                               )}
                               <span>{opt.label}</span>
                             </span>
-                            <span className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
+                            <span className="text-xs text-zinc-500 dark:text-zinc-400 leading-snug">
                               {opt.description}
                             </span>
                           </div>
@@ -1114,7 +1129,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
                           >
                             {opt.label}
                           </span>
-                          <span className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
+                          <span className="text-xs text-zinc-500 dark:text-zinc-400 leading-snug">
                             {opt.description}
                           </span>
                         </div>
@@ -1173,7 +1188,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
                       anchorRef={opinionsBtnRef}
                       className="w-72 max-h-64 overflow-y-auto rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700/80 shadow-xl py-1.5"
                     >
-                      <div className="px-3 py-1.5 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-2 text-[11px] text-zinc-400">
+                      <div className="px-3 py-1.5 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-2 text-xs text-zinc-400">
                         <span>
                           {defaultIdeateAgent
                             ? `Primary: @${defaultIdeateAgent.handle}`
@@ -1207,7 +1222,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
                               >
                                 @{ag.handle}
                               </span>
-                              <span className="text-[11px] text-zinc-400 truncate">
+                              <span className="text-xs text-zinc-400 truncate">
                                 {ag.model}
                               </span>
                             </div>
@@ -1343,7 +1358,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
                       className="px-3 py-1.5 flex items-center justify-between gap-2 text-xs sm:text-sm"
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-4 h-4 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 font-mono text-[11px] font-bold flex items-center justify-center shrink-0">
+                        <span className="w-4 h-4 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 font-mono text-xs font-bold flex items-center justify-center shrink-0">
                           {idx + 1}
                         </span>
                         <span className="text-zinc-800 dark:text-zinc-200 truncate">
@@ -1536,7 +1551,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
                       >
                         Create &amp; start
                       </span>
-                      <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      <span className="text-xs text-zinc-500 dark:text-zinc-400">
                         Create the seed and start stage 1 now
                       </span>
                     </div>
@@ -1569,7 +1584,7 @@ export const SeedModal: React.FC<SeedModalProps> = ({
                       >
                         Create without starting
                       </span>
-                      <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      <span className="text-xs text-zinc-500 dark:text-zinc-400">
                         Stage the seed so you can start it later
                       </span>
                     </div>

@@ -26,14 +26,6 @@ export default defineConfig({
             return 'vendor-ui'
           }
           if (
-            id.includes('/prism-react-renderer/') ||
-            id.includes('\\prism-react-renderer\\') ||
-            id.includes('/prismjs/') ||
-            id.includes('\\prismjs\\')
-          ) {
-            return 'vendor-prism'
-          }
-          if (
             id.includes('/lucide-react/') ||
             id.includes('\\lucide-react\\')
           ) {

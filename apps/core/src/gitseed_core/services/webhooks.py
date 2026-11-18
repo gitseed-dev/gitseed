@@ -61,6 +61,7 @@ from gitseed_core.services.net_safety import (
 from gitseed_core.services.policies import first_enabled_stage
 from gitseed_core.services.projects import require_project_maintainer
 from gitseed_core.services.seeds import (
+    _extract_latest_review_feedback,
     _mentions_stage_agent,
     create_remediation_task_and_return_to_execute,
     resolve_should_stage_seed,
@@ -768,14 +769,17 @@ async def _verify_payload_repo_matches_project(
     session: AsyncSession,
     project: Project,
     payload_repo: str,
-) -> None:
-    """Reject cross-repository webhook spoofing when payload repository is not attached to `project`."""
+) -> str | None:
+    """Reject cross-repository webhook spoofing when payload repository is not attached to `project`.
+
+    Returns the matched `ProjectRepository.default_branch` when resolved, or `None` if unspecified.
+    """
     clean_repo = (payload_repo or "").strip().lower()
     if not clean_repo:
-        return
+        return None
     exec_fn = getattr(session, "execute", None)
     if not callable(exec_fn):
-        return
+        return None
     res = await session.execute(
         select(ProjectRepository).where(ProjectRepository.project_id == project.id)
     )
@@ -796,13 +800,15 @@ async def _verify_payload_repo_matches_project(
                 ]
 
     if repo_rows:
-        if not any(
-            (r.full_name or "").strip().lower() == clean_repo for r in repo_rows
-        ):
+        matched_row = next(
+            (r for r in repo_rows if (r.full_name or "").strip().lower() == clean_repo),
+            None,
+        )
+        if matched_row is None:
             raise Forbidden(
                 f"Webhook repository '{payload_repo}' is not attached to project '{project.slug}'"
             )
-        return
+        return str(matched_row.default_branch or "").strip() or None
 
     if not isinstance(session, AsyncSession):
         one_fn = getattr(res, "scalar_one_or_none", None)
@@ -811,7 +817,7 @@ async def _verify_payload_repo_matches_project(
             if inspect.iscoroutine(one_val):
                 one_val.close()
             elif isinstance(one_val, Seed):
-                return
+                return None
 
     raise Forbidden(
         f"Webhook repository '{payload_repo}' is not attached to project '{project.slug}'"
@@ -1059,13 +1065,16 @@ async def _sync_webhook_comment_to_seed(
             action_taken = "live_steering_queued"
         elif seed.status in (SeedStatus.AWAITING_APPROVAL, SeedStatus.FAILED):
             if seed.stage in (SeedStage.REVIEW, SeedStage.MERGE):
+                review_summary, review_findings = (
+                    await _extract_latest_review_feedback(session, seed.id)
+                )
                 await create_remediation_task_and_return_to_execute(
                     session,
                     seed,
                     from_stage=seed.stage,
                     operator_comment=formatted_body,
-                    review_summary=None,
-                    review_findings=[],
+                    review_summary=review_summary,
+                    review_findings=review_findings,
                     actor_type=ActorType.SYSTEM,
                     actor_id=actor_id,
                     now=now,
@@ -1074,6 +1083,7 @@ async def _sync_webhook_comment_to_seed(
             else:
                 seed.status = SeedStatus.QUEUED
                 seed.blocked_reason = None
+                seed.stage_entered_at = now
                 seed.updated_at = now
                 action_taken = "stage_requeued"
 
@@ -1187,7 +1197,9 @@ async def handle_github_webhook(
     if not secret or not verify_github_signature(raw_body, secret, signature_header):
         raise Forbidden("Invalid X-Hub-Signature-256 webhook signature")
 
-    await _verify_payload_repo_matches_project(session, project, repo_full_name)
+    matched_default_branch = await _verify_payload_repo_matches_project(
+        session, project, repo_full_name
+    )
 
     eff_delivery_id = delivery_id or str(payload.get("delivery_id") or "").strip() or None
     if not await _check_and_record_delivery_id_async(f"github:{project.id}", eff_delivery_id):
@@ -1298,6 +1310,32 @@ async def handle_github_webhook(
         ).strip()
 
         if action == "closed" and is_merged:
+            base_obj = pr_obj.get("base") if isinstance(pr_obj.get("base"), dict) else {}
+            base_ref = str(base_obj.get("ref") or "").strip()
+            base_repo_obj = base_obj.get("repo") if isinstance(base_obj.get("repo"), dict) else {}
+            payload_repo_obj = (
+                payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
+            )
+            expected_base = (
+                matched_default_branch
+                or str(
+                    payload_repo_obj.get("default_branch")
+                    or base_repo_obj.get("default_branch")
+                    or "main"
+                ).strip()
+                or "main"
+            )
+            if base_ref and base_ref != expected_base:
+                return WebhookDeliveryResponse(
+                    accepted=False,
+                    provider="github",
+                    event=event,
+                    action="ignored_non_default_base",
+                    detail=(
+                        f"Ignored PR merged into non-default branch '{base_ref}' "
+                        f"(expected '{expected_base}')"
+                    ),
+                )
             seed_num = _extract_seed_number_from_branch_or_text(head_ref, title_str)
             seed = await _find_seed_by_number_or_tag(
                 session, project.id, seed_number=seed_num
@@ -1647,7 +1685,9 @@ async def handle_gitlab_webhook(
     if not secret or not verify_gitlab_token(secret, token_header):
         raise Forbidden("Invalid X-Gitlab-Token webhook header")
 
-    await _verify_payload_repo_matches_project(session, project, repo_full_name)
+    matched_default_branch = await _verify_payload_repo_matches_project(
+        session, project, repo_full_name
+    )
 
     object_kind = str(payload.get("object_kind") or event_name or "").strip().lower()
     eff_delivery_id = (
@@ -1747,6 +1787,24 @@ async def handle_gitlab_webhook(
         sender = str((payload.get("user") or {}).get("username") or "gitlab").strip()
 
         if mr_state == "merged" or mr_action == "merge":
+            target_branch = str(attrs.get("target_branch") or "").strip()
+            gl_proj_obj = payload.get("project") if isinstance(payload.get("project"), dict) else {}
+            expected_gl_base = (
+                matched_default_branch
+                or str(gl_proj_obj.get("default_branch") or "main").strip()
+                or "main"
+            )
+            if target_branch and target_branch != expected_gl_base:
+                return WebhookDeliveryResponse(
+                    accepted=False,
+                    provider="gitlab",
+                    event=object_kind,
+                    action="ignored_non_default_base",
+                    detail=(
+                        f"Ignored MR merged into non-default branch '{target_branch}' "
+                        f"(expected '{expected_gl_base}')"
+                    ),
+                )
             seed_num = _extract_seed_number_from_branch_or_text(source_branch, title_str)
             seed = await _find_seed_by_number_or_tag(
                 session, project.id, seed_number=seed_num
@@ -2077,8 +2135,11 @@ async def handle_bitbucket_webhook(
     if not secret or not verify_bitbucket_signature(raw_body, secret, signature_header):
         raise Forbidden("Invalid X-Hub-Signature webhook signature")
 
+    matched_default_branch: str | None = None
     if explicit_project:
-        await _verify_payload_repo_matches_project(session, project, repo_full_name)
+        matched_default_branch = await _verify_payload_repo_matches_project(
+            session, project, repo_full_name
+        )
 
     event = (event_name or "").strip().lower()
     eff_delivery_id = delivery_id or str(payload.get("uuid") or "").strip() or None
@@ -2329,6 +2390,29 @@ async def handle_bitbucket_webhook(
         source_obj = pr_obj.get("source") if isinstance(pr_obj.get("source"), dict) else {}
         branch_obj = source_obj.get("branch") if isinstance(source_obj.get("branch"), dict) else {}
         source_branch = str(branch_obj.get("name") or "")
+        dest_obj = pr_obj.get("destination") if isinstance(pr_obj.get("destination"), dict) else {}
+        dest_branch_obj = dest_obj.get("branch") if isinstance(dest_obj.get("branch"), dict) else {}
+        dest_branch = str(dest_branch_obj.get("name") or "").strip()
+        bb_repo_obj = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
+        bb_main_obj = (
+            bb_repo_obj.get("mainbranch") if isinstance(bb_repo_obj.get("mainbranch"), dict) else {}
+        )
+        expected_bb_base = (
+            matched_default_branch
+            or str(bb_main_obj.get("name") or "main").strip()
+            or "main"
+        )
+        if dest_branch and dest_branch != expected_bb_base:
+            return WebhookDeliveryResponse(
+                accepted=False,
+                provider="bitbucket",
+                event=event,
+                action="ignored_non_default_base",
+                detail=(
+                    f"Ignored Bitbucket PR merged into non-default branch '{dest_branch}' "
+                    f"(expected '{expected_bb_base}')"
+                ),
+            )
         title_str = str(pr_obj.get("title") or "")
         links_obj = pr_obj.get("links") if isinstance(pr_obj.get("links"), dict) else {}
         html_obj = links_obj.get("html") if isinstance(links_obj.get("html"), dict) else {}

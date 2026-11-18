@@ -206,7 +206,7 @@ export const SessionsList: React.FC<SessionsListProps> = ({ projectId = null, ac
                     </span>
                   </td>
                   <td className="py-3.5 px-4">
-                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold border ${st.className}`}>
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold border ${st.className}`}>
                       {st.label}
                     </span>
                   </td>

@@ -45,6 +45,7 @@ logger = logging.getLogger("uvicorn.error")
 _OSC8_URL_RE = re.compile(r"\x1b\]8;[^;]*;(https?://[^\x07\x1b]+)(?:\x07|\x1b\\)")
 _OSC_ESCAPE_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _DCS_ESCAPE_RE = re.compile(r"\x1b[P_^][^\x07\x1b]*(?:\x07|\x1b\\)")
+_CSI_CURSOR_FORWARD_RE = re.compile(r"\x1b\[(\d*)C")
 _ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\([A-Z0-9])")
 _URL_RE = re.compile(r"https?://[^\s\"'<>)\]\x00-\x1f\x7f]+")
 _DEVICE_CODE_RE = re.compile(
@@ -56,6 +57,10 @@ _DEVICE_CODE_RE = re.compile(
 def _strip_ansi(text: str) -> str:
     cleaned = _OSC_ESCAPE_RE.sub("", text or "")
     cleaned = _DCS_ESCAPE_RE.sub("", cleaned)
+    cleaned = _CSI_CURSOR_FORWARD_RE.sub(
+        lambda m: " " * min(max(int(m.group(1) or "1"), 1), 4),
+        cleaned,
+    )
     cleaned = _ANSI_ESCAPE_RE.sub("", cleaned)
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     # Collapse long horizontal box-drawing divider lines and wide-PTY padding
@@ -66,12 +71,38 @@ def _strip_ansi(text: str) -> str:
     return cleaned
 
 
+def _extract_claude_oauth_token(raw_text: str) -> str | None:
+    """Extract a `claude setup-token` OAuth token (`sk-ant-oat...`) from container logs, handling optional line wraps."""
+    cleaned = _strip_ansi(raw_text or "")
+    lines = cleaned.splitlines()
+    for idx, line in enumerate(lines):
+        m = re.search(r"(sk-ant-oat[0-9a-zA-Z_-]+)", line)
+        if not m:
+            continue
+        parts = [m.group(1)]
+        if m.end() == len(line.rstrip()):
+            for next_line in lines[idx + 1 : idx + 6]:
+                stripped = next_line.strip()
+                if not stripped:
+                    break
+                if stripped.lower().startswith(("store ", "use ", "export ", "note:")):
+                    break
+                if re.fullmatch(r"[0-9a-zA-Z_-]+", stripped):
+                    parts.append(stripped)
+                else:
+                    break
+        candidate = "".join(parts)
+        if len(candidate) >= 32:
+            return candidate
+    return None
+
+
 def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
     osc_urls = _OSC8_URL_RE.findall(log_text or "")
     cleaned = _strip_ansi(log_text)
     urls = [*osc_urls, *_URL_RE.findall(cleaned)]
     chosen_url: str | None = None
-    for raw_url in urls:
+    for raw_url in reversed(urls):
         u = raw_url.rstrip(".,;:")
         lower = u.lower()
         if any(
@@ -83,6 +114,7 @@ def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
                 "auth",
                 "accounts.google.com",
                 "claude.ai",
+                "claude.com",
                 "anthropic.com",
                 "openai.com",
                 "x.ai",
@@ -92,14 +124,16 @@ def _extract_auth_url_and_code(log_text: str) -> tuple[str | None, str | None]:
             chosen_url = u
             break
     if not chosen_url and urls:
-        for raw_url in urls:
+        for raw_url in reversed(urls):
             u = raw_url.rstrip(".,;:")
-            if not u.startswith(("http://localhost", "http://127.0.0.1")):
+            if not u.startswith(("http://localhost", "http://127.0.0.1")) and not any(
+                doc_seg in u.lower() for doc_seg in ("/docs", "/terms", "/privacy")
+            ):
                 chosen_url = u
                 break
 
-    code_match = _DEVICE_CODE_RE.search(cleaned)
-    user_code = code_match.group(1) if code_match else None
+    code_matches = _DEVICE_CODE_RE.findall(cleaned)
+    user_code = code_matches[-1] if code_matches else None
     return chosen_url, user_code
 
 
@@ -140,7 +174,7 @@ async def _select_docker_compute_backend(session: AsyncSession) -> Backend:
 def _build_pty_auth_script(provider: str) -> str:
     """Return a self-contained Python script that drives the provider CLI inside a real PTY."""
     return f"""
-import fcntl, os, pty, select, shutil, struct, subprocess, sys, termios, time, json
+import fcntl, os, pty, re, select, shutil, struct, subprocess, sys, termios, time, json
 from pathlib import Path
 
 provider = {provider!r}
@@ -148,6 +182,7 @@ home = Path("/home/runner")
 fifo_path = "/tmp/.gitseed_stdin"
 if not os.path.exists(fifo_path):
     os.mkfifo(fifo_path)
+Path("/tmp/.gitseed_pty_v2").write_text("1", encoding="utf-8")
 
 env = dict(os.environ)
 env["HOME"] = str(home)
@@ -157,6 +192,8 @@ env["NO_BROWSER"] = "true"
 env["DISPLAY"] = ""
 
 if provider in ("gemini", "antigravity"):
+    env["GEMINI_FORCE_FILE_STORAGE"] = "true"
+    env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] = "false"
     gemini_dir = home / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
     trusted_folders_path = gemini_dir / "trustedFolders.json"
@@ -181,6 +218,7 @@ if provider in ("gemini", "antigravity"):
     settings_path = gemini_dir / "settings.json"
     settings_path.write_text(json.dumps(default_gem_cfg, indent=2))
 if provider == "antigravity":
+    env["SSH_CONNECTION"] = "127.0.0.1 22 127.0.0.1 22"
     agy_dir = home / ".gemini" / "antigravity-cli"
     agy_dir.mkdir(parents=True, exist_ok=True)
     default_agy_cfg = {{
@@ -195,13 +233,35 @@ if provider == "antigravity":
 elif provider == "anthropic":
     claude_cfg = home / ".claude.json"
     if not claude_cfg.exists():
-        claude_cfg.write_text(json.dumps({{"hasCompletedOnboarding": True, "theme": "dark"}}, indent=2))
+        trusted_proj = {{
+            "allowedTools": [],
+            "hasTrustDialogAccepted": True,
+            "hasTrustDialogHooksAccepted": True,
+            "hasCompletedProjectOnboarding": True,
+            "projectOnboardingSeenCount": 1,
+        }}
+        claude_cfg.write_text(
+            json.dumps(
+                {{
+                    "hasCompletedOnboarding": True,
+                    "bypassPermissionsModeAccepted": True,
+                    "theme": "dark",
+                    "projects": {{"/workspace": trusted_proj, str(home): trusted_proj}},
+                }},
+                indent=2,
+            )
+        )
 
 if provider == "antigravity":
     if shutil.which("agy"):
         cmd = ["agy"]
     else:
-        cmd = ["gemini"]
+        print(
+            "Google Antigravity CLI ('agy') is not installed in this runner image. "
+            "Rebuild gitseed/runner with INSTALL_ANTIGRAVITY=true (e.g. 'docker compose up -d --build').",
+            flush=True,
+        )
+        sys.exit(1)
 elif provider == "gemini":
     cmd = ["gemini"]
 elif provider == "anthropic":
@@ -217,12 +277,253 @@ elif provider == "xai":
 else:
     cmd = ["sleep", "300"]
 
+import configparser
+
+def init_headless_keyring():
+    if provider not in ("antigravity", "gemini"):
+        return
+    if not (shutil.which("dbus-daemon") and shutil.which("gnome-keyring-daemon")):
+        return
+    try:
+        xdg_dir = Path("/tmp/xdg-runtime-1000")
+        xdg_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(xdg_dir, 0o700)
+        env["XDG_RUNTIME_DIR"] = str(xdg_dir)
+
+        kr_dir = home / ".local" / "share" / "keyrings"
+        kr_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(kr_dir, 0o700)
+        default_kr = kr_dir / "default"
+        if not default_kr.exists():
+            default_kr.write_text("login\\n", encoding="utf-8")
+            os.chmod(default_kr, 0o600)
+
+        dbus_res = subprocess.run(
+            ["dbus-daemon", "--session", "--print-address=1", "--print-pid=1", "--fork"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+        if dbus_res.returncode == 0:
+            lines = [ln.strip() for ln in dbus_res.stdout.splitlines() if ln.strip()]
+            if lines:
+                env["DBUS_SESSION_BUS_ADDRESS"] = lines[0]
+
+        for gk_args in (["gnome-keyring-daemon", "--unlock"], ["gnome-keyring-daemon", "--start", "--components=secrets"]):
+            gk_res = subprocess.run(
+                gk_args,
+                input="\\n",
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=5,
+            )
+            for line in (gk_res.stdout or "").splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("'\\"")
+                    if k and not k.startswith("export "):
+                        env[k] = v
+                    elif k.startswith("export "):
+                        env[k[7:].strip()] = v
+
+        if shutil.which("secret-tool"):
+            subprocess.run(
+                ["secret-tool", "store", "--label=GitSeed Init", "service", "gitseed-init", "username", "init"],
+                input="1",
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=5,
+            )
+            subprocess.run(
+                ["secret-tool", "clear", "service", "gitseed-init", "username", "init"],
+                capture_output=True,
+                env=env,
+                timeout=5,
+            )
+    except Exception:
+        pass
+
+def sync_keyring_to_files():
+    if provider not in ("antigravity", "gemini"):
+        return
+    token_val = ""
+    items = []
+    seen_keys = set()
+    if shutil.which("secret-tool") and env.get("DBUS_SESSION_BUS_ADDRESS"):
+        for k1, v1, k2, v2 in (
+            ("service", "gemini", "username", "antigravity"),
+            ("service", "antigravity", "username", "antigravity"),
+            ("service", "gemini", "account", "antigravity"),
+            ("service", "antigravity", "account", "antigravity"),
+        ):
+            try:
+                res = subprocess.run(
+                    ["secret-tool", "lookup", k1, v1, k2, v2],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=3,
+                )
+                val = (res.stdout or "").strip()
+                if res.returncode == 0 and val:
+                    if not token_val:
+                        token_val = val
+                    sig = (k1, v1, k2, v2, val)
+                    if sig not in seen_keys:
+                        seen_keys.add(sig)
+                        items.append({{
+                            "label": "Google Antigravity Session",
+                            "attributes": {{k1: v1, k2: v2}},
+                            "secret": val,
+                        }})
+            except Exception:
+                pass
+        try:
+            s_res = subprocess.run(
+                ["secret-tool", "search", "--all", "xdg:schema", "org.freedesktop.Secret.Generic"],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=3,
+            )
+            combined_out = (s_res.stdout or "") + "\\n" + (s_res.stderr or "")
+            cur_label = "Google Antigravity Session"
+            cur_secret = ""
+            cur_attrs = {{}}
+            for raw_ln in combined_out.splitlines() + ["["]:
+                ln = raw_ln.strip()
+                if ln.startswith("["):
+                    if cur_secret and cur_attrs.get("service") != "gitseed-init":
+                        if not token_val:
+                            token_val = cur_secret
+                        sig = (tuple(sorted(cur_attrs.items())), cur_secret)
+                        if sig not in seen_keys:
+                            seen_keys.add(sig)
+                            items.append({{
+                                "label": cur_label,
+                                "attributes": dict(cur_attrs),
+                                "secret": cur_secret,
+                            }})
+                    cur_label = "Google Antigravity Session"
+                    cur_secret = ""
+                    cur_attrs = {{}}
+                elif "=" in ln:
+                    k_part, v_part = ln.split("=", 1)
+                    k_part = k_part.strip()
+                    v_part = v_part.strip()
+                    if k_part == "label":
+                        cur_label = v_part or cur_label
+                    elif k_part == "secret":
+                        cur_secret = v_part
+                    elif k_part.startswith("attribute.") and k_part != "attribute.xdg:schema":
+                        cur_attrs[k_part[10:]] = v_part
+        except Exception:
+            pass
+
+    login_kr = home / ".local" / "share" / "keyrings" / "login.keyring"
+    if login_kr.is_file():
+        try:
+            cp = configparser.RawConfigParser(interpolation=None)
+            cp.read_string(login_kr.read_text(encoding="utf-8", errors="ignore"))
+            for sec in cp.sections():
+                if not sec.isdigit():
+                    continue
+                sec_secret = cp.get(sec, "secret", fallback="").strip()
+                if not sec_secret:
+                    continue
+                attrs = {{}}
+                for sub in cp.sections():
+                    if sub.startswith(f"{{sec}}:attribute"):
+                        a_name = cp.get(sub, "name", fallback="").strip()
+                        a_val = cp.get(sub, "value", fallback="").strip()
+                        if a_name:
+                            attrs[a_name] = a_val
+                if attrs.get("service") == "gitseed-init":
+                    continue
+                if not token_val:
+                    token_val = sec_secret
+                sig = (tuple(sorted(attrs.items())), sec_secret)
+                if sig not in seen_keys:
+                    seen_keys.add(sig)
+                    items.append({{
+                        "label": cp.get(sec, "display-name", fallback="Google Antigravity Session"),
+                        "attributes": attrs,
+                        "secret": sec_secret,
+                    }})
+        except Exception:
+            pass
+
+    if not token_val and not items:
+        return
+    try:
+        agy_cli_dir = home / ".gemini" / "antigravity-cli"
+        kr_out_dir = agy_cli_dir / "keyring"
+        kr_out_dir.mkdir(parents=True, exist_ok=True)
+        if token_val:
+            for out_file in (
+                kr_out_dir / "antigravity-oauth-token",
+                agy_cli_dir / "antigravity-oauth-token",
+                home / ".gemini" / "jetski-standalone-oauth-token",
+            ):
+                out_file.write_text(token_val, encoding="utf-8")
+                os.chmod(out_file, 0o600)
+        if items and provider == "antigravity":
+            auth_json = agy_cli_dir / "auth.json"
+            auth_json.write_text(json.dumps({{"keyring_items": items}}, indent=2), encoding="utf-8")
+            os.chmod(auth_json, 0o600)
+    except Exception:
+        pass
+
+init_headless_keyring()
+
+def sync_claude_token_to_files(raw_accum: str):
+    if provider != "anthropic" or "sk-ant-oat" not in raw_accum:
+        return
+    try:
+        cleaned = re.sub(r"\\x1b\\[(\\d*)C", lambda m: " " * min(max(int(m.group(1) or "1"), 1), 4), raw_accum)
+        cleaned = re.sub(r"\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)", "", cleaned)
+        cleaned = re.sub(r"\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~]|\\([A-Z0-9])", "", cleaned)
+        cleaned = cleaned.replace("\\r\\n", "\\n").replace("\\r", "\\n")
+        lines = cleaned.splitlines()
+        for idx, line in enumerate(lines):
+            m = re.search(r"(sk-ant-oat[0-9a-zA-Z_-]+)", line)
+            if not m:
+                continue
+            parts = [m.group(1)]
+            if m.end() == len(line.rstrip()):
+                for next_line in lines[idx + 1 : idx + 6]:
+                    stripped = next_line.strip()
+                    if not stripped or stripped.lower().startswith(("store ", "use ", "export ", "note:")):
+                        break
+                    if re.fullmatch(r"[0-9a-zA-Z_-]+", stripped):
+                        parts.append(stripped)
+                    else:
+                        break
+            token = "".join(parts)
+            if len(token) >= 32:
+                claude_dir = home / ".claude"
+                claude_dir.mkdir(parents=True, exist_ok=True)
+                cred_file = claude_dir / ".credentials.json"
+                if not cred_file.exists():
+                    cred_file.write_text(
+                        json.dumps({{"claudeAiOauth": {{"accessToken": token, "subscriptionType": "max"}}}}, indent=2),
+                        encoding="utf-8",
+                    )
+                    os.chmod(cred_file, 0o600)
+                return
+    except Exception:
+        pass
+
 print(f"Starting CLI authentication for {{provider}} ({{' '.join(cmd)}})...", flush=True)
 
 def spawn_in_pty(argv):
     m_fd, s_fd = pty.openpty()
     try:
-        fcntl.ioctl(s_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 1000, 0, 0))
+        fcntl.ioctl(s_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 2000, 0, 0))
     except Exception:
         pass
     p = subprocess.Popen(
@@ -237,15 +538,17 @@ def spawn_in_pty(argv):
     return m_fd, p
 
 master_fd, proc = spawn_in_pty(cmd)
-fifo_fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+fifo_fd = os.open(fifo_path, os.O_RDWR | os.O_NONBLOCK)
 start_ts = time.time()
 sent_folder_trust_enter = False
 sent_agy_oauth_enter = False
 accum_text = ""
+last_kr_sync_ts = 0.0
+pending_enters = []
 
 try:
     while time.time() - start_ts < 600:
-        rlist, _, _ = select.select([master_fd, fifo_fd], [], [], 0.25)
+        rlist, _, _ = select.select([master_fd, fifo_fd], [], [], 0.1)
         if master_fd in rlist:
             try:
                 data = os.read(master_fd, 4096)
@@ -253,10 +556,12 @@ try:
                     sys.stdout.buffer.write(data)
                     sys.stdout.buffer.flush()
                     accum_text += data.decode("utf-8", errors="ignore")
+                    sync_claude_token_to_files(accum_text)
                     if (
                         provider in ("antigravity", "gemini")
-                        and "https://" not in accum_text
+                        and "accounts.google.com" not in accum_text
                         and "Enter the authorization code" not in accum_text
+                        and "Paste the authorization code" not in accum_text
                     ):
                         if not sent_folder_trust_enter and (
                             "Trust parent folder" in accum_text
@@ -280,18 +585,40 @@ try:
                 user_in = os.read(fifo_fd, 4096)
                 if user_in:
                     text = user_in.decode("utf-8", errors="ignore").strip()
-                    if text:
-                        os.write(master_fd, text.encode("utf-8"))
-                        time.sleep(0.15)
+                    if text == "__ENTER__":
                         os.write(master_fd, b"\\r")
+                    elif text:
+                        # Clear any prior partial paste on the input line before pasting fresh code
+                        os.write(master_fd, b"\\x05\\x15")
+                        time.sleep(0.05)
+                        os.write(master_fd, text.encode("utf-8"))
+                        now_in = time.time()
+                        pending_enters = [now_in + 0.5]
             except OSError:
                 pass
+        now_ts = time.time()
+        if pending_enters and now_ts >= pending_enters[0]:
+            pending_enters.pop(0)
+            lower_acc = accum_text.lower()
+            if (
+                proc.poll() is None
+                and "sk-ant-oat" not in accum_text
+                and "token created" not in lower_acc
+                and "logged in" not in lower_acc
+            ):
+                try:
+                    os.write(master_fd, b"\\r")
+                except OSError:
+                    pass
+            else:
+                pending_enters.clear()
+        if now_ts - last_kr_sync_ts >= 1.0:
+            last_kr_sync_ts = now_ts
+            sync_keyring_to_files()
+            sync_claude_token_to_files(accum_text)
         if proc.poll() is not None:
-            if provider == "antigravity" and proc.returncode != 0 and cmd[0] == "agy" and shutil.which("gemini"):
-                print("\\nFalling back to Google OAuth sign-in flow...", flush=True)
-                cmd = ["gemini"]
-                master_fd, proc = spawn_in_pty(cmd)
-                continue
+            sync_keyring_to_files()
+            sync_claude_token_to_files(accum_text)
             if provider == "openai" and proc.returncode != 0 and "--device-auth" in cmd:
                 cmd = ["codex", "login"]
                 master_fd, proc = spawn_in_pty(cmd)
@@ -301,6 +628,8 @@ try:
                 master_fd, proc = spawn_in_pty(cmd)
                 continue
             break
+    sync_keyring_to_files()
+    sync_claude_token_to_files(accum_text)
     # Keep container briefly alive so Core can harvest credentials from /home/runner
     time.sleep(15)
 finally:
@@ -536,6 +865,30 @@ def _has_verified_provider_credentials(provider: str, bundle: dict[str, str]) ->
                 or lower_key.endswith("-oauth-token")
                 or "/keyring/" in lower_key
                 or lower_key.endswith("oauth_creds.json")
+                or (
+                    lower_key.endswith("jetski_state.pbtxt")
+                    and any(
+                        tok in lower_val
+                        for tok in ("oauth", "token", "ya29.", "1//")
+                    )
+                )
+                or (
+                    lower_key.endswith("acp-auth-state.json")
+                    and (
+                        '"authenticated": true' in lower_val
+                        or '"authenticated":true' in lower_val
+                        or '"access_token"' in lower_val
+                        or '"refresh_token"' in lower_val
+                    )
+                )
+                or (
+                    lower_key.endswith("auth.json")
+                    and (
+                        "keyring_items" in lower_val
+                        or "secret" in lower_val
+                        or "token" in lower_val
+                    )
+                )
             ):
                 return True
             if '"refresh_token"' in lower_val or '"access_token"' in lower_val:
@@ -627,12 +980,28 @@ async def _harvest_credentials_from_container(
     if not _has_verified_provider_credentials(provider, bundle):
         return {}
 
-    # Mirror .gemini/oauth_creds.json into .gemini/antigravity-cli/oauth_creds.json for Antigravity compatibility
-    if provider == "antigravity" and ".gemini/oauth_creds.json" in bundle:
-        bundle.setdefault(
-            ".gemini/antigravity-cli/oauth_creds.json",
-            bundle[".gemini/oauth_creds.json"],
-        )
+    # Mirror .gemini/oauth_creds.json <-> .gemini/antigravity-cli/oauth_creds.json and token files for Antigravity compatibility
+    if provider == "antigravity":
+        if ".gemini/oauth_creds.json" in bundle:
+            bundle.setdefault(
+                ".gemini/antigravity-cli/oauth_creds.json",
+                bundle[".gemini/oauth_creds.json"],
+            )
+        if ".gemini/antigravity-cli/oauth_creds.json" in bundle:
+            bundle.setdefault(
+                ".gemini/oauth_creds.json",
+                bundle[".gemini/antigravity-cli/oauth_creds.json"],
+            )
+        if ".gemini/antigravity-cli/antigravity-oauth-token" in bundle:
+            bundle.setdefault(
+                ".gemini/jetski-standalone-oauth-token",
+                bundle[".gemini/antigravity-cli/antigravity-oauth-token"],
+            )
+        if ".gemini/jetski-standalone-oauth-token" in bundle:
+            bundle.setdefault(
+                ".gemini/antigravity-cli/antigravity-oauth-token",
+                bundle[".gemini/jetski-standalone-oauth-token"],
+            )
 
     bundle = validate_and_filter_cli_auth_bundle(
         bundle, provider=provider, strict=False
@@ -777,6 +1146,8 @@ async def start_cli_auth_session(
         "TERM=xterm-256color",
         "BROWSER=echo",
         "NO_BROWSER=true",
+        "GEMINI_FORCE_FILE_STORAGE=true",
+        "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=false",
     ]
     host_config: dict[str, Any] = {
         "AutoRemove": False,
@@ -797,6 +1168,7 @@ async def start_cli_auth_session(
                 f"http_proxy={proxy_url}",
                 "NO_PROXY=localhost,127.0.0.1",
                 "no_proxy=localhost,127.0.0.1",
+                "NODE_USE_ENV_PROXY=1",
             ]
         )
         if network_name:
@@ -918,7 +1290,12 @@ async def get_cli_auth_status(
     bundle = await _harvest_credentials_from_container(
         compute_backend, container_name, provider
     )
-    if bundle:
+    extracted_oauth_token = (
+        _extract_claude_oauth_token(raw_logs or "")
+        if provider == "anthropic"
+        else None
+    )
+    if bundle or extracted_oauth_token:
         # Allow any post-token-exchange user tier / onboarding writes to flush before stopping
         await asyncio.sleep(0.8)
         final_bundle = await _harvest_credentials_from_container(
@@ -926,8 +1303,37 @@ async def get_cli_auth_status(
         )
         if final_bundle:
             bundle.update(final_bundle)
+        if (
+            provider == "anthropic"
+            and extracted_oauth_token
+            and not bundle.get(".claude/.credentials.json")
+        ):
+            bundle[".claude/.credentials.json"] = json.dumps(
+                {
+                    "claudeAiOauth": {
+                        "accessToken": extracted_oauth_token,
+                        "subscriptionType": "max",
+                    }
+                }
+            )
+        if (
+            provider == "anthropic"
+            and not extracted_oauth_token
+            and bundle.get(".claude/.credentials.json")
+        ):
+            try:
+                parsed_cred = json.loads(bundle[".claude/.credentials.json"])
+                tok = (parsed_cred.get("claudeAiOauth") or {}).get("accessToken")
+                if isinstance(tok, str) and tok.startswith("sk-ant-oat"):
+                    extracted_oauth_token = tok
+            except Exception:
+                pass
         updated_backend = await _persist_authenticated_bundle(
-            session, admin, backend, bundle=bundle
+            session,
+            admin,
+            backend,
+            bundle=bundle or None,
+            oauth_token=extracted_oauth_token,
         )
         await stop_and_remove_docker_container(compute_backend, container_name)
         return {
@@ -1003,8 +1409,20 @@ async def submit_cli_auth_code(
 
     # Case 2: User pasted a direct OAuth setup token (e.g. `claude setup-token` sk-ant-oat01-... or ya29....)
     if trimmed.startswith(("sk-ant-oat", "ya29.", "1//")):
+        direct_bundle: dict[str, str] | None = None
+        if provider == "anthropic" and trimmed.startswith("sk-ant-oat"):
+            direct_bundle = {
+                ".claude/.credentials.json": json.dumps(
+                    {
+                        "claudeAiOauth": {
+                            "accessToken": trimmed,
+                            "subscriptionType": "max",
+                        }
+                    }
+                )
+            }
         updated_backend = await _persist_authenticated_bundle(
-            session, admin, backend, oauth_token=trimmed
+            session, admin, backend, bundle=direct_bundle, oauth_token=trimmed
         )
         compute_backend = await _select_docker_compute_backend(session)
         if compute_backend.provider.lower() == "docker":
@@ -1035,20 +1453,28 @@ async def submit_cli_auth_code(
     async with client:
         parsed_url = urlsplit(trimmed)
         if parsed_url.scheme == "http" and parsed_url.hostname in ("localhost", "127.0.0.1"):
-            # Hit the CLI's in-container localhost OAuth callback listener directly
+            # Hit the CLI's in-container localhost OAuth callback listener directly, or fall back to PTY stdin
             exec_cmd = [
                 "sh",
                 "-c",
-                'curl -sS --max-time 5 "$1" >/dev/null 2>&1 || true',
+                'curl -sS --max-time 5 "$1" >/dev/null 2>&1 || printf "%s\\n" "$1" > /tmp/.gitseed_stdin',
                 "sh",
                 trimmed,
             ]
         else:
-            # Write the verification code into the PTY FIFO pipe
+            # Write the verification code into the PTY FIFO pipe (and for legacy v1 containers without pending_enters, send delayed Enter to PTY master)
             exec_cmd = [
                 "sh",
                 "-c",
-                'printf "%s\\n" "$1" > /tmp/.gitseed_stdin',
+                (
+                    'if [ -f /tmp/.gitseed_pty_v2 ]; then '
+                    'printf "%s\\n" "$1" > /tmp/.gitseed_stdin; '
+                    'else '
+                    'if [ -e /proc/1/fd/3 ]; then printf "\\005\\025" > /proc/1/fd/3 2>/dev/null || true; sleep 0.05; fi; '
+                    'printf "%s\\n" "$1" > /tmp/.gitseed_stdin; '
+                    'if [ -e /proc/1/fd/3 ]; then sleep 0.5; printf "\\r" > /proc/1/fd/3 2>/dev/null || true; fi; '
+                    'fi'
+                ),
                 "sh",
                 trimmed,
             ]
@@ -1073,14 +1499,41 @@ async def submit_cli_auth_code(
                     timeout=8.0,
                 )
 
-    # Poll for up to 8 seconds for the CLI to exchange the code and write credentials
-    for _ in range(16):
+    # Poll for up to 12 seconds for the CLI to exchange the code and write credentials
+    for _ in range(24):
         await asyncio.sleep(0.5)
         status_res = await get_cli_auth_status(session, admin, backend_id)
         if status_res.get("authenticated"):
             return status_res
 
-    return await get_cli_auth_status(session, admin, backend_id)
+    final_status = await get_cli_auth_status(session, admin, backend_id)
+    if not final_status.get("authenticated") and not final_status.get("error"):
+        log_out = str(final_status.get("log_output") or "")
+        detected_err = None
+        for ln in reversed(log_out.splitlines()):
+            s_ln = ln.strip()
+            lower_ln = s_ln.lower()
+            if any(
+                kw in lower_ln
+                for kw in (
+                    "oauth error:",
+                    "invalid_grant",
+                    "failed to authenticate",
+                    "error exchanging",
+                    "invalid authorization code",
+                )
+            ):
+                detected_err = s_ln
+                break
+        final_status["error"] = (
+            f"Verification failed: {detected_err}"
+            if detected_err
+            else (
+                "Authorization code submitted, but credential exchange has not completed yet. "
+                "Check the terminal output above for errors or wait a few seconds for sign-in to finish."
+            )
+        )
+    return final_status
 
 
 async def cancel_cli_auth_session(

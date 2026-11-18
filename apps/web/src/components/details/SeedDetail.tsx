@@ -182,12 +182,17 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
   const changesQuery = useQuery({
     queryKey: queryKeys.seedChanges(resolvedId, selectedRepoId),
     queryFn: () => api.seeds.getChanges(resolvedId, selectedRepoId),
-    enabled: Boolean(resolvedId && repos.length > 0),
+    enabled: Boolean(resolvedId),
     refetchInterval: (query) => {
+      if (seed?.status === 'merged' || seed?.status === 'closed') {
+        const hasLoadedDiff = (query.state.data?.files?.length ?? 0) > 0
+        return hasLoadedDiff ? false : 30000
+      }
       const prCiStatus = query.state.data?.pull_request_status?.ci_status
-      if (isAwaitingPrSync) return 4000
-      if (prCiStatus === 'pending' || isLiveSeed) return 6000
-      return 30000
+      if (isAwaitingPrSync || prCiStatus === 'pending' || isLiveSeed) {
+        return activeDetailTab === 'changes' ? 15000 : 30000
+      }
+      return activeDetailTab === 'changes' ? 45000 : false
     },
   })
 
@@ -918,7 +923,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
                         <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                       ) : (
                         <span
-                          className={`w-4 h-4 rounded-full text-[11px] font-mono flex items-center justify-center ${isCurrent
+                          className={`w-4 h-4 rounded-full text-xs font-mono flex items-center justify-center ${isCurrent
                             ? 'bg-teal-500 text-white font-semibold'
                             : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
                             }`}
@@ -942,7 +947,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
                       policy?.requires_approval ? (
                         <span
                           title="Requires approval gate"
-                          className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-700 dark:text-zinc-300"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300"
                         >
                           <ShieldCheck className="w-3.5 h-3.5 text-teal-500 shrink-0" />
                           <span>Gate</span>
@@ -950,7 +955,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
                       ) : (
                         <span
                           title="Auto-advances on stage completion"
-                          className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-700 dark:text-zinc-300"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-300"
                         >
                           <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                           <span>Auto</span>
@@ -1062,7 +1067,7 @@ export const SeedDetail: React.FC<SeedDetailProps> = ({ seedId, onBack }) => {
         >
           <MessageSquare className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
           <span>Comments</span>
-          <span className="px-1.5 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[11px] font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
+          <span className="px-1.5 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-xs font-mono tabular-nums text-zinc-600 dark:text-zinc-300">
             {activeCommentsCount}
           </span>
         </button>

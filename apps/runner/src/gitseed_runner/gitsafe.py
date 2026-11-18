@@ -27,6 +27,12 @@ SAFE_GIT_CONFIG_ARGS: tuple[str, ...] = (
     "-c",
     "core.fsmonitor=false",
     "-c",
+    "credential.helper=",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "-c",
+    "core.excludesFile=/dev/null",
+    "-c",
     "protocol.file.allow=never",
     "-c",
     "protocol.ext.allow=never",
@@ -44,6 +50,35 @@ SAFE_GIT_ENV: dict[str, str] = {
     "GIT_TERMINAL_PROMPT": "0",
 }
 
+_STRIPPED_GIT_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "GITSEED_RUN_TOKEN",
+        "GITSEED_SECRET_KEY",
+        "LITELLM_MASTER_KEY",
+        "POSTGRES_PASSWORD",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "XAI_API_KEY",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "GITLAB_TOKEN",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+    }
+)
+
 DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_MAX_DIFF_BYTES = 20 * 1024 * 1024  # 20 MiB
 
@@ -51,6 +86,7 @@ PRESERVED_GITSEED_PATHS: tuple[str, ...] = (".gitseed/run.json",)
 
 INTERNAL_EXCLUDED_PATHS: tuple[str, ...] = (
     ".gitseed/output.json",
+    ".gitseed/prompt.md",
     ".gitseed/deps.sha256",
     ".gitseed/attachments",
     ".gitseed/related",
@@ -172,7 +208,12 @@ def build_safe_git_env(
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Construct a hardened Git environment where system binary dirs precede all other paths."""
-    env = os.environ.copy()
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in _STRIPPED_GIT_ENV_KEYS
+        and not k.endswith(("_TOKEN", "_SECRET", "_SECRET_KEY", "_MASTER_KEY", "_API_KEY"))
+    }
     env.update(SAFE_GIT_ENV)
 
     ws_prefixes: list[str] = ["/workspace"]
@@ -347,13 +388,18 @@ def _sanitize_git_config_text(raw_config: str) -> str:
     return "\n".join(output_lines).rstrip() + "\n"
 
 
-def _sanitize_single_git_dir(git_dir: Path) -> None:
-    """Remove hooks, locks, attributes/grafts, and unsafe config keys in a .git dir."""
+def _sanitize_single_git_dir(git_dir: Path) -> bool:
+    """Remove hooks, locks, commondir/alternates/worktrees redirects, attributes/grafts, and unsafe config keys in a .git dir.
+
+    Returns True if a hostile redirect/symlink structure was detected and removed.
+    """
     if git_dir.is_symlink():
         git_dir.unlink(missing_ok=True)
-        return
+        return True
     if not git_dir.is_dir():
-        return
+        return False
+
+    had_hostile_redirect = False
 
     # 1. Remove stale lock files
     for lock_file in git_dir.rglob("*.lock"):
@@ -361,13 +407,45 @@ def _sanitize_single_git_dir(git_dir: Path) -> None:
             if lock_file.is_symlink() or lock_file.is_file():
                 lock_file.unlink(missing_ok=True)
 
-    # 2. Delete all files/symlinks in .git/hooks/* (and any .git/worktrees/*/hooks/*)
+    # 1b. Remove dangerous redirection files/directories (`commondir`, `gitdir`,
+    #     `config.worktree`, `worktrees`, `objects/info/alternates`) that could redirect
+    #     git to an agent-planted config or object store outside `.git/config`.
+    for redirect_name in ("commondir", "gitdir", "config.worktree", "worktrees", "modules"):
+        redirect_entry = git_dir / redirect_name
+        with contextlib.suppress(OSError):
+            if redirect_entry.is_symlink() or redirect_entry.is_file():
+                had_hostile_redirect = True
+                redirect_entry.unlink(missing_ok=True)
+            elif redirect_entry.is_dir():
+                had_hostile_redirect = True
+                shutil.rmtree(redirect_entry, ignore_errors=True)
+
+    # Ensure core subdirectories/files inside .git are not symlinks
+    for core_entry_name in ("HEAD", "index", "packed-refs", "shallow", "objects", "refs", "logs"):
+        core_entry = git_dir / core_entry_name
+        if core_entry.is_symlink():
+            had_hostile_redirect = True
+            with contextlib.suppress(OSError):
+                core_entry.unlink(missing_ok=True)
+
+    obj_info_dir = git_dir / "objects" / "info"
+    if obj_info_dir.is_symlink():
+        had_hostile_redirect = True
+        with contextlib.suppress(OSError):
+            obj_info_dir.unlink(missing_ok=True)
+    elif obj_info_dir.is_dir():
+        for alt_name in ("alternates", "http-alternates"):
+            alt_target = obj_info_dir / alt_name
+            if alt_target.exists() or alt_target.is_symlink():
+                had_hostile_redirect = True
+                with contextlib.suppress(OSError):
+                    if alt_target.is_dir() and not alt_target.is_symlink():
+                        shutil.rmtree(alt_target, ignore_errors=True)
+                    else:
+                        alt_target.unlink(missing_ok=True)
+
+    # 2. Delete all files/symlinks in .git/hooks/*
     hook_dirs = [git_dir / "hooks"]
-    wt_admin = git_dir / "worktrees"
-    if wt_admin.is_dir() and not wt_admin.is_symlink():
-        for child in wt_admin.iterdir():
-            if child.is_dir() and not child.is_symlink():
-                hook_dirs.append(child / "hooks")
 
     for hooks_dir in hook_dirs:
         if hooks_dir.is_symlink() or (hooks_dir.exists() and not hooks_dir.is_dir()):
@@ -410,6 +488,27 @@ def _sanitize_single_git_dir(git_dir: Path) -> None:
             if sanitized_cfg != raw_cfg:
                 cfg_path.write_text(sanitized_cfg, encoding="utf-8")
 
+    return had_hostile_redirect
+
+
+def _is_git_dir_structurally_sound(git_dir: Path) -> bool:
+    """Return True if git_dir has no forbidden redirects or non-directory objects/refs."""
+    if not git_dir.is_dir() or git_dir.is_symlink():
+        return False
+    head_file = git_dir / "HEAD"
+    objects_dir = git_dir / "objects"
+    refs_dir = git_dir / "refs"
+    if head_file.is_symlink() or (head_file.exists() and not head_file.is_file()):
+        return False
+    if objects_dir.is_symlink() or (objects_dir.exists() and not objects_dir.is_dir()):
+        return False
+    if refs_dir.is_symlink() or (refs_dir.exists() and not refs_dir.is_dir()):
+        return False
+    for forbidden in ("commondir", "gitdir", "config.worktree", "worktrees"):
+        if (git_dir / forbidden).exists() or (git_dir / forbidden).is_symlink():
+            return False
+    return True
+
 
 def sanitize_git_dir(workspace: Path) -> None:
     """Neutralize .git/hooks/* and dangerous .git/config keys in workspace repos."""
@@ -422,7 +521,7 @@ def sanitize_git_dir(workspace: Path) -> None:
         return
 
     git_entry = workspace / ".git"
-    if git_entry.is_symlink():
+    if git_entry.is_symlink() or (git_entry.exists() and not git_entry.is_dir()):
         with contextlib.suppress(OSError):
             git_entry.unlink(missing_ok=True)
     elif git_entry.is_dir():
@@ -435,7 +534,7 @@ def sanitize_git_dir(workspace: Path) -> None:
                 if child.name.startswith(".") or child.is_symlink() or not child.is_dir():
                     continue
                 child_git = child / ".git"
-                if child_git.is_symlink():
+                if child_git.is_symlink() or (child_git.exists() and not child_git.is_dir()):
                     with contextlib.suppress(OSError):
                         child_git.unlink(missing_ok=True)
                 elif child_git.is_dir():
@@ -456,7 +555,17 @@ def neutralize_git_repo(
     if not git_entry.is_dir():
         return
 
-    _sanitize_single_git_dir(git_entry)
+    had_redirect = _sanitize_single_git_dir(git_entry)
+    if not _is_git_dir_structurally_sound(git_entry) or (
+        had_redirect
+        and not (
+            (git_entry / "HEAD").is_file()
+            and (git_entry / "objects").is_dir()
+            and (git_entry / "refs").is_dir()
+        )
+    ):
+        shutil.rmtree(git_entry, ignore_errors=True)
+        return
 
     # Rewrite .git/config to a known-good minimal config
     cfg_path = git_entry / "config"
@@ -485,6 +594,13 @@ def is_internal_excluded_path(rel_path: str) -> bool:
     return norm == ".gitseed-worktrees" or norm.startswith(".gitseed-worktrees/")
 
 
+def _split_nul_paths(raw_out: str) -> list[str]:
+    """Split NUL-delimited (`-z`) git path output without stripping valid characters."""
+    if not raw_out:
+        return []
+    return [entry.lstrip("/") for entry in raw_out.split("\x00") if entry.lstrip("/")]
+
+
 def _exclude_internal_paths(
     repo_dir: Path,
     *,
@@ -498,13 +614,11 @@ def _exclude_internal_paths(
 
     if effective_git_dir.exists():
         rc_ls, ls_out, _ = run_safe_git(
-            ["-c", "core.quotePath=false", f"--git-dir={effective_git_dir}", "ls-files"],
+            ["-c", "core.quotePath=false", f"--git-dir={effective_git_dir}", "ls-files", "-z"],
             repo_dir,
         )
         if rc_ls == 0 and ls_out:
-            for line in ls_out.splitlines():
-                if line.strip():
-                    candidates.add(line.strip())
+            candidates.update(_split_nul_paths(ls_out))
 
         ref_to_check = base_sha
         if not ref_to_check:
@@ -524,14 +638,13 @@ def _exclude_internal_paths(
                     "diff",
                     "--cached",
                     "--name-only",
+                    "-z",
                     ref_to_check,
                 ],
                 repo_dir,
             )
             if rc_diff == 0 and diff_out:
-                for line in diff_out.splitlines():
-                    if line.strip():
-                        candidates.add(line.strip())
+                candidates.update(_split_nul_paths(diff_out))
     else:
         ref_to_check = None
 
@@ -564,6 +677,7 @@ def _exclude_internal_paths(
                     "ls-tree",
                     "-r",
                     "--name-only",
+                    "-z",
                     ref_to_check,
                     "--",
                     *to_exclude,
@@ -571,7 +685,7 @@ def _exclude_internal_paths(
                 repo_dir,
             )
             if rc_tree == 0 and tree_out:
-                tracked_in_base = {p.strip() for p in tree_out.splitlines() if p.strip()}
+                tracked_in_base = set(_split_nul_paths(tree_out))
 
         tracked_paths = [p for p in to_exclude if p in tracked_in_base]
         untracked_paths = [p for p in to_exclude if p not in tracked_in_base]
@@ -636,10 +750,11 @@ def _copy_workspace_into_staging(
     """
     ws_root = workspace_repo_dir.resolve()
     staging_dir.mkdir(parents=True, exist_ok=True)
+    staging_root = staging_dir.resolve()
     gitlinks = allowed_gitlinks or set()
     escaped_symlinks: list[str] = []
 
-    def _is_safe_in_repo_symlink(link_path: Path) -> bool:
+    def _is_safe_in_repo_symlink(link_path: Path, root_dir: Path = ws_root) -> bool:
         try:
             raw_target = os.readlink(link_path)
         except OSError:
@@ -653,7 +768,7 @@ def _copy_workspace_into_staging(
             resolved_target = (link_path.parent / target_p).resolve()
         except OSError:
             return False
-        return resolved_target == ws_root or resolved_target.is_relative_to(ws_root)
+        return resolved_target == root_dir or resolved_target.is_relative_to(root_dir)
 
     for dirpath, dirnames, filenames in os.walk(ws_root, followlinks=False):
         rel_dir = os.path.relpath(dirpath, ws_root)
@@ -700,7 +815,9 @@ def _copy_workspace_into_staging(
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             try:
                 shutil.copy2(src_file, dst_file, follow_symlinks=False)
-                if dst_file.is_symlink() and not _is_safe_in_repo_symlink(src_file):
+                if dst_file.is_symlink() and not _is_safe_in_repo_symlink(
+                    dst_file, staging_root
+                ):
                     dst_file.unlink(missing_ok=True)
                     escaped_symlinks.append(rel_f_posix)
             except OSError as exc:
@@ -807,14 +924,13 @@ def apply_git_path_policy(
                 "diff",
                 "--cached",
                 "--name-only",
+                "-z",
                 base_sha,
             ],
             repo_dir,
         )
         if rc_cached == 0 and cached_out:
-            for line in cached_out.splitlines():
-                if line.strip():
-                    detected.add(line.strip())
+            detected.update(_split_nul_paths(cached_out))
 
         if update_worktree and effective_work_tree.is_dir():
             rc_wt, wt_out, _ = run_safe_git(
@@ -825,14 +941,13 @@ def apply_git_path_policy(
                     f"--work-tree={effective_work_tree}",
                     "diff",
                     "--name-only",
+                    "-z",
                     base_sha,
                 ],
                 repo_dir,
             )
             if rc_wt == 0 and wt_out:
-                for line in wt_out.splitlines():
-                    if line.strip():
-                        detected.add(line.strip())
+                detected.update(_split_nul_paths(wt_out))
 
             rc_st, st_out, _ = run_safe_git(
                 [
@@ -842,24 +957,124 @@ def apply_git_path_policy(
                     f"--work-tree={effective_work_tree}",
                     "status",
                     "--porcelain",
+                    "-z",
                     "-uall",
                 ],
                 repo_dir,
             )
             if rc_st == 0 and st_out:
-                for line in st_out.splitlines():
-                    if len(line) > 3:
-                        raw_p = line[3:].strip()
-                        if " -> " in raw_p:
-                            old_p, new_p = raw_p.split(" -> ", 1)
-                            if old_p.strip():
-                                detected.add(old_p.strip().strip('"'))
-                            raw_p = new_p.strip()
-                        if raw_p:
-                            detected.add(raw_p.strip('"'))
+                st_tokens = st_out.split("\x00")
+                idx_st = 0
+                while idx_st < len(st_tokens):
+                    rec = st_tokens[idx_st]
+                    idx_st += 1
+                    if len(rec) <= 3:
+                        continue
+                    xy = rec[:2]
+                    path_part = rec[3:].lstrip("/")
+                    if path_part:
+                        detected.add(path_part)
+                    if ("R" in xy or "C" in xy) and idx_st < len(st_tokens):
+                        orig_part = st_tokens[idx_st].lstrip("/")
+                        idx_st += 1
+                        if orig_part:
+                            detected.add(orig_part)
         candidate_paths = sorted(detected)
 
-    violations = find_blocked_path_violations(candidate_paths, blocked_paths or [])
+    violations_set = set(find_blocked_path_violations(candidate_paths, blocked_paths or []))
+
+    def _is_blocked_relative_link_target(source_rel_posix: str, raw_target: str) -> bool:
+        cleaned_target = raw_target.strip().replace("\\", "/")
+        if not cleaned_target or cleaned_target.startswith("/") or re.match(r"^[A-Za-z]:", cleaned_target):
+            return True
+        parent_posix = PurePosixPath(source_rel_posix).parent.as_posix()
+        joined = f"{parent_posix}/{cleaned_target}" if parent_posix not in ("", ".") else cleaned_target
+        parts: list[str] = []
+        for seg in joined.split("/"):
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                if not parts:
+                    return True
+                parts.pop()
+            else:
+                parts.append(seg)
+        if not parts:
+            return False
+        resolved_rel = "/".join(parts)
+        return bool(find_blocked_path_violations([resolved_rel], blocked_paths or []))
+
+    # Inspect staged 120000 symlink entries in the git index
+    if candidate_paths and effective_git_dir.exists():
+        rc_idx, idx_out, _ = run_safe_git(
+            [
+                "-c",
+                "core.quotePath=false",
+                f"--git-dir={effective_git_dir}",
+                "ls-files",
+                "--stage",
+                "-z",
+                "--",
+                *candidate_paths,
+            ],
+            repo_dir,
+        )
+        if rc_idx == 0 and idx_out:
+            for entry in idx_out.split("\x00"):
+                if not entry:
+                    continue
+                meta_and_path = entry.split("\t", 1)
+                if len(meta_and_path) != 2:
+                    continue
+                meta_parts = meta_and_path[0].split()
+                staged_rel = meta_and_path[1].lstrip("/")
+                if (
+                    len(meta_parts) >= 2
+                    and meta_parts[0] == "120000"
+                    and staged_rel
+                    and staged_rel not in violations_set
+                ):
+                    rc_blob, blob_target, _ = run_safe_git(
+                        [f"--git-dir={effective_git_dir}", "cat-file", "-p", meta_parts[1]],
+                        repo_dir,
+                    )
+                    if rc_blob != 0 or _is_blocked_relative_link_target(staged_rel, blob_target):
+                        violations_set.add(staged_rel)
+
+    if effective_work_tree.is_dir():
+        wt_root = effective_work_tree.resolve()
+        for cand_p in candidate_paths:
+            norm_cand = cand_p.strip().lstrip("/")
+            if not norm_cand or norm_cand in violations_set:
+                continue
+            cand_fs = effective_work_tree / norm_cand
+            if not cand_fs.is_symlink():
+                continue
+            try:
+                raw_link_target = os.readlink(cand_fs)
+            except OSError:
+                violations_set.add(norm_cand)
+                continue
+            if _is_blocked_relative_link_target(norm_cand, raw_link_target):
+                violations_set.add(norm_cand)
+                continue
+            target_obj = Path(raw_link_target)
+            if target_obj.is_absolute() or (os.name == "nt" and target_obj.drive):
+                violations_set.add(norm_cand)
+                continue
+            try:
+                resolved_link = (cand_fs.parent / target_obj).resolve()
+            except OSError:
+                violations_set.add(norm_cand)
+                continue
+            if resolved_link != wt_root and not resolved_link.is_relative_to(wt_root):
+                violations_set.add(norm_cand)
+                continue
+            if resolved_link != wt_root:
+                rel_target_posix = resolved_link.relative_to(wt_root).as_posix()
+                if find_blocked_path_violations([rel_target_posix], blocked_paths or []):
+                    violations_set.add(norm_cand)
+    violations = sorted(violations_set)
     if not violations:
         return PathPolicyResult(ok=True)
 
@@ -886,6 +1101,7 @@ def apply_git_path_policy(
             "ls-tree",
             "-r",
             "--name-only",
+            "-z",
             base_sha,
             "--",
             *violations,
@@ -893,7 +1109,7 @@ def apply_git_path_policy(
         repo_dir,
     )
     tracked_in_base = (
-        {p.strip() for p in ls_out.splitlines() if p.strip()}
+        set(_split_nul_paths(ls_out))
         if rc_ls == 0 and ls_out
         else set()
     )
@@ -1118,6 +1334,52 @@ def _list_base_gitlinks(clean_repo_dir: Path, base_sha: str) -> set[str]:
     return set(_map_base_gitlinks(clean_repo_dir, base_sha).keys())
 
 
+def _read_git_head_sha_without_git(sub_dir: Path) -> str | None:
+    """Resolve HEAD commit SHA inside `sub_dir/.git` by reading files directly without invoking `git`."""
+    git_entry = sub_dir / ".git"
+    if git_entry.is_symlink():
+        return None
+    if git_entry.is_file():
+        with contextlib.suppress(OSError):
+            raw_ptr = git_entry.read_text(encoding="utf-8", errors="replace").strip()
+            if raw_ptr.startswith("gitdir:"):
+                rel_git = raw_ptr.split(":", 1)[1].strip()
+                cand_git = (sub_dir / rel_git).resolve()
+                git_entry = cand_git
+    if not git_entry.is_dir() or git_entry.is_symlink():
+        return None
+    head_file = git_entry / "HEAD"
+    if not head_file.is_file() or head_file.is_symlink():
+        return None
+    try:
+        head_raw = head_file.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if re.fullmatch(r"[0-9a-fA-F]{40,64}", head_raw):
+        return head_raw.lower()
+    if head_raw.startswith("ref:"):
+        ref_rel = head_raw.split(":", 1)[1].strip().lstrip("/")
+        if not ref_rel or ".." in ref_rel.split("/"):
+            return None
+        ref_file = git_entry / ref_rel
+        if ref_file.is_file() and not ref_file.is_symlink():
+            with contextlib.suppress(OSError):
+                ref_sha = ref_file.read_text(encoding="utf-8", errors="replace").strip()
+                if re.fullmatch(r"[0-9a-fA-F]{40,64}", ref_sha):
+                    return ref_sha.lower()
+        packed_refs = git_entry / "packed-refs"
+        if packed_refs.is_file() and not packed_refs.is_symlink():
+            with contextlib.suppress(OSError):
+                for line in packed_refs.read_text(encoding="utf-8", errors="replace").splitlines():
+                    s_line = line.strip()
+                    if not s_line or s_line.startswith(("#", "^")):
+                        continue
+                    parts = s_line.split()
+                    if len(parts) >= 2 and parts[1] == ref_rel and re.fullmatch(r"[0-9a-fA-F]{40,64}", parts[0]):
+                        return parts[0].lower()
+    return None
+
+
 def detect_unauthorized_nested_git(
     workspace_repo_dir: Path,
     allowed_gitlinks: set[str],
@@ -1140,8 +1402,8 @@ def detect_unauthorized_nested_git(
                 if rel_dir_posix not in allowed_gitlinks:
                     unauthorized.append(rel_dir_posix)
                 elif base_gitlink_shas is not None and rel_dir_posix in base_gitlink_shas:
-                    rc_sub, sub_sha, _ = run_safe_git(["rev-parse", "HEAD"], Path(dirpath))
-                    if rc_sub != 0 or sub_sha.strip() != base_gitlink_shas[rel_dir_posix]:
+                    sub_sha = _read_git_head_sha_without_git(Path(dirpath))
+                    if not sub_sha or sub_sha != base_gitlink_shas[rel_dir_posix].lower():
                         unauthorized.append(rel_dir_posix)
                 if ".git" in dirnames:
                     dirnames.remove(".git")
@@ -1262,14 +1524,16 @@ def construct_clean_commit_and_verify_policy(
         # Ensure no unauthorized 160000 gitlink entries or gitlink SHA repointings were staged
         if not allow_submodules:
             rc_idx, idx_out, _ = run_safe_git(
-                [f"--git-dir={clean_git_dir}", "ls-files", "--stage"],
+                [f"--git-dir={clean_git_dir}", "ls-files", "--stage", "-z"],
                 clean_repo_dir,
             )
             if rc_idx == 0 and idx_out:
-                for line in idx_out.splitlines():
-                    parts = line.split("\t", 1)
+                for entry in idx_out.split("\x00"):
+                    if not entry:
+                        continue
+                    parts = entry.split("\t", 1)
                     if len(parts) == 2 and parts[0].startswith("160000 "):
-                        gitlink_path = parts[1].strip()
+                        gitlink_path = parts[1].lstrip("/")
                         meta_cols = parts[0].split()
                         staged_sha = meta_cols[1].strip() if len(meta_cols) >= 2 else ""
                         if gitlink_path not in base_gitlink_map:
@@ -1292,6 +1556,7 @@ def construct_clean_commit_and_verify_policy(
                 "diff",
                 "--cached",
                 "--name-only",
+                "-z",
                 base_sha,
             ],
             clean_repo_dir,
@@ -1300,7 +1565,7 @@ def construct_clean_commit_and_verify_policy(
             result.error = f"Failed to inspect staged diff names: {err}"
             return result
 
-        changed_paths = [p.strip() for p in names_out.splitlines() if p.strip()]
+        changed_paths = _split_nul_paths(names_out)
         if not changed_paths:
             result.ok = True
             result.has_changes = False
@@ -1344,11 +1609,12 @@ def construct_clean_commit_and_verify_policy(
                     "diff",
                     "--cached",
                     "--name-only",
+                    "-z",
                     base_sha,
                 ],
                 clean_repo_dir,
             )
-            changed_paths = [p.strip() for p in names_out2.splitlines() if p.strip()]
+            changed_paths = _split_nul_paths(names_out2)
             if not changed_paths:
                 result.ok = True
                 result.has_changes = False
@@ -1373,6 +1639,17 @@ def construct_clean_commit_and_verify_policy(
                     ):
                         with contextlib.suppress(OSError):
                             blob_size = staged_file.stat().st_size
+                    else:
+                        # Check if the file is staged in the index (not a deletion); if so, fail closed
+                        rc_chk, chk_out, _ = run_safe_git(
+                            [f"--git-dir={clean_git_dir}", "ls-files", "-z", "--", rel_path],
+                            clean_repo_dir,
+                        )
+                        if rc_chk == 0 and _split_nul_paths(chk_out) and not staged_file.is_symlink():
+                            result.error = (
+                                f"Governance policy violation: unable to verify size of staged file '{rel_path}'"
+                            )
+                            return result
                 if blob_size is not None and blob_size > max_file_bytes:
                     result.error = (
                         f"Governance policy violation: file '{rel_path}' ({blob_size} bytes) "

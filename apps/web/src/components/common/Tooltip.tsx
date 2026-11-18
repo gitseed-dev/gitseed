@@ -209,7 +209,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
             }}
             className={`z-[9999] pointer-events-none transition-all duration-150 ease-out transform ${getTransformClass()} ${className}`}
           >
-            <div className="px-2.5 py-1 text-[11px] font-medium tracking-wide bg-zinc-900/95 dark:bg-zinc-800/95 text-white dark:text-zinc-100 rounded-lg shadow-xl border border-zinc-700/60 backdrop-blur-sm whitespace-nowrap animate-in fade-in-0 zoom-in-95">
+            <div className="px-2.5 py-1 text-xs font-medium tracking-wide bg-zinc-900/95 dark:bg-zinc-800/95 text-white dark:text-zinc-100 rounded-lg shadow-xl border border-zinc-700/60 backdrop-blur-sm whitespace-nowrap animate-in fade-in-0 zoom-in-95">
               {content}
             </div>
           </div>,

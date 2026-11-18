@@ -249,20 +249,20 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
   const renderEnforcementBadge = (mode: BudgetEnforcement | string) => {
     if (mode === 'unpriced') {
       return (
-        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border bg-zinc-500/15 text-zinc-700 dark:text-zinc-300 border-zinc-400/30">
+        <span className="px-1.5 py-0.5 rounded text-xs font-semibold uppercase tracking-wide border bg-zinc-500/15 text-zinc-700 dark:text-zinc-300 border-zinc-400/30">
           Unpriced
         </span>
       )
     }
     if (mode === 'estimated') {
       return (
-        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30">
+        <span className="px-1.5 py-0.5 rounded text-xs font-semibold uppercase tracking-wide border bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30">
           Estimated
         </span>
       )
     }
     return (
-      <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
+      <span className="px-1.5 py-0.5 rounded text-xs font-semibold uppercase tracking-wide border bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
         Enforced
       </span>
     )
@@ -401,7 +401,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                   type="button"
                   onClick={() => openProjectCodeAtRef(primaryRepo.default_branch)}
                   title={`Browse default branch ${primaryRepo.default_branch} in Code viewer`}
-                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-[11px] text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400 transition cursor-pointer shrink-0"
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400 transition cursor-pointer shrink-0"
                 >
                   <GitBranch size={11} />
                   <span>{primaryRepo.default_branch}</span>
@@ -549,7 +549,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
           </div>
 
           {(autonomyNotice || seed.autonomy === 'autonomous') && (
-            <div className="px-2.5 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200/80 dark:border-zinc-700/70 text-[11px] text-zinc-600 dark:text-zinc-300 leading-relaxed flex flex-col gap-0.5">
+            <div className="px-2.5 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200/80 dark:border-zinc-700/70 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed flex flex-col gap-0.5">
               {autonomyNotice && (
                 <span className="font-medium text-teal-700 dark:text-teal-300">
                   {autonomyNotice}
@@ -577,7 +577,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                     ? 'Estimated from CLI token reports in Personal Mode (bounded by timeout and max turns)'
                     : 'Enforced in real time via LiteLLM per-run virtual key max_budget')
               }
-              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border ${
+              className={`px-1.5 py-0.5 rounded text-xs font-semibold uppercase tracking-wide border ${
                 spendEnforcement === 'unpriced'
                   ? 'bg-zinc-500/15 text-zinc-700 dark:text-zinc-300 border-zinc-400/30'
                   : spendEnforcement === 'estimated'
@@ -624,7 +624,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                     {totalTok.toLocaleString()} tok
                   </span>
                   {totalTok > 0 && (
-                    <span className="text-zinc-400 text-[11px] ml-1.5">
+                    <span className="text-zinc-400 text-xs ml-1.5">
                       ({totalIn.toLocaleString()} in · {totalOut.toLocaleString()}{' '}
                       out)
                     </span>
@@ -662,7 +662,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
               {seed.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="px-2 py-0.5 rounded-md text-[11px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80"
+                  className="px-2 py-0.5 rounded-md text-xs font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80"
                 >
                   {tag}
                 </span>
@@ -687,7 +687,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                 void handleFetchReceipt(true)
               }}
               disabled={isLoadingReceipt}
-              className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700/80 transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
+              className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700/80 transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
             >
               {isLoadingReceipt ? (
                 <>
@@ -701,11 +701,11 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
           </div>
 
           {receiptError && (
-            <p className="text-[11px] text-rose-600 dark:text-rose-400">{receiptError}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400">{receiptError}</p>
           )}
 
           {receiptEnvelope && (
-            <div className="p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700/80 flex flex-col gap-2 text-[11px]">
+            <div className="p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200/80 dark:border-zinc-700/80 flex flex-col gap-2 text-xs">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 {receiptVerification?.status === 'invalid' ? (
                   <span className="inline-flex items-center gap-1 font-semibold text-rose-600 dark:text-rose-400">
@@ -736,7 +736,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
               {receiptEnvelope.receipt.artifacts && (
                 <div className="flex items-center justify-between gap-2 text-zinc-600 dark:text-zinc-300">
                   <span>Locked Artifacts</span>
-                  <span className="font-mono text-[10px]">
+                  <span className="font-mono text-xs">
                     {[
                       receiptEnvelope.receipt.artifacts.specification_sha256 && 'spec',
                       receiptEnvelope.receipt.artifacts.acceptance_criteria_sha256 && 'criteria',
@@ -821,7 +821,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-semibold text-[11px] ${
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-semibold text-xs ${
                       receiptVerification?.status === 'invalid'
                         ? 'bg-rose-500/15 text-rose-700 dark:text-rose-200 border-rose-500/35'
                         : receiptVerification?.status === 'unsupported'
@@ -831,7 +831,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                   >
                     {receiptVerification?.label || 'Verified (Ed25519)'}
                   </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/80 dark:bg-zinc-900/80 border border-emerald-500/25 font-mono text-[11px] text-zinc-700 dark:text-zinc-200">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/80 dark:bg-zinc-900/80 border border-emerald-500/25 font-mono text-xs text-zinc-700 dark:text-zinc-200">
                     <KeyRound size={11} className="text-teal-600 dark:text-teal-400" />
                     <span>key_id: {receiptEnvelope.key_id}</span>
                   </span>
@@ -839,7 +839,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                     type="button"
                     onClick={() => void handleFetchReceipt(false)}
                     disabled={isLoadingReceipt}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/80 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-700 font-semibold text-[11px] text-zinc-700 dark:text-zinc-200 hover:border-teal-500/40 transition cursor-pointer disabled:opacity-50"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/80 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-700 font-semibold text-xs text-zinc-700 dark:text-zinc-200 hover:border-teal-500/40 transition cursor-pointer disabled:opacity-50"
                   >
                     <RefreshCw size={11} className={isLoadingReceipt ? 'animate-spin' : ''} />
                     <span>Refresh</span>
@@ -849,7 +849,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
 
               {receiptVerification?.detail && (
                 <p
-                  className={`text-[11px] ${
+                  className={`text-xs ${
                     receiptVerification.status === 'invalid'
                       ? 'font-semibold text-rose-700 dark:text-rose-300'
                       : 'text-zinc-600 dark:text-zinc-300'
@@ -859,7 +859,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                 </p>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-zinc-600 dark:text-zinc-300">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-zinc-600 dark:text-zinc-300">
                 <div>
                   <span className="text-zinc-500 dark:text-zinc-400">Schema:</span>{' '}
                   <code className="font-mono font-semibold text-zinc-800 dark:text-zinc-200">
@@ -875,12 +875,12 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
               </div>
 
               <div className="flex flex-col gap-1">
-                <span className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
+                <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
                   Signature Preview (Base64URL)
                 </span>
                 <code
                   title={receiptEnvelope.signature}
-                  className="px-2.5 py-1.5 rounded-lg bg-white/90 dark:bg-zinc-950/70 border border-zinc-200/80 dark:border-zinc-800 font-mono text-[11px] text-zinc-700 dark:text-zinc-300 break-all"
+                  className="px-2.5 py-1.5 rounded-lg bg-white/90 dark:bg-zinc-950/70 border border-zinc-200/80 dark:border-zinc-800 font-mono text-xs text-zinc-700 dark:text-zinc-300 break-all"
                 >
                   {receiptEnvelope.signature.length > 64
                     ? `${receiptEnvelope.signature.slice(0, 36)}…${receiptEnvelope.signature.slice(-24)}`
@@ -895,7 +895,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                 <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">
                   Locked Artifact Digests (SHA-256)
                 </h4>
-                <span className="font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
                   {receiptEnvelope.receipt.artifacts?.task_count ?? 0} planned{' '}
                   {(receiptEnvelope.receipt.artifacts?.task_count ?? 0) === 1 ? 'task' : 'tasks'}
                 </span>
@@ -925,11 +925,11 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                       {item.label}
                     </span>
                     {item.digest ? (
-                      <code className="font-mono text-[11px] text-teal-700 dark:text-teal-300 break-all">
+                      <code className="font-mono text-xs text-teal-700 dark:text-teal-300 break-all">
                         sha256:{item.digest}
                       </code>
                     ) : (
-                      <span className="font-mono text-[11px] text-zinc-400 dark:text-zinc-500">
+                      <span className="font-mono text-xs text-zinc-400 dark:text-zinc-500">
                         - (empty / not yet locked)
                       </span>
                     )}
@@ -939,13 +939,13 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
 
               {(receiptEnvelope.receipt.artifacts?.tasks?.length || 0) > 0 && (
                 <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3 bg-white dark:bg-zinc-900/40 flex flex-col gap-1.5 max-h-36 overflow-y-auto">
-                  <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
+                  <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
                     Recorded Execution Tasks ({receiptEnvelope.receipt.artifacts?.tasks.length})
                   </span>
                   {receiptEnvelope.receipt.artifacts?.tasks.map((task) => (
                     <div
                       key={task.id}
-                      className="flex items-center justify-between gap-2 text-[11px]"
+                      className="flex items-center justify-between gap-2 text-xs"
                     >
                       <span className="truncate text-zinc-800 dark:text-zinc-200">
                         <span className="font-mono text-zinc-400 mr-1.5">
@@ -953,7 +953,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                         </span>
                         {task.title}
                       </span>
-                      <span className="font-mono uppercase text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 shrink-0">
+                      <span className="font-mono uppercase text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 shrink-0">
                         {task.status}
                       </span>
                     </div>
@@ -976,7 +976,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                 </div>
               ) : (
                 <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-[11px]">
+                  <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="bg-zinc-50 dark:bg-zinc-800/70 text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
                         <th className="py-2 px-3 font-semibold">Stage</th>
@@ -1045,7 +1045,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                             {app.stage}
                           </span>
                           <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                            className={`px-1.5 py-0.5 rounded text-xs font-semibold uppercase ${
                               app.status === 'approved'
                                 ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
                                 : app.status === 'rejected'
@@ -1056,7 +1056,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                             {app.status.replace('_', ' ')}
                           </span>
                         </div>
-                        <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                        <div className="text-xs text-zinc-600 dark:text-zinc-300">
                           <span className="font-semibold">
                             {app.approver_name || app.approver_user_id || 'Automated Policy Gate'}
                           </span>
@@ -1071,7 +1071,7 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
                         </div>
                       </div>
                       {app.comment && (
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
                           {app.comment}
                         </p>
                       )}
@@ -1084,20 +1084,20 @@ export const SeedMetadataSidebar: React.FC<SeedMetadataSidebarProps> = ({
             {/* Offline CLI Verification Command */}
             <div className="flex flex-col gap-1.5 p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800">
               <div className="flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-zinc-700 dark:text-zinc-200">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-700 dark:text-zinc-200">
                   <Terminal size={13} className="text-teal-600 dark:text-teal-400" />
                   <span>Independent CLI Verification</span>
                 </span>
                 <button
                   type="button"
                   onClick={() => void handleCopyVerifyCommand()}
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline cursor-pointer"
                 >
                   {copiedVerifyCmd ? <Check size={11} /> : <Copy size={11} />}
                   <span>{copiedVerifyCmd ? 'Copied!' : 'Copy command'}</span>
                 </button>
               </div>
-              <code className="px-2.5 py-2 rounded-lg bg-zinc-900 text-zinc-100 font-mono text-[11px] overflow-x-auto">
+              <code className="px-2.5 py-2 rounded-lg bg-zinc-900 text-zinc-100 font-mono text-xs overflow-x-auto">
                 {verifyCommand}
               </code>
             </div>

@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
-import sys
 import time
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
@@ -49,14 +48,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlmodel import SQLModel, select
-
-
-@pytest.fixture(scope="module")
-def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
-    """Use WindowsSelectorEventLoopPolicy only for psycopg async integration tests on Windows."""
-    if sys.platform == "win32":
-        return asyncio.WindowsSelectorEventLoopPolicy()
-    return asyncio.get_event_loop_policy()
 
 
 def _start_ephemeral_postgres_container() -> tuple[str, str]:

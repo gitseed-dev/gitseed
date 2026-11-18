@@ -211,10 +211,11 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       setCapacity(initialType === 'compute' ? 2 : initialType === 'inference' ? 4 : null)
       setCommandArgs('')
       setModelEntries(
-        initialCloudModels.map((id) => ({
+        initialCloudModels.map((id, idx) => ({
           id,
           owned_by: initialProvider,
           enabled: true,
+          is_default: idx === 0,
         }))
       )
       setAppId('')
@@ -229,7 +230,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       setAccessRestricted(false)
       setSelectedAgentIds([])
       setEnabled(true)
-      setAuthMode(initialProvider === 'antigravity' ? 'cli_oauth' : 'api_key')
+      setAuthMode('api_key')
       setPersonalModeAcknowledged(false)
       const hasExistingInference = backends.some(
         (b) => b.type === 'inference' && b.enabled
@@ -262,16 +263,15 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     setCliAuthSession(null)
     if (!def.supportsCliOAuth) {
       setAuthMode('api_key')
-    } else if (nextProvider === 'antigravity') {
-      setAuthMode('cli_oauth')
     }
     if (type === 'inference' && !currentBackend) {
       const cloudDefaults = DEFAULT_CLOUD_MODELS[nextProvider] || []
       setModelEntries(
-        cloudDefaults.map((id) => ({
+        cloudDefaults.map((id, idx) => ({
           id,
           owned_by: nextProvider,
           enabled: true,
+          is_default: idx === 0,
         }))
       )
     }
@@ -304,6 +304,12 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       base.discovered_models = modelEntries
         .filter((m) => m.enabled)
         .map((m) => m.id)
+      const defaultEntry =
+        modelEntries.find((m) => m.enabled && m.is_default) ||
+        modelEntries.find((m) => m.enabled)
+      if (defaultEntry) {
+        base.default_model = defaultEntry.id
+      }
       base.auto_create_agents = autoCreateAgents
       base.set_sdlc_default = setSdlcDefault
       base.is_sdlc_default = setSdlcDefault
@@ -536,6 +542,8 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
           setLocalBackend(res.backend)
           if (res.backend.type === 'git') {
             setGitRepositories(getBackendRepositories(res.backend))
+          } else if (res.backend.type === 'inference' && res.authenticated) {
+            setModelEntries(getBackendModels(res.backend))
           }
         }
         if (res.authenticated) {
@@ -599,6 +607,9 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       }
       if (res.backend) {
         setLocalBackend(res.backend)
+        if (res.backend.type === 'inference' && res.authenticated) {
+          setModelEntries(getBackendModels(res.backend))
+        }
       }
     } catch (err) {
       setErrorMessage(
@@ -625,6 +636,9 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       })
       if (res.backend) {
         setLocalBackend(res.backend)
+        if (res.backend.type === 'inference' && res.authenticated) {
+          setModelEntries(getBackendModels(res.backend))
+        }
       }
       if (res.authenticated) {
         await Promise.all([
@@ -877,6 +891,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
       if (currentBackend && useStoredBackendPing) {
         const updated = await api.backends.test(currentBackend.id)
         await queryClient.invalidateQueries({ queryKey: queryKeys.backends })
+        setLocalBackend(updated)
         if (updated.type === 'git') {
           setGitRepositories(getBackendRepositories(updated))
         } else if (updated.type === 'inference') {
@@ -912,6 +927,63 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
           config: buildConfigPayload(),
           secrets: nonEmptySecrets,
         })
+        if (
+          type === 'inference' &&
+          Array.isArray(probed.models) &&
+          probed.models.length > 0
+        ) {
+          setModelEntries(
+            getBackendModels({
+              id: 'probe',
+              name: name || 'probe',
+              type: 'inference',
+              provider,
+              endpoint: effectiveEndpoint,
+              config: { models: probed.models },
+              secret_keys: [],
+              capacity: null,
+              access_restricted: false,
+              allowed_agent_ids: [],
+              health: probed.health,
+              health_checked_at: null,
+              health_latency_ms: probed.latency_ms,
+              health_error: probed.error,
+              enabled: true,
+              created_by: null,
+              created_at: '',
+              updated_at: '',
+              updated_by: null,
+            })
+          )
+        } else if (
+          type === 'git' &&
+          Array.isArray(probed.repositories) &&
+          probed.repositories.length > 0
+        ) {
+          setGitRepositories(
+            getBackendRepositories({
+              id: 'probe',
+              name: name || 'probe',
+              type: 'git',
+              provider,
+              endpoint: effectiveEndpoint,
+              config: { repositories: probed.repositories },
+              secret_keys: [],
+              capacity: null,
+              access_restricted: false,
+              allowed_agent_ids: [],
+              health: probed.health,
+              health_checked_at: null,
+              health_latency_ms: probed.latency_ms,
+              health_error: probed.error,
+              enabled: true,
+              created_by: null,
+              created_at: '',
+              updated_at: '',
+              updated_by: null,
+            })
+          )
+        }
         setPingResult({
           status:
             probed.health === 'healthy'
@@ -950,7 +1022,27 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     e.preventDefault()
     if (!name.trim() || isSaving) return
 
+    const nonEmptySecrets: Record<string, string> = {}
+    Object.entries(secrets).forEach(([k, v]) => {
+      if (v && v.trim()) {
+        nonEmptySecrets[k] = v.trim()
+      }
+    })
+    const isCliOAuth =
+      type === 'inference' && providerDef.supportsCliOAuth && authMode === 'cli_oauth'
+    if (isCliOAuth && !cliAuthenticated && Object.keys(nonEmptySecrets).length === 0) {
+      setErrorMessage(
+        'Complete CLI sign-in (paste and verify the authorization code above) before saving so credentials and default stage agents can be provisioned.'
+      )
+      return
+    }
+
     if (isInlineCreatedClean && localBackend) {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.backends }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.policies }),
+      ])
       onSaved?.(localBackend)
       onClose()
       return
@@ -960,20 +1052,11 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
     setErrorMessage(null)
 
     try {
-      const nonEmptySecrets: Record<string, string> = {}
-      Object.entries(secrets).forEach(([k, v]) => {
-        if (v && v.trim()) {
-          nonEmptySecrets[k] = v.trim()
-        }
-      })
-
       const effectiveCapacity =
         type === 'compute' || type === 'inference'
           ? capacity ?? (type === 'compute' ? 2 : 4)
           : null
       const configPayload = buildConfigPayload()
-      const isCliOAuth =
-        type === 'inference' && providerDef.supportsCliOAuth && authMode === 'cli_oauth'
       const effectiveEndpoint = isCliOAuth ? null : endpoint.trim() || null
 
       let savedBackend: Backend
@@ -1203,7 +1286,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
             >
               <span>Repositories</span>
               {gitRepositories.length > 0 && (
-                <span className="px-1.5 py-0.5 rounded-full text-[11px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+                <span className="px-1.5 py-0.5 rounded-full text-xs font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
                   {gitRepositories.filter((r) => r.enabled).length}/{gitRepositories.length}
                 </span>
               )}
@@ -1220,7 +1303,7 @@ export const BackendDrawer: React.FC<BackendDrawerProps> = ({
             >
               <span>Models</span>
               {modelEntries.length > 0 && (
-                <span className="px-1.5 py-0.5 rounded-full text-[11px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+                <span className="px-1.5 py-0.5 rounded-full text-xs font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
                   {modelEntries.filter((m) => m.enabled).length}/{modelEntries.length}
                 </span>
               )}

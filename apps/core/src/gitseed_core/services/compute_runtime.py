@@ -11,12 +11,14 @@ import os
 import re
 import ssl
 import tempfile
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
+from gitseed_common.enums import SeedStage
 
 from gitseed_core.config import settings
 from gitseed_core.models.backend import Backend
@@ -30,6 +32,21 @@ from gitseed_core.security import (
 )
 
 logger = logging.getLogger("uvicorn.error")
+
+
+class RunnerPreparePhaseError(RuntimeError):
+    """Raised when the runner `prepare` container exits with a non-zero exit code."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int = 1,
+        log_tail: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.log_tail = log_tail
 
 INCLUSTER_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 INCLUSTER_NAMESPACE_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -268,12 +285,39 @@ async def _ensure_k8s_namespace_network_policy(
     target_ns: str,
     control_plane_ns: str,
 ) -> None:
-    """Idempotently apply default egress NetworkPolicy (`POST` ignoring `409 Conflict`), failing closed on RBAC/API errors."""
-    np_resp = await client.post(
-        f"{base_url}/apis/networking.k8s.io/v1/namespaces/{quote(target_ns, safe='')}/networkpolicies",
-        json=_build_k8s_default_egress_network_policy(target_ns, control_plane_ns),
+    """Idempotently apply default egress NetworkPolicy (`POST`, reconciling via `PUT` on `409 Conflict`), failing closed on RBAC/API errors."""
+    policy_payload = _build_k8s_default_egress_network_policy(target_ns, control_plane_ns)
+    collection_url = (
+        f"{base_url}/apis/networking.k8s.io/v1/namespaces/{quote(target_ns, safe='')}/networkpolicies"
     )
-    if np_resp.status_code not in (200, 201, 202, 409):
+    np_resp = await client.post(
+        collection_url,
+        json=policy_payload,
+    )
+    if np_resp.status_code == 409:
+        put_resp = await client.put(
+            f"{collection_url}/gitseed-default-egress",
+            json=policy_payload,
+        )
+        if put_resp.status_code == 422:
+            get_np = await client.get(f"{collection_url}/gitseed-default-egress")
+            if get_np.status_code == 200:
+                try:
+                    rv = (get_np.json().get("metadata") or {}).get("resourceVersion")
+                except Exception:
+                    rv = None
+                if rv:
+                    policy_payload["metadata"]["resourceVersion"] = str(rv)
+                    put_resp = await client.put(
+                        f"{collection_url}/gitseed-default-egress",
+                        json=policy_payload,
+                    )
+        if put_resp.status_code not in (200, 201, 202):
+            raise RuntimeError(
+                f"Kubernetes NetworkPolicy update in {target_ns} failed with HTTP {put_resp.status_code}"
+            )
+        return
+    if np_resp.status_code not in (200, 201, 202):
         raise RuntimeError(
             f"Kubernetes NetworkPolicy apply in {target_ns} failed with HTTP {np_resp.status_code}"
         )
@@ -287,7 +331,7 @@ async def _ensure_k8s_namespace(
     *,
     project_slug: str | None = None,
     workload: str = "runner",
-    enforce_shared_network_policy: bool = False,
+    enforce_shared_network_policy: bool = True,
 ) -> str:
     """Ensure `target_ns` exists with an active egress NetworkPolicy, failing closed if NetworkPolicy apply is denied."""
     control_plane_ns = _resolve_k8s_control_plane_namespace(fallback_ns)
@@ -299,15 +343,20 @@ async def _ensure_k8s_namespace(
         return fallback_ns
     try:
         get_resp = await client.get(f"{base_url}/api/v1/namespaces/{quote(target_ns, safe='')}")
-        if get_resp.status_code == 200:
-            await _ensure_k8s_namespace_network_policy(
-                client, base_url, target_ns, control_plane_ns
-            )
+        if get_resp.status_code in (200, 403):
+            if enforce_shared_network_policy:
+                await _ensure_k8s_namespace_network_policy(
+                    client, base_url, target_ns, control_plane_ns
+                )
             return target_ns
         if get_resp.status_code == 404:
             labels: dict[str, str] = {
                 "app.gitseed.managed": "true",
                 "app.gitseed.workload": workload,
+                "gitseed.io/workload-plane": "true",
+                "pod-security.kubernetes.io/enforce": "restricted",
+                "pod-security.kubernetes.io/warn": "restricted",
+                "pod-security.kubernetes.io/audit": "restricted",
             }
             if project_slug:
                 labels["app.gitseed.project_slug"] = _sanitize_k8s_label(project_slug, max_len=63)
@@ -537,9 +586,14 @@ async def _spawn_k8s_runner_job(
 
     sbx_cfg = project.sandbox_config if isinstance(project.sandbox_config, dict) else {}
     is_second_opinion = isinstance(run.output, dict) and bool(
-        run.output.get("second_opinion")
+        run.output.get("second_opinion") or run.output.get("multi_opinion")
     )
-    enable_warm_ws = bool(sbx_cfg.get("enable_warm_workspace", True)) and not is_second_opinion
+    is_isolated_stage = run.stage in (SeedStage.REVIEW, SeedStage.MERGE)
+    enable_warm_ws = (
+        bool(sbx_cfg.get("enable_warm_workspace", True))
+        and not is_second_opinion
+        and not is_isolated_stage
+    )
     ws_subpath: str | None = None
     ws_volume: dict[str, Any] = {"name": "workspace", "emptyDir": {}}
     if cfg.get("workspace_pvc"):
@@ -676,7 +730,7 @@ async def _spawn_k8s_runner_job(
             default_ns,
             project_slug=project.slug,
             workload="runner",
-            enforce_shared_network_policy=bool(cfg.get("network_policy", False)),
+            enforce_shared_network_policy=bool(cfg.get("network_policy", True)),
         )
         await client.delete(
             f"{base_url}/apis/batch/v1/namespaces/{quote(target_ns, safe='')}/jobs/{quote(job_name, safe='')}?propagationPolicy=Background"
@@ -803,6 +857,9 @@ async def spawn_k8s_pod(
     }
 
     client, base_url, default_ns = _k8s_client_for_backend(backend)
+    fallback_ns = resolve_k8s_target_namespace(
+        backend, default_ns, workload=workload, project_slug=None
+    )
     desired_ns = resolve_k8s_target_namespace(
         backend, default_ns, workload=workload, project_slug=project_slug
     )
@@ -811,10 +868,10 @@ async def spawn_k8s_pod(
             client,
             base_url,
             desired_ns,
-            default_ns,
+            fallback_ns,
             project_slug=project_slug,
             workload=workload,
-            enforce_shared_network_policy=bool(cfg.get("network_policy", False)),
+            enforce_shared_network_policy=bool(cfg.get("network_policy", True)),
         )
         await client.delete(
             f"{base_url}/api/v1/namespaces/{quote(target_ns, safe='')}/pods/{quote(clean_name, safe='')}?gracePeriodSeconds=0"
@@ -1181,6 +1238,7 @@ def _build_role_environments(
             target_env["http_proxy"] = proxy_url
             target_env["NO_PROXY"] = no_proxy_val
             target_env["no_proxy"] = no_proxy_val
+            target_env["NODE_USE_ENV_PROXY"] = "1"
 
     return prepare_env, agent_env, finalize_env
 
@@ -1262,9 +1320,14 @@ async def spawn_docker_runner_container(
 
     enable_cache = bool(sbx_cfg.get("enable_dependency_cache", True))
     is_second_opinion = isinstance(run.output, dict) and bool(
-        run.output.get("second_opinion")
+        run.output.get("second_opinion") or run.output.get("multi_opinion")
     )
-    enable_warm_ws = bool(sbx_cfg.get("enable_warm_workspace", True)) and not is_second_opinion
+    is_isolated_stage = run.stage in (SeedStage.REVIEW, SeedStage.MERGE)
+    enable_warm_ws = (
+        bool(sbx_cfg.get("enable_warm_workspace", True))
+        and not is_second_opinion
+        and not is_isolated_stage
+    )
     ws_vol_name = (
         f"gitseed-ws-{seed.id.lower()}"
         if enable_warm_ws
@@ -1365,6 +1428,7 @@ async def spawn_docker_runner_container(
 
             create_payload: dict[str, Any] = {
                 "Image": image,
+                "User": "1000:1000",
                 "Env": [f"{k}={v}" for k, v in role_env.items()],
                 "Labels": {
                     **base_labels,
@@ -1419,8 +1483,20 @@ async def spawn_docker_runner_container(
                             or 0
                         )
                         if prep_exit != 0:
-                            raise RuntimeError(
-                                f"Runner prepare phase failed with exit code {prep_exit}"
+                            prep_logs = ""
+                            try:
+                                log_resp = await client.get(
+                                    f"{base_url}/containers/{quote(cid, safe='')}/logs"
+                                    "?stdout=true&stderr=true&tail=200"
+                                )
+                                if log_resp.status_code == 200:
+                                    prep_logs = _demux_docker_logs(log_resp.content)
+                            except Exception:
+                                pass
+                            raise RunnerPreparePhaseError(
+                                f"Runner prepare phase failed with exit code {prep_exit}",
+                                exit_code=prep_exit,
+                                log_tail=prep_logs,
                             )
                 except Exception as exc:
                     for prev_id in spawned_ids:
@@ -1449,7 +1525,7 @@ async def stop_runner_agent_phase(
     """Ensure the untrusted `agent` container has stopped before `finalize` copies `/workspace`.
 
     In Docker, stops/kills ONLY the `agent` container (`gitseed-run-<run_id>`) without deleting it
-    so container logs remain available for run finalization. In Kubernetes, waits up to 6s for the
+    so container logs remain available for run finalization. In Kubernetes, waits up to 15s for the
     `agent` container in the Job Pod to reach `terminated` state, raising `RuntimeError` if a rogue
     process forged `.agent-done` while keeping `agent` running.
     """
@@ -1458,13 +1534,16 @@ async def stop_runner_agent_phase(
         client, base_url, default_ns = _k8s_client_for_backend(backend)
         target_ns, name = _split_k8s_ref(default_ns, effective_ref)
         async with client:
-            for _ in range(12):
+            for _ in range(30):
                 pods_resp = await client.get(
                     f"{base_url}/api/v1/namespaces/{quote(target_ns, safe='')}/pods"
                     f"?labelSelector=job-name%3D{quote(name, safe='')}"
                 )
                 if pods_resp.status_code != 200:
-                    return
+                    raise RuntimeError(
+                        f"Failed to verify Kubernetes agent container termination for run '{run_id}' "
+                        f"(HTTP {pods_resp.status_code}); refusing to finalize"
+                    )
                 items = (pods_resp.json() or {}).get("items") or []
                 if not items or not isinstance(items[0], dict):
                     return
@@ -1510,14 +1589,34 @@ async def stop_runner_agent_phase(
                 insp = await client.get(
                     f"{base_url}/containers/{quote(target, safe='')}/json"
                 )
-                if insp.status_code == 200 and bool(
-                    ((insp.json() or {}).get("State") or {}).get("Running")
-                ):
+                if insp.status_code == 404:
+                    continue
+                if insp.status_code != 200:
+                    raise RuntimeError(
+                        f"Failed to inspect Docker agent container '{target}' for run '{run_id}' "
+                        f"(HTTP {insp.status_code}); refusing to finalize"
+                    )
+                if bool(((insp.json() or {}).get("State") or {}).get("Running")):
                     await client.post(
                         f"{base_url}/containers/{quote(target, safe='')}/kill"
                     )
+                    insp2 = await client.get(
+                        f"{base_url}/containers/{quote(target, safe='')}/json"
+                    )
+                    if insp2.status_code != 404 and (
+                        insp2.status_code != 200
+                        or bool(((insp2.json() or {}).get("State") or {}).get("Running"))
+                    ):
+                        raise RuntimeError(
+                            f"Agent container '{target}' for run '{run_id}' is still running; "
+                            "refusing to finalize while /workspace is writable"
+                        )
+    except RuntimeError:
+        raise
     except Exception as exc:
-        logger.debug("Stopping runner agent phase for %s ignored error: %s", run_id, exc)
+        raise RuntimeError(
+            f"Cannot verify agent container termination for run '{run_id}': {exc}"
+        ) from exc
 
 
 async def stop_and_remove_docker_container(
@@ -1602,10 +1701,107 @@ async def stop_and_remove_docker_container(
 
 
 async def remove_docker_seed_workspace_volume(
-    backend: Backend, seed_id: str | None
+    backend: Backend,
+    seed_id: str | None,
+    *,
+    project_slug: str | None = None,
 ) -> None:
-    """Remove the warm per-seed workspace volume (`gitseed-ws-<seed_id>`) once a seed is merged or closed."""
-    if not seed_id or backend.provider.lower() in ("kubernetes", "k8s"):
+    """Remove the warm per-seed workspace (`gitseed-ws-<seed_id>` or K8s PVC `ws-<seed_id>`) once merged/closed."""
+    if not seed_id:
+        return
+    if backend.provider.lower() in ("kubernetes", "k8s"):
+        cfg = backend.config if isinstance(backend.config, dict) else {}
+        pvc_name = str(cfg.get("workspace_pvc") or "").strip()
+        if not pvc_name or not re.fullmatch(r"[A-Za-z0-9_-]+", seed_id):
+            return
+        try:
+            client, base_url, default_ns = _k8s_client_for_backend(backend)
+            target_ns = resolve_k8s_target_namespace(
+                backend, default_ns, workload="runner", project_slug=project_slug
+            )
+            job_name = _safe_k8s_job_name(f"ws-cleanup-{seed_id.lower()}")
+            cleanup_image = str(
+                cfg.get("runner_image") or settings.RUNNER_IMAGE or "alpine:3.21"
+            ).strip()
+            cleanup_labels = {
+                "app.kubernetes.io/managed-by": "gitseed",
+                "app.gitseed.managed": "true",
+                "app.gitseed.workload": "runner",
+                "app.gitseed.seed_id": seed_id,
+                "app.gitseed.role": "ws-cleanup",
+            }
+            job_manifest: dict[str, Any] = {
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {
+                    "name": job_name,
+                    "namespace": target_ns,
+                    "labels": cleanup_labels,
+                },
+                "spec": {
+                    "ttlSecondsAfterFinished": 60,
+                    "activeDeadlineSeconds": 60,
+                    "backoffLimit": 0,
+                    "template": {
+                        "metadata": {
+                            "labels": dict(cleanup_labels),
+                        },
+                        "spec": {
+                            "restartPolicy": "Never",
+                            "automountServiceAccountToken": False,
+                            "securityContext": {
+                                "runAsNonRoot": True,
+                                "runAsUser": 1000,
+                                "runAsGroup": 1000,
+                                "seccompProfile": {"type": "RuntimeDefault"},
+                            },
+                            "containers": [
+                                {
+                                    "name": "cleanup",
+                                    "image": cleanup_image,
+                                    "command": [
+                                        "rm",
+                                        "-rf",
+                                        "--",
+                                        f"/workspaces/ws-{seed_id}",
+                                    ],
+                                    "securityContext": {
+                                        "allowPrivilegeEscalation": False,
+                                        "runAsNonRoot": True,
+                                        "runAsUser": 1000,
+                                        "runAsGroup": 1000,
+                                        "seccompProfile": {"type": "RuntimeDefault"},
+                                        "capabilities": {"drop": ["ALL"]},
+                                    },
+                                    "volumeMounts": [
+                                        {
+                                            "name": "workspace",
+                                            "mountPath": "/workspaces",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "volumes": [
+                                {
+                                    "name": "workspace",
+                                    "persistentVolumeClaim": {"claimName": pvc_name},
+                                }
+                            ],
+                        }
+                    },
+                },
+            }
+            async with client:
+                with suppress(Exception):
+                    await client.delete(
+                        f"{base_url}/apis/batch/v1/namespaces/{quote(target_ns, safe='')}/jobs/{quote(job_name, safe='')}?propagationPolicy=Background"
+                    )
+                await client.post(
+                    f"{base_url}/apis/batch/v1/namespaces/{quote(target_ns, safe='')}/jobs",
+                    json=job_manifest,
+                )
+        except Exception as exc:
+            logger.debug("K8s PVC seed workspace cleanup for %s ignored error: %s", seed_id, exc)
         return
     vol_name = f"gitseed-ws-{seed_id.lower()}"
     try:

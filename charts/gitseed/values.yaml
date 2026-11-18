@@ -102,6 +102,8 @@ scheduler:
   enabled: true
   replicaCount: 1
   pollSeconds: 3.0
+  # Optional custom pod affinity override (defaults to co-locating with `api` when ReadWriteOnce persistence is enabled)
+  affinity: {}
   resources:
     requests:
       cpu: 100m
@@ -155,8 +157,8 @@ litellm:
   enabled: true
   replicaCount: 1
   image:
-    repository: ghcr.io/berriai/litellm-database
-    tag: main-v1.67.4-stable
+    repository: ghcr.io/berriai/litellm
+    tag: v1.109.1
     pullPolicy: IfNotPresent
   port: 4000
   masterKey: "sk-gitseed-litellm-master-key"
@@ -200,6 +202,8 @@ externalDatabase:
   username: "gitseed"
   password: ""
   database: "gitseed"
+  # Optional separate database name for LiteLLM on an external Postgres server (defaults to litellm.databaseName)
+  litellmDatabase: ""
 
 # Bundled Valkey (Redis-compatible, BSD-3-Clause; disable and set externalRedis.url for external Redis)
 valkey:

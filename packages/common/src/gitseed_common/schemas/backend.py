@@ -64,6 +64,8 @@ class ProbeBackendResponse(BaseModel):
     health: BackendHealth
     latency_ms: int | None = None
     error: str | None = None
+    models: list[dict[str, Any]] = Field(default_factory=list)
+    repositories: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CliAuthInputRequest(BaseModel):

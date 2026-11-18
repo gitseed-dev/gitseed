@@ -373,7 +373,7 @@ export const SeedTasksTab: React.FC<SeedTasksTabProps> = ({
                               e.target.value as TaskStatus
                             )
                           }
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border cursor-pointer focus:outline-none ${getTaskStatusClasses(
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold border cursor-pointer focus:outline-none ${getTaskStatusClasses(
                             task.status
                           )}`}
                         >
@@ -393,7 +393,7 @@ export const SeedTasksTab: React.FC<SeedTasksTabProps> = ({
                         </select>
                       ) : (
                         <span
-                          className={`px-2.5 py-0.5 rounded-lg text-[11px] font-semibold border ${getTaskStatusClasses(
+                          className={`px-2.5 py-0.5 rounded-lg text-xs font-semibold border ${getTaskStatusClasses(
                             task.status
                           )}`}
                         >

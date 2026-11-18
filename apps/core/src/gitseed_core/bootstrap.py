@@ -8,18 +8,20 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from gitseed_common.enums import (
+    AgentSessionStatus,
     BackendHealth,
     BackendType,
     OrgRole,
     UserStatus,
 )
-from sqlalchemy import func, inspect, select, text
-from sqlmodel import SQLModel
+from sqlalchemy import func, inspect, select, text, update
+from sqlmodel import SQLModel, col
 
 import gitseed_core.models  # noqa: F401
 from gitseed_core.config import settings
 from gitseed_core.db import AsyncSessionLocal, engine
 from gitseed_core.models.agent import Agent
+from gitseed_core.models.agent_session import AgentSession
 from gitseed_core.models.backend import Backend
 from gitseed_core.models.settings import OrgSettings
 from gitseed_core.models.user import User
@@ -115,6 +117,7 @@ async def bootstrap_database() -> None:
     """Idempotently seed OrgSettings, policies, initial Admin, Docker compute, and Agents."""
     if settings.GITSEED_AUTO_MIGRATE:
         head_revisions = _resolve_alembic_head_revisions()
+        needs_alembic_upgrade = False
         async with engine.begin() as conn:
             is_postgres = (
                 getattr(getattr(conn, "dialect", None), "name", None) == "postgresql"
@@ -125,8 +128,6 @@ async def bootstrap_database() -> None:
                         lock_id=_BOOTSTRAP_ADVISORY_LOCK_ID
                     )
                 )
-
-            needs_alembic_upgrade = False
 
             def _create_if_unmigrated(sync_conn: object) -> None:
                 nonlocal needs_alembic_upgrade
@@ -158,9 +159,10 @@ async def bootstrap_database() -> None:
                     needs_alembic_upgrade = True
 
             await conn.run_sync(_create_if_unmigrated)
-            if needs_alembic_upgrade:
-                alembic_cfg = _build_alembic_config()
-                await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
+
+        if needs_alembic_upgrade:
+            alembic_cfg = _build_alembic_config()
+            await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
 
     async with AsyncSessionLocal() as session:
         bind = getattr(session, "bind", None)
@@ -187,6 +189,7 @@ async def bootstrap_database() -> None:
         # 3. Ensure initial admin user exists if the user table is empty
         user_count = await session.scalar(select(func.count()).select_from(User))
         generated_password: str | None = None
+        created_admin = False
 
         if not user_count:
             raw_password = settings.GITSEED_ADMIN_PASSWORD
@@ -202,6 +205,7 @@ async def bootstrap_database() -> None:
                 password_hash=hash_password(raw_password),
             )
             session.add(admin)
+            created_admin = True
         else:
             admin_email = settings.GITSEED_ADMIN_EMAIL.strip().lower()
             bootstrap_admin = (
@@ -244,15 +248,32 @@ async def bootstrap_database() -> None:
                     session, first_inference, force_switch=False
                 )
 
+        # 6. Recover any interactive AgentSession rows stranded in `running_turn` across an API restart
+        await session.execute(
+            update(AgentSession)
+            .where(col(AgentSession.status) == AgentSessionStatus.RUNNING_TURN)
+            .values(status=AgentSessionStatus.IDLE)
+        )
+
         await session.commit()
 
-        if generated_password is not None:
-            logger.warning(
-                "\n"
-                "======================================================================\n"
-                "  GitSeed Initial Admin Created\n"
-                f"  Email:    {settings.GITSEED_ADMIN_EMAIL}\n"
-                f"  Password: {generated_password}\n"
-                "  (Set GITSEED_ADMIN_PASSWORD in .env to specify initial password)\n"
-                "======================================================================"
-            )
+        if created_admin:
+            if generated_password is not None:
+                logger.warning(
+                    "\n"
+                    "======================================================================\n"
+                    "  GitSeed Initial Admin Created\n"
+                    f"  Email:    {settings.GITSEED_ADMIN_EMAIL}\n"
+                    f"  Password: {generated_password}\n"
+                    "  (Set GITSEED_ADMIN_PASSWORD in .env to specify initial password)\n"
+                    "======================================================================"
+                )
+            else:
+                logger.info(
+                    "\n"
+                    "======================================================================\n"
+                    "  GitSeed Initial Admin Created\n"
+                    f"  Email:    {settings.GITSEED_ADMIN_EMAIL}\n"
+                    "  Password: (from GITSEED_ADMIN_PASSWORD in .env)\n"
+                    "======================================================================"
+                )

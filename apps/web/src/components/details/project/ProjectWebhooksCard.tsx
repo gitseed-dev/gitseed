@@ -248,7 +248,7 @@ export const ProjectWebhooksCard: React.FC<ProjectWebhooksCardProps> = ({
               <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                 Enable Project Webhooks
               </span>
-              <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
                 Accept signed GitHub/GitLab webhook events and deliver outbound notifications
               </span>
             </div>
@@ -267,7 +267,7 @@ export const ProjectWebhooksCard: React.FC<ProjectWebhooksCardProps> = ({
                 <GitPullRequest size={12} className="text-teal-500" />
                 <span>Auto-Open Pull Request / Merge Request on Review</span>
               </span>
-              <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
                 Automatically open a GitHub PR or GitLab MR when entering Review, post @reviewer findings, and reconcile external PR merges
               </span>
             </div>
@@ -328,7 +328,7 @@ export const ProjectWebhooksCard: React.FC<ProjectWebhooksCardProps> = ({
               <KeyRound size={13} className="text-teal-500" />
               <span>Webhook HMAC Signing Secret</span>
             </span>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
               Used to verify <code className="font-mono">X-Hub-Signature-256</code> (GitHub), <code className="font-mono">X-Gitlab-Token</code> (GitLab), and sign outbound payloads.
             </span>
           </div>
@@ -383,13 +383,13 @@ export const ProjectWebhooksCard: React.FC<ProjectWebhooksCardProps> = ({
                 <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                   Issue → Seed Intake
                 </span>
-                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   Create a Seed when an issue is labeled with trigger tag
                 </span>
               </div>
             </label>
             <div className="flex items-center gap-1.5 pt-1">
-              <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
                 Label:
               </span>
               <input
@@ -415,7 +415,7 @@ export const ProjectWebhooksCard: React.FC<ProjectWebhooksCardProps> = ({
               <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                 PR Comment → Live Steering
               </span>
-              <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
                 Sync PR/MR comments to the Seed thread and steer active <code className="font-mono">@coder</code> / <code className="font-mono">@reviewer</code> runs
               </span>
             </div>
@@ -433,7 +433,7 @@ export const ProjectWebhooksCard: React.FC<ProjectWebhooksCardProps> = ({
               <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                 CI Failure → Self-Healing
               </span>
-              <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
                 Automatically queue a remediation task in Execute when GitHub Actions or GitLab CI fails on a seed branch
               </span>
             </div>
@@ -475,7 +475,7 @@ export const ProjectWebhooksCard: React.FC<ProjectWebhooksCardProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
               Outbound Events:
             </span>
             {OUTBOUND_EVENT_OPTIONS.map((opt) => (

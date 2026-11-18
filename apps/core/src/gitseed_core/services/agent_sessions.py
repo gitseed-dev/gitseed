@@ -61,7 +61,9 @@ from gitseed_core.services.errors import Forbidden, Invalid, NotFound
 from gitseed_core.services.gateway import (
     compute_project_remaining_monthly_budget,
     create_session_virtual_key,
+    estimate_model_token_cost,
     is_personal_mode_backend,
+    is_unpriced_backend,
     resolve_session_context_window,
     revoke_session_virtual_key,
     validate_personal_mode_backend_access,
@@ -538,6 +540,7 @@ async def _ensure_warm_session_container(
                 "http_proxy": proxy_url,
                 "NO_PROXY": no_proxy_val,
                 "no_proxy": no_proxy_val,
+                "NODE_USE_ENV_PROXY": "1",
             }
         )
 
@@ -889,6 +892,28 @@ async def main():
     output_file = Path("/tmp/gitseed_ses/output.json")
     adapter = create_runtime_adapter(ctx=ctx, working_dir=working_dir, output_file=output_file)
     env = adapter.prepare_workspace()
+    if adapter.binary_name == "claude":
+        try:
+            c_path = Path.home() / ".claude.json"
+            c_cfg = json.loads(c_path.read_text(encoding="utf-8")) if c_path.exists() else {}
+            if not isinstance(c_cfg, dict):
+                c_cfg = {}
+            c_cfg["hasCompletedOnboarding"] = True
+            c_cfg["bypassPermissionsModeAccepted"] = True
+            c_cfg.setdefault("theme", "dark")
+            projs = c_cfg.get("projects") if isinstance(c_cfg.get("projects"), dict) else {}
+            for f in ("/workspace", str(working_dir.resolve()), str(Path.home())):
+                pe = projs.get(f) if isinstance(projs.get(f), dict) else {}
+                pe["hasTrustDialogAccepted"] = True
+                pe["hasTrustDialogHooksAccepted"] = True
+                pe["hasCompletedProjectOnboarding"] = True
+                pe.setdefault("allowedTools", [])
+                pe.setdefault("projectOnboardingSeenCount", 1)
+                projs[f] = pe
+            c_cfg["projects"] = projs
+            c_path.write_text(json.dumps(c_cfg, indent=2), encoding="utf-8")
+        except Exception:
+            pass
     prompt = str(ctx.get("prompt") or "")
     continue_session = bool(ctx.get("continue_session", False))
 
@@ -1053,6 +1078,12 @@ async def _run_turn_in_warm_container(
                             compute_backend, container_id, session_id
                         )
                         return parsed
+            await k8s_exec_command(
+                compute_backend,
+                container_id,
+                ["sh", "-c", "pkill -f '/tmp/gitseed_ses/run_turn.py' 2>/dev/null || true"],
+                timeout=10.0,
+            )
         except Exception as exc:
             logger.warning("K8s warm Pod turn execution error for %s: %s", session_id, exc)
         return None
@@ -1090,6 +1121,7 @@ async def _run_turn_in_warm_container(
             )
 
             # Poll exec status & live turn.log up to 180 seconds
+            turn_finished = False
             for _ in range(150):
                 await asyncio.sleep(1.2)
                 live_log = await _read_container_file(
@@ -1107,6 +1139,7 @@ async def _run_turn_in_warm_container(
                     f"{base_url}/exec/{quote(exec_id, safe='')}/json"
                 )
                 if insp.status_code == 200 and not insp.json().get("Running", False):
+                    turn_finished = True
                     break
 
             res_raw = await _read_container_file(
@@ -1119,6 +1152,26 @@ async def _run_turn_in_warm_container(
                         _CONTAINER_TURN_COUNT.get(container_id, 0) + 1
                     )
                     return parsed
+            if not turn_finished:
+                kill_exec = await client.post(
+                    f"{base_url}/containers/{quote(container_id, safe='')}/exec",
+                    json={
+                        "AttachStdout": False,
+                        "AttachStderr": False,
+                        "Cmd": [
+                            "sh",
+                            "-c",
+                            "pkill -f '/tmp/gitseed_ses/run_turn.py' 2>/dev/null || true",
+                        ],
+                    },
+                )
+                if kill_exec.status_code in (200, 201):
+                    kill_id = str(kill_exec.json().get("Id") or "")
+                    if kill_id:
+                        await client.post(
+                            f"{base_url}/exec/{quote(kill_id, safe='')}/start",
+                            json={"Detach": True, "Tty": False},
+                        )
     except Exception as exc:
         logger.warning("Warm container turn execution error for %s: %s", session_id, exc)
     return None
@@ -1379,7 +1432,7 @@ async def _execute_session_turn_background(
                 synth_model = (
                     ag_session.model
                     if ag_session.model != "default"
-                    else (extract_enabled_model_ids(models_backend) or ["claude-sonnet-4-5"])[0]
+                    else (extract_enabled_model_ids(models_backend) or ["claude-sonnet-5-5"])[0]
                 )
                 session_vk = await create_session_virtual_key(
                     session_id=ag_session.id,
@@ -1515,7 +1568,15 @@ async def _execute_session_turn_background(
             if in_tok == 0 and out_tok == 0:
                 in_tok = max(64, len(full_cli_prompt) // 4)
                 out_tok = max(48, len(reply_text) // 4)
-            turn_cost = Decimal(str(round((in_tok * 0.000003) + (out_tok * 0.000015), 6)))
+            if is_unpriced_backend(models_backend, ag_session.model):
+                turn_cost = Decimal("0")
+            else:
+                turn_cost = estimate_model_token_cost(
+                    ag_session.model,
+                    in_tok,
+                    out_tok,
+                    backend=models_backend,
+                )
 
             assistant_msg = AgentSessionMessage(
                 session_id=ag_session.id,
@@ -2161,6 +2222,28 @@ adapter = create_runtime_adapter(
     ctx=ctx, working_dir=Path("/workspace"), output_file=Path("/tmp/gitseed_ses/tui_output.json")
 )
 env = adapter.prepare_workspace()
+if adapter.binary_name == "claude":
+    try:
+        c_path = Path.home() / ".claude.json"
+        c_cfg = json.loads(c_path.read_text(encoding="utf-8")) if c_path.exists() else {}
+        if not isinstance(c_cfg, dict):
+            c_cfg = {}
+        c_cfg["hasCompletedOnboarding"] = True
+        c_cfg["bypassPermissionsModeAccepted"] = True
+        c_cfg.setdefault("theme", "dark")
+        projs = c_cfg.get("projects") if isinstance(c_cfg.get("projects"), dict) else {}
+        for f in ("/workspace", str(Path("/workspace").resolve()), str(Path.home())):
+            pe = projs.get(f) if isinstance(projs.get(f), dict) else {}
+            pe["hasTrustDialogAccepted"] = True
+            pe["hasTrustDialogHooksAccepted"] = True
+            pe["hasCompletedProjectOnboarding"] = True
+            pe.setdefault("allowedTools", [])
+            pe.setdefault("projectOnboardingSeenCount", 1)
+            projs[f] = pe
+        c_cfg["projects"] = projs
+        c_path.write_text(json.dumps(c_cfg, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 env["TERM"] = os.environ.get("TERM", "xterm-256color")
 env["COLORTERM"] = os.environ.get("COLORTERM", "truecolor")
 binary = adapter.binary_name

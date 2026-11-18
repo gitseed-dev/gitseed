@@ -105,7 +105,7 @@ export const SidebarFooter: React.FC<SidebarFooterProps> = ({ isCollapsed }) => 
             className={`w-full flex items-center px-3 py-1.5 rounded-lg bg-transparent hover:bg-zinc-100/80 dark:hover:bg-zinc-800/50 transition cursor-pointer ${
               isReconnecting
                 ? 'text-xs font-medium text-amber-600 dark:text-amber-400'
-                : 'text-[11px] font-normal text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300'
+                : 'text-xs font-normal text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300'
             }`}
           >
             <div className="flex items-center gap-2 min-w-0">
@@ -200,7 +200,7 @@ export const SidebarFooter: React.FC<SidebarFooterProps> = ({ isCollapsed }) => 
                   <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 group-hover:text-teal-600 dark:group-hover:text-teal-400 truncate leading-tight transition">
                     {userDisplayName}
                   </span>
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate capitalize">
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate capitalize">
                     {userRole}
                   </span>
                 </div>

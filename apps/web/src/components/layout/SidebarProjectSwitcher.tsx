@@ -206,7 +206,7 @@ export const SidebarProjectSwitcher: React.FC<SidebarProjectSwitcherProps> = ({
             </button>
 
             <div className="my-1 border-t border-zinc-100 dark:border-zinc-800 px-2 pt-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 font-mono">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 font-mono">
                 {t('nav.projects')} ({activeProjects.length})
               </span>
             </div>
@@ -233,12 +233,12 @@ export const SidebarProjectSwitcher: React.FC<SidebarProjectSwitcherProps> = ({
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-6 h-6 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-700 dark:text-teal-300 flex items-center justify-center font-mono font-bold text-[10px] uppercase shrink-0">
+                      <div className="w-6 h-6 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-700 dark:text-teal-300 flex items-center justify-center font-mono font-bold text-xs uppercase shrink-0">
                         {getProjectInitials(p)}
                       </div>
                       <div className="flex flex-col text-left min-w-0">
                         <span className="truncate font-medium">{p.name}</span>
-                        <span className="text-[10px] font-mono text-zinc-400 truncate">
+                        <span className="text-xs font-mono text-zinc-400 truncate">
                           {p.slug}
                         </span>
                       </div>

@@ -122,7 +122,7 @@ const SectionAgentStatus: React.FC<{ working: boolean; handle: string; verb: str
 }) => {
   if (working)
     return (
-      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 dark:text-sky-300">
         <span className="relative flex w-1.5 h-1.5">
           <span className="absolute inline-flex w-full h-full rounded-full bg-sky-400 opacity-60 animate-ping" />
           <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-sky-500" />
@@ -132,7 +132,7 @@ const SectionAgentStatus: React.FC<{ working: boolean; handle: string; verb: str
     )
   if (updatedBy)
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300 animate-fadeIn">
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-300 animate-fadeIn">
         <Check size={11} />
         Updated by {updatedBy} just now
       </span>
@@ -675,11 +675,11 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                         <span
                           key={r.id}
                           title={r.error || `${handle} run failed`}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-mono font-medium bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono font-medium bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
                         >
                           <XCircle size={11} />
                           <span>{handle}</span>
-                          <span className="text-[10px]">Failed</span>
+                          <span className="text-xs">Failed</span>
                         </span>
                       )
                     }
@@ -688,7 +688,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       return (
                         <span
                           key={r.id}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-mono font-medium bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/20"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono font-medium bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/20"
                         >
                           <Loader2 size={11} className="animate-spin" />
                           <span>{handle}</span>
@@ -702,7 +702,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                         type="button"
                         disabled={!canEditSpec || Boolean(selectingRunId)}
                         onClick={() => void handleSelectDraftRun(r.id, 'ideate')}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition ${
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition ${
                           isSelected
                             ? 'bg-white dark:bg-zinc-900 text-teal-600 dark:text-teal-400 shadow-2xs border border-teal-500/30'
                             : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
@@ -730,7 +730,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                           ? 'Use your draft from before Ideate as the starting point'
                           : 'Toggle viewing your draft from before Ideate'
                       }
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
                         activeIdeateRunId === 'original' ||
                         (!canEditSpec && showOriginalSubmission)
                           ? 'bg-white dark:bg-zinc-900 text-teal-600 dark:text-teal-400 shadow-2xs border border-teal-500/30'
@@ -783,7 +783,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       <button
                         type="button"
                         onClick={() => setShowOriginalSubmission((prev) => !prev)}
-                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[11px] font-medium bg-zinc-100/80 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400 border border-zinc-200/70 dark:border-zinc-700/70 transition cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-xs font-medium bg-zinc-100/80 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400 border border-zinc-200/70 dark:border-zinc-700/70 transition cursor-pointer"
                       >
                         <History size={11} />
                         <span>
@@ -808,7 +808,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                             type="button"
                             disabled={isRestoringOriginal}
                             onClick={handleRestoreOriginalSubmission}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-teal-600 dark:text-teal-400 hover:bg-teal-500/10 transition cursor-pointer disabled:opacity-50"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-teal-600 dark:text-teal-400 hover:bg-teal-500/10 transition cursor-pointer disabled:opacity-50"
                           >
                             <RotateCcw size={11} />
                             <span>
@@ -819,7 +819,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       </div>
                       {wasTitleRefined && originalTitle && (
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                          <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
                             Initial Title
                           </span>
                           <p className="text-zinc-700 dark:text-zinc-200 font-medium">
@@ -829,7 +829,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       )}
                       {originalDescription && (
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                          <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
                             Initial Summary
                           </span>
                           <MarkdownContent content={originalDescription} className="text-zinc-700 dark:text-zinc-300" />
@@ -837,7 +837,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       )}
                       {wasCriteriaRefined && originalCriteria.length > 0 && (
                         <div className="flex flex-col gap-1">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                          <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
                             Initial Acceptance Criteria ({originalCriteria.length})
                           </span>
                           <ul className="list-disc list-inside space-y-0.5 text-zinc-700 dark:text-zinc-300">
@@ -871,7 +871,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       <button
                         type="button"
                         onClick={() => setShowRawSpec((prev) => !prev)}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
                         title={
                           showRawSpec
                             ? 'Switch to rendered Markdown'
@@ -886,7 +886,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       <button
                         type="button"
                         onClick={handleStartEditSpec}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium text-zinc-500 dark:text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
                       >
                         <Edit3 size={12} />
                         <span>Edit</span>
@@ -1024,7 +1024,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                     <button
                       type="button"
                       onClick={handleStartEditCriteria}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium text-zinc-500 dark:text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
                     >
                       <Edit3 size={12} />
                       <span>Edit</span>
@@ -1298,11 +1298,11 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                           <span
                             key={r.id}
                             title={r.error || `${handle} run failed`}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-mono font-medium bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono font-medium bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
                           >
                             <XCircle size={11} />
                             <span>{handle}</span>
-                            <span className="text-[10px]">Failed</span>
+                            <span className="text-xs">Failed</span>
                           </span>
                         )
                       }
@@ -1311,7 +1311,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                         return (
                           <span
                             key={r.id}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-mono font-medium bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/20"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono font-medium bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/20"
                           >
                             <Loader2 size={11} className="animate-spin" />
                             <span>{handle}</span>
@@ -1325,7 +1325,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                           type="button"
                           disabled={!canEditPlan || Boolean(selectingRunId)}
                           onClick={() => void handleSelectDraftRun(r.id, 'plan')}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition ${
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition ${
                             isSelected
                               ? 'bg-white dark:bg-zinc-900 text-teal-600 dark:text-teal-400 shadow-2xs border border-teal-500/30'
                               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
@@ -1614,29 +1614,29 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                             {handle}
                           </span>
                           {ag && (
-                            <span className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
+                            <span className="text-xs font-mono text-zinc-500 dark:text-zinc-400">
                               {ag.model} · {ag.runtime}
                             </span>
                           )}
                         </div>
 
                         {isActive ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/25">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/25">
                             <Loader2 size={11} className="animate-spin" />
                             <span>Reviewing…</span>
                           </span>
                         ) : isFailed ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/25">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/25">
                             <XCircle size={11} />
                             <span>Failed</span>
                           </span>
                         ) : approved ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
                             <Check size={11} />
                             <span>Approved</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30">
                             <AlertCircle size={11} />
                             <span>Changes Requested</span>
                           </span>
@@ -1657,7 +1657,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
 
                       {findings.length > 0 && (
                         <div className="pt-2 border-t border-zinc-200/70 dark:border-zinc-700/70 flex flex-col gap-1.5">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                          <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                             Findings ({findings.length})
                           </span>
                           <ul className="space-y-1 text-xs text-zinc-800 dark:text-zinc-200">
@@ -1812,12 +1812,12 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                 <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700/80 bg-zinc-50/60 dark:bg-zinc-950/60 p-4 flex flex-col gap-3 min-w-0">
                   <div className="flex flex-col gap-2 pb-3 border-b border-zinc-200/80 dark:border-zinc-800">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                      <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                         {slotLabel}
                       </span>
                       <div className="flex items-center gap-1.5">
                         {isCurrentDraft && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30">
                             <Check size={10} />
                             <span>Active Draft</span>
                           </span>
@@ -1834,7 +1834,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                                   compareStage
                                 )
                               }
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white transition cursor-pointer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white transition cursor-pointer"
                             >
                               {selectingRunId === selectedRun.id ? (
                                 <Loader2 size={11} className="animate-spin" />
@@ -1869,7 +1869,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       })}
                     </select>
 
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-zinc-600 dark:text-zinc-400">
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-zinc-600 dark:text-zinc-400">
                       <span className="px-2 py-0.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800">
                         {handle} · {runtimeName}
                       </span>
@@ -1901,7 +1901,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                     <div className="flex flex-col gap-3 text-xs">
                       {typeof out.title === 'string' && out.title.trim() && (
                         <div>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-0.5">
+                          <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-0.5">
                             Proposed Title
                           </div>
                           <div className="font-semibold text-zinc-900 dark:text-zinc-100">
@@ -1912,14 +1912,14 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       {typeof out.description === 'string' &&
                         out.description.trim() && (
                           <div>
-                            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                            <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                               Summary
                             </div>
                             <MarkdownContent content={out.description} />
                           </div>
                         )}
                       <div>
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                        <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                           Specification
                         </div>
                         {typeof out.specification === 'string' &&
@@ -1935,7 +1935,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       </div>
                       {criteriaList.length > 0 && (
                         <div>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                          <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                             Acceptance Criteria ({criteriaList.length})
                           </div>
                           <ul className="list-disc list-inside space-y-1 text-zinc-800 dark:text-zinc-200">
@@ -1951,7 +1951,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                   {compareStage === 'plan' && (
                     <div className="flex flex-col gap-3 text-xs">
                       <div>
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                        <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                           Implementation Plan
                         </div>
                         {typeof out.plan === 'string' && out.plan.trim() ? (
@@ -1966,7 +1966,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       </div>
                       {planTasks.length > 0 && (
                         <div>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                          <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                             Proposed Tasks ({planTasks.length})
                           </div>
                           <ol className="list-decimal list-inside space-y-1 text-zinc-800 dark:text-zinc-200">
@@ -1986,7 +1986,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                   {compareStage === 'execute' && (
                     <div className="flex flex-col gap-3 text-xs">
                       <div>
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                        <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                           Execution Summary
                         </div>
                         {typeof out.summary === 'string' && out.summary.trim() ? (
@@ -2001,10 +2001,10 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                       </div>
                       {execFiles.length > 0 && (
                         <div>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                          <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                             Files Modified ({execFiles.length})
                           </div>
-                          <ul className="space-y-0.5 font-mono text-[11px] text-zinc-700 dark:text-zinc-300">
+                          <ul className="space-y-0.5 font-mono text-xs text-zinc-700 dark:text-zinc-300">
                             {execFiles.map((fp) => (
                               <li key={fp}>{fp}</li>
                             ))}
@@ -2017,17 +2017,17 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                   {compareStage === 'review' && (
                     <div className="flex flex-col gap-3 text-xs">
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
                           Verdict:
                         </span>
                         {selectedRun.status === 'succeeded' ? (
                           out.approved !== false ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
                               <Check size={11} />
                               <span>Approved</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-500/15 text-amber-800 dark:text-amber-300">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-500/15 text-amber-800 dark:text-amber-300">
                               <AlertCircle size={11} />
                               <span>Changes Requested</span>
                             </span>
@@ -2044,7 +2044,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                         )}
                       {reviewFindings.length > 0 && (
                         <div>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                          <div className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">
                             Findings ({reviewFindings.length})
                           </div>
                           <ul className="list-disc list-inside space-y-1 text-zinc-800 dark:text-zinc-200">
@@ -2074,7 +2074,7 @@ export const SeedOverviewTab: React.FC<SeedOverviewTabProps> = ({
                           key={st}
                           type="button"
                           onClick={() => openCompareModal(st)}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
                             compareStage === st
                               ? 'bg-white dark:bg-zinc-900 text-teal-600 dark:text-teal-400 shadow-2xs'
                               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'

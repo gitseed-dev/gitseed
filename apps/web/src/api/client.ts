@@ -111,13 +111,18 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     serializedBody = JSON.stringify(body)
   }
 
+  const effectiveSignal =
+    init.signal && typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([init.signal, controller.signal])
+      : (init.signal ?? controller.signal)
+
   try {
     const res = await fetch(path, {
       ...init,
       credentials: 'include',
       headers,
       body: serializedBody,
-      signal: init.signal ?? controller.signal,
+      signal: effectiveSignal,
     })
 
     if (res.status === 204) {
@@ -567,6 +572,8 @@ export const api = {
         agent_id?: string | null
         runtime?: AgentRuntime | null
         model?: string | null
+        inference_backend_id?: string | null
+        models_backend_id?: string | null
         provider_backend_id?: string | null
         title?: string | null
         initial_prompt?: string | null
@@ -1224,6 +1231,8 @@ export const api = {
         health: 'unknown' | 'healthy' | 'degraded' | 'unreachable'
         latency_ms: number | null
         error: string | null
+        models?: Array<{ id: string; owned_by?: string; enabled?: boolean }>
+        repositories?: Array<Record<string, unknown>>
       }>('/api/v1/backends/probe', {
         method: 'POST',
         body: payload,

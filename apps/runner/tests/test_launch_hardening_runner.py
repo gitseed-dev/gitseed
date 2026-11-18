@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -48,11 +49,15 @@ def _clear_supervisor_log_buffer() -> Any:
 
 
 def _git_test(repo: Path, *args: str) -> str:
+    empty_cfg = (repo.parent if repo.name != repo.anchor else repo) / ".gitseed_empty_gitconfig"
+    if not empty_cfg.exists():
+        empty_cfg.parent.mkdir(parents=True, exist_ok=True)
+        empty_cfg.write_text("", encoding="utf-8")
     env = os.environ.copy()
     env.update(
         {
             "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_GLOBAL": str(empty_cfg),
             "GIT_AUTHOR_NAME": "Test User",
             "GIT_AUTHOR_EMAIL": "test@gitseed.local",
             "GIT_COMMITTER_NAME": "Test User",
@@ -72,8 +77,10 @@ def _git_test(repo: Path, *args: str) -> str:
         env=env,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {args} failed ({proc.returncode}): {proc.stderr}")
     return proc.stdout.strip()
 
 
@@ -141,7 +148,7 @@ def test_clean_commit_revert_policy_and_preserve_run_json(tmp_path: Path) -> Non
     base_sha = _init_repo_with_base_commit(ws_repo)
 
     clean_repo = tmp_path / "clean_repo"
-    _git_test(tmp_path, "clone", "--no-checkout", str(ws_repo), str(clean_repo))
+    shutil.copytree(ws_repo / ".git", clean_repo / ".git")
 
     # Agent modifies ci.yml, adds new blocked file, writes .gitseed/run.json + output.json
     (ws_repo / ".github" / "workflows" / "ci.yml").write_text("tampered\n", encoding="utf-8")
@@ -667,3 +674,148 @@ def test_failed_clone_redacts_token_scrubs_partial_git_and_finalize_preserves_sy
         "field": "acceptance_criteria",
         "count": 3,
     }
+
+
+def test_symlink_to_blocked_paths_rejected_while_safe_symlink_allowed(
+    tmp_path: Path,
+) -> None:
+    """Symlink pointing to a blocked_paths target (via git index 120000 or OS symlink) is rejected."""
+    repo = tmp_path / "symlink_policy_repo"
+    base_sha = _init_repo_with_base_commit(repo)
+
+    # 1. Stage a 120000 git symlink `docs/ci-link` -> `../.github/workflows/ci.yml`
+    blob_proc = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=str(repo),
+        input="../.github/workflows/ci.yml",
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    blocked_link_blob = blob_proc.stdout.strip()
+    _git_test(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"120000,{blocked_link_blob},docs/ci-link",
+    )
+
+    blocked_res = apply_git_path_policy(
+        repo,
+        base_sha=base_sha,
+        blocked_paths=[".github/workflows/**"],
+        blocked_paths_action="fail",
+    )
+    assert blocked_res.ok is False
+    assert "docs/ci-link" in blocked_res.violations
+
+    # Remove the blocked symlink from index and test a safe symlink to `../src/app.py`
+    _git_test(repo, "rm", "--cached", "-f", "docs/ci-link")
+    safe_blob_proc = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=str(repo),
+        input="../src/app.py",
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    safe_link_blob = safe_blob_proc.stdout.strip()
+    _git_test(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"120000,{safe_link_blob},docs/app-link",
+    )
+    safe_res = apply_git_path_policy(
+        repo,
+        base_sha=base_sha,
+        blocked_paths=[".github/workflows/**"],
+        blocked_paths_action="fail",
+    )
+    assert safe_res.ok is True
+    assert safe_res.violations == []
+
+
+def test_oversized_prompt_spills_to_prompt_md_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prompts exceeding MAX_ARGV_PROMPT_BYTES spill to .gitseed/prompt.md and avoid E2BIG."""
+    from gitseed_runner.adapters import MAX_ARGV_PROMPT_BYTES
+    from gitseed_runner.gitsafe import INTERNAL_EXCLUDED_PATHS
+
+    assert ".gitseed/prompt.md" in INTERNAL_EXCLUDED_PATHS
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    ws = tmp_path / "large_prompt_ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    adapter = ClaudeCodeAdapter(
+        ctx={"runtime": "claude-code", "model": "claude-sonnet-4-5"},
+        working_dir=ws,
+        output_file=ws / ".gitseed" / "output.json",
+    )
+    huge_prompt = "P" * (MAX_ARGV_PROMPT_BYTES + 16_384)
+    observed_argv: list[str] = []
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return (b"ok\n", b"")
+
+        async def wait(self) -> int:
+            return 0
+
+    async def _fake_exec(*argv: Any, **_kwargs: Any) -> _FakeProc:
+        observed_argv.extend(str(a) for a in argv)
+        prompt_file = ws / ".gitseed" / "prompt.md"
+        assert prompt_file.is_file()
+        assert prompt_file.read_text(encoding="utf-8") == huge_prompt
+        return _FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    rc, _ = asyncio.run(adapter.run_command(huge_prompt, timeout=5.0))
+    assert rc == 0
+    assert observed_argv
+    assert all(len(arg.encode("utf-8")) < 4096 for arg in observed_argv)
+    assert any(".gitseed/prompt.md" in arg for arg in observed_argv)
+    assert not (ws / ".gitseed" / "prompt.md").exists()
+
+
+def test_standalone_schemas_fallback_validates_pull_request_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standalone runner schemas fallback rejects non-http(s) pull_request_url values."""
+    import importlib
+    import sys
+
+    import gitseed_runner.schemas as runner_schemas
+    from pydantic import ValidationError
+
+    monkeypatch.setitem(sys.modules, "gitseed_common", None)
+    monkeypatch.setitem(sys.modules, "gitseed_common.schemas", None)
+    monkeypatch.setitem(sys.modules, "gitseed_common.schemas.runner_output", None)
+    try:
+        reloaded = importlib.reload(runner_schemas)
+        valid = reloaded.validate_stage_output_data(
+            "execute",
+            {
+                "summary_comment": "Opened PR cleanly",
+                "pull_request_url": "https://github.com/acme/repo/pull/42",
+            },
+        )
+        assert valid["pull_request_url"] == "https://github.com/acme/repo/pull/42"
+
+        with pytest.raises(ValidationError, match="http:// or https://"):
+            reloaded.validate_stage_output_data(
+                "execute",
+                {
+                    "summary_comment": "Evil PR link",
+                    "pull_request_url": "javascript:alert(document.cookie)",
+                },
+            )
+    finally:
+        monkeypatch.undo()
+        importlib.reload(runner_schemas)
+

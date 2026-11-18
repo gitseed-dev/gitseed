@@ -682,6 +682,8 @@ async def test_attack_6_cli_credential_bundle_poisoning(monkeypatch: pytest.Monk
     run.agent_id = agent.id
     models_backend = _make_backend("bnd_inf_rt06", BackendType.INFERENCE)
     models_backend.provider = "anthropic"
+    models_backend.config = {"auth_mode": "cli_oauth"}
+    monkeypatch.setattr(runner_bridge.settings, "GITSEED_ALLOW_PERSONAL_CLI_OAUTH", True)
 
     session = _build_stateful_mock_session(
         run, seed, project, agent, models_backend=models_backend

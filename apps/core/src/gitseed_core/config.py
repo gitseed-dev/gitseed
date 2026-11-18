@@ -1,6 +1,6 @@
 import logging
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,12 +15,14 @@ _KNOWN_INSECURE_SECRET_KEYS = frozenset(
 _DEFAULT_LITELLM_MASTER_KEY = "sk-gitseed-litellm-master-key"
 _DEFAULT_LITELLM_SALT_KEY = "sk-gitseed-litellm-salt-key"
 _DEFAULT_POSTGRES_PASSWORD = "gitseed_password"
+_DEFAULT_VALKEY_PASSWORD = "gitseed_valkey_password"
 # Values that shipped as defaults in compose/.env.example/Helm or are trivially guessable.
 _KNOWN_WEAK_VALUES = frozenset(
     {
         _DEFAULT_LITELLM_MASTER_KEY,
         _DEFAULT_LITELLM_SALT_KEY,
         _DEFAULT_POSTGRES_PASSWORD,
+        _DEFAULT_VALKEY_PASSWORD,
         "postgres",
         "password",
         "changeme",
@@ -49,11 +51,30 @@ def insecure_secret_problems(cfg: Any) -> list[str]:
                 f"{_MIN_SECRET_KEY_LENGTH} characters"
             )
             break
+    receipt_key = str(getattr(cfg, "GITSEED_RECEIPT_SIGNING_KEY", "") or "").strip()
+    if receipt_key and (
+        receipt_key in _KNOWN_INSECURE_SECRET_KEYS or len(receipt_key) < _MIN_SECRET_KEY_LENGTH
+    ):
+        problems.append(
+            "GITSEED_RECEIPT_SIGNING_KEY must be a unique secret of at least "
+            f"{_MIN_SECRET_KEY_LENGTH} characters"
+        )
+    for raw_rcpt_prev in str(getattr(cfg, "GITSEED_RECEIPT_PREVIOUS_SIGNING_KEYS", "") or "").split(","):
+        rcpt_prev = raw_rcpt_prev.strip()
+        if rcpt_prev and (
+            rcpt_prev in _KNOWN_INSECURE_SECRET_KEYS or len(rcpt_prev) < _MIN_SECRET_KEY_LENGTH
+        ):
+            problems.append(
+                "Each key in GITSEED_RECEIPT_PREVIOUS_SIGNING_KEYS must be a unique secret of at least "
+                f"{_MIN_SECRET_KEY_LENGTH} characters"
+            )
+            break
     service_secrets = {
         "LITELLM_MASTER_KEY": (str(cfg.LITELLM_MASTER_KEY or "").strip(), True),
         # The salt key is only consumed by LiteLLM itself; validate it when present.
         "LITELLM_SALT_KEY": (str(cfg.LITELLM_SALT_KEY or "").strip(), False),
         "POSTGRES_PASSWORD": (str(cfg.POSTGRES_PASSWORD or "").strip(), True),
+        "VALKEY_PASSWORD": (str(getattr(cfg, "VALKEY_PASSWORD", "") or "").strip(), False),
     }
     for name, (value, required) in service_secrets.items():
         if not value:
@@ -64,6 +85,23 @@ def insecure_secret_problems(cfg: Any) -> list[str]:
             problems.append(
                 f"{name} uses a known default or is shorter than {_MIN_SERVICE_SECRET_LENGTH} characters"
             )
+    redis_url = str(getattr(cfg, "REDIS_URL", "") or "").strip()
+    redis_pass = ""
+    if redis_url:
+        try:
+            redis_pass = unquote(urlsplit(redis_url).password or "").strip()
+        except Exception:
+            redis_pass = ""
+    if _DEFAULT_VALKEY_PASSWORD in redis_url.lower() or (
+        redis_pass
+        and (
+            redis_pass.lower() in _KNOWN_WEAK_VALUES
+            or len(redis_pass) < _MIN_SERVICE_SECRET_LENGTH
+        )
+    ):
+        problems.append(
+            f"REDIS_URL uses a known default or password shorter than {_MIN_SERVICE_SECRET_LENGTH} characters"
+        )
     return problems
 
 
@@ -92,6 +130,8 @@ class Settings(BaseSettings):
     GITSEED_SECRET_PREVIOUS_KEYS: str = ""
     # Optional dedicated secret key for Ed25519 Governance Receipt signing (defaults to GITSEED_SECRET_KEY)
     GITSEED_RECEIPT_SIGNING_KEY: str = ""
+    # Optional comma-separated list of retired dedicated receipt signing keys for zero-downtime rotation
+    GITSEED_RECEIPT_PREVIOUS_SIGNING_KEYS: str = ""
     SESSION_COOKIE_NAME: str = "gitseed_session"
     SESSION_TTL_SECONDS: int = 604800  # 7 days
 
@@ -134,6 +174,9 @@ class Settings(BaseSettings):
     # ALLOW_SAME_ORIGIN_VSCODE=true).
     SANDBOX_ORIGIN: str = ""
     ALLOW_SAME_ORIGIN_VSCODE: bool = False
+    # Trust X-Forwarded-Host / X-Forwarded-Proto headers only when behind a trusted reverse proxy
+    # that overwrites client-supplied forwarding headers.
+    TRUST_PROXY_HEADERS: bool = False
 
     # Local git (bring-your-own workspace): comma-separated directory roots a project's
     # workspace_path must live under. Empty = the user's home directory.
@@ -210,6 +253,7 @@ class Settings(BaseSettings):
 
     # Valkey (Redis-compatible)
     VALKEY_PORT: int = 6379
+    VALKEY_PASSWORD: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Optional Mobile Push Relay (APNs / FCM bridge for GitSeed Mobile & Wearable clients)

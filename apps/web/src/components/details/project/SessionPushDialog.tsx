@@ -154,7 +154,7 @@ export const SessionPushDialog: React.FC<SessionPushDialogProps> = ({
                   {isExistingSeed ? draft.linked_seed_branch || draft.branch : draft.branch}
                   <span className="text-zinc-400 font-sans">· {draft.changed_files.length} changed file(s)</span>
                 </span>
-                <div className="max-h-32 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 p-2 font-mono text-[11px]">
+                <div className="max-h-32 overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 p-2 font-mono text-xs">
                   {draft.changed_files.length === 0 ? (
                     <span className="text-zinc-500">No changes found in the workspace.</span>
                   ) : (

@@ -61,7 +61,7 @@ logger = logging.getLogger("uvicorn.error")
 _PROVIDER_DEFAULT_MODEL: dict[str, str] = {
     "anthropic": "claude-sonnet-5-5",
     "openai": "gpt-5.4",
-    "google": "gemini-3.1-pro",
+    "google": "gemini-4-argon",
     "gemini": "gemini-4-argon",
     "antigravity": "gemini-4-argon",
     "xai": "grok-4.7",
@@ -135,6 +135,15 @@ async def _resolve_coordinator_model(
         accessible.append(b)
     if not accessible:
         return None, (agent.model if agent and agent.model else "default").strip() or "default"
+
+    # Prefer HTTP/LiteLLM-capable backends (API key / local Ollama / LM Studio) over
+    # Personal Mode CLI OAuth backends, whose subscription credentials never enter LiteLLM.
+    accessible.sort(
+        key=lambda b: (
+            1 if is_personal_mode_backend(b) else 0,
+            0 if bool((b.config or {}).get("is_sdlc_default")) else 1,
+        )
+    )
 
     requested = (agent.model if agent and agent.model else "default").strip()
     if requested and requested != "default":
@@ -762,6 +771,34 @@ async def chat_with_coordinator(
             model="none",
         )
 
+    if is_personal_mode_backend(backend):
+        personal_note = (
+            "Personal Mode CLI OAuth credentials run inside isolated stage and Live Agent Session "
+            "containers rather than the shared HTTP Model Gateway. Launch a Live Agent Session for "
+            "interactive CLI chat, or connect an API-key / local Ollama backend for live `@coordinator` responses."
+        )
+        if is_brainstorm:
+            fb_reply, fb_proposals = _build_fallback_brainstorm_proposals(
+                payload.messages,
+                focused_project,
+                referenced_files,
+                project_seeds,
+                payload.propose_seeds,
+                reason=personal_note,
+            )
+            return CoordinatorChatResponse(
+                reply=fb_reply,
+                agent_handle=handle,
+                model="personal-mode-cli",
+                proposed_seeds=fb_proposals,
+                referenced_files=referenced_files,
+            )
+        return CoordinatorChatResponse(
+            reply=f"> **Personal Mode (`cli_oauth`)**: {personal_note}\n\n{fallback_reply}",
+            agent_handle=handle,
+            model="personal-mode-cli",
+        )
+
     await sync_backend_to_litellm(backend, extra_models=[resolved_model])
 
     brainstorm_guidelines = ""
@@ -849,6 +886,7 @@ async def chat_with_coordinator(
     llm_timeout = 180.0 if is_brainstorm else 90.0
     failure_reason: str | None = None
     timed_out = False
+    gateway_rejected = False
     no_proposals_note = (
         "\n\n_No seed proposals came back this time. Click **Propose seeds** again, "
         "or describe the idea in a bit more detail._"
@@ -890,6 +928,8 @@ async def chat_with_coordinator(
                         )
                     failure_reason = "the model returned an empty reply"
             else:
+                if resp.status_code in (400, 401, 402, 403, 429):
+                    gateway_rejected = True
                 failure_reason = f"model gateway returned HTTP {resp.status_code}"
                 logger.warning(
                     "Coordinator chat via LiteLLM failed (HTTP %s, model %s): %s",
@@ -906,10 +946,10 @@ async def chat_with_coordinator(
         logger.warning("Coordinator chat via LiteLLM failed: %s", exc)
 
     # Direct upstream fallback if the LiteLLM proxy is unreachable or errored. Not after a
-    # timeout: the same model would just be slow again and double the wait.
+    # timeout or explicit gateway rejection (400/401/402/403/429 budget/rate-limit).
     try:
-        if timed_out:
-            raise RuntimeError("skipped after timeout")
+        if timed_out or gateway_rejected:
+            raise RuntimeError("skipped after timeout or gateway rejection")
         secrets_map = decrypt_secrets(backend.secrets_encrypted)
         api_key = secrets_map.get("api_key", "").strip()
         provider = backend.provider.lower()

@@ -35,6 +35,7 @@ import {
   resolveRunContextWindow,
 } from '../../../utils/format'
 import { safeExternalUrl } from '../../../utils/gitUrls'
+import { filterStageAgentsForStage } from '../../../utils/agents'
 import { STAGE_LABELS } from '../../../utils/seeds'
 import type {
   Approval,
@@ -467,13 +468,10 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
       .map((r) => r.agent_id)
       .filter((id): id is string => Boolean(id))
   )
-  const eligibleSecondOpinionAgents = agents.filter(
-    (a) =>
-      !a.archived_at &&
-      a.enabled &&
-      a.kind === 'stage' &&
-      !usedCycleAgentIds.has(a.id)
-  )
+  const eligibleSecondOpinionAgents = filterStageAgentsForStage(
+    agents.filter((a) => !a.archived_at && a.enabled && a.kind === 'stage'),
+    seed.stage
+  ).filter((a) => !usedCycleAgentIds.has(a.id))
   const canRequestSecondOpinion =
     isAwaitingApproval &&
     isMultiOpinionStage &&
@@ -1087,7 +1085,7 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
                         <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                           Run another agent on {stageLabel}
                         </span>
-                        <span className="text-[10px] font-mono text-zinc-500">
+                        <span className="text-xs font-mono text-zinc-500">
                           {nonCancelledCycleRuns.length}/3 runs
                         </span>
                       </div>
@@ -1104,7 +1102,7 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
                             <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 group-hover:text-teal-600 dark:group-hover:text-teal-400 truncate">
                               @{ag.handle}
                             </div>
-                            <div className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
+                            <div className="text-xs font-mono text-zinc-500 dark:text-zinc-400 truncate">
                               {ag.model} · {ag.runtime}
                             </div>
                           </div>
@@ -1215,7 +1213,7 @@ export const SeedGovernanceBanner: React.FC<SeedGovernanceBannerProps> = ({
                 Suggested Follow-Up Seeds ({suggestedFollowUps.length})
               </span>
             </span>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
               Split out to keep this seed within {currentPolicy?.max_tasks ?? 5} tasks
             </span>
           </div>

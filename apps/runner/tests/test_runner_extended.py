@@ -565,7 +565,7 @@ class TestAdaptersAndSynthesis:
             cmd = agy_adapter.build_command("Review code")
             assert cmd[0] == "agy"
             assert "--model" in cmd
-            assert cmd[cmd.index("--model") + 1] == "gemini-2.5-pro"
+            assert cmd[cmd.index("--model") + 1] == "gemini-4-argon"
 
             # GeminiAdapter backed only by Antigravity OAuth token should also use agy when available
             gem_adapter = GeminiAdapter(

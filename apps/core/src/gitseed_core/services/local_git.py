@@ -20,6 +20,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from gitseed_common.enums import (
     ActorType,
     BackendHealth,
     BackendType,
+    OrgRole,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
@@ -39,7 +41,7 @@ from gitseed_core.models.project import Project, ProjectBackend, ProjectReposito
 from gitseed_core.models.user import User
 from gitseed_core.services import projects as projects_service
 from gitseed_core.services.activity import record
-from gitseed_core.services.errors import Invalid, NotFound
+from gitseed_core.services.errors import Forbidden, Invalid, NotFound
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -116,7 +118,7 @@ def _allowed_workspace_roots() -> list[Path]:
         if cleaned:
             roots.append(Path(cleaned).expanduser().resolve())
     if not roots:
-        roots.append(Path.home().resolve())
+        roots.append((Path.home() / "GitSeed" / "workspaces").resolve())
     return roots
 
 
@@ -295,7 +297,7 @@ if [ -n "$WS_PATH" ] && [ -d "$WS_PATH/.git" ] && [ ! -L "$WS_PATH" ] && [ ! -L 
           -c core.fsmonitor=false \\
           -c core.symlinks=false \\
           -c core.sshCommand=false \\
-          -c protocol.file.allow=local \\
+          -c protocol.file.allow=user \\
           --git-dir="$WS_PATH/.git" \\
           --work-tree="$WS_PATH" \\
           "$@"
@@ -466,7 +468,7 @@ def sync_workspace_commits_to_bare_repo(
     safe_ws_prefix = [
         *_SAFE_WS_GIT_ARGS,
         "-c",
-        "protocol.file.allow=local",
+        "protocol.file.allow=user",
         f"--git-dir={ws_dir / '.git'}",
         f"--work-tree={ws_dir}",
     ]
@@ -489,6 +491,183 @@ def sync_workspace_commits_to_bare_repo(
         _run_git(
             [*safe_ws_prefix, "push", "--", str(bare_path), f"HEAD:refs/heads/{clean_branch}"],
         )
+
+
+def sync_bare_repo_to_workspace(
+    bare_path: Path, default_branch: str | None = None
+) -> bool:
+    """Fast-forward the linked local workspace folder when `default_branch` advances in `bare_path`.
+
+    Invoked directly after Smart HTTP `git-receive-pack` (which runs with `core.hooksPath=/dev/null`
+    for hook-injection defense), providing cross-platform (Linux, macOS, Windows) working-tree sync
+    with automatic stash/restore of uncommitted local changes.
+    """
+    if not (bare_path / "HEAD").exists():
+        return False
+
+    cfg_file = bare_path / "config"
+    if default_branch and default_branch.strip():
+        raw_branch = default_branch.strip()
+    else:
+        br_cfg = _run_git(
+            ["config", "--file", str(cfg_file), "--get", "gitseed.defaultBranch"]
+        )
+        raw_branch = br_cfg.stdout.strip() if br_cfg.returncode == 0 else "main"
+    try:
+        clean_branch = validate_refname(raw_branch or "main")
+    except InvalidGitInputError:
+        return False
+
+    ws_cfg = _run_git(
+        ["config", "--file", str(cfg_file), "--get", "gitseed.workspacePath"]
+    )
+    ws_raw = ws_cfg.stdout.strip() if ws_cfg.returncode == 0 else ""
+    if not ws_raw:
+        return False
+    if Path(ws_raw).expanduser().is_symlink():
+        return False
+    try:
+        ws_dir = validate_workspace_path(ws_raw)
+    except InvalidGitInputError:
+        return False
+    git_dir = ws_dir / ".git"
+    if (
+        ws_dir.is_symlink()
+        or git_dir.is_symlink()
+        or not git_dir.is_dir()
+        or not _workspace_git_config_is_safe(ws_dir)
+    ):
+        return False
+
+    bare_head = _run_git(
+        [
+            "-C",
+            str(bare_path),
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            f"refs/heads/{clean_branch}",
+        ]
+    )
+    if bare_head.returncode != 0:
+        return False
+    bare_sha = bare_head.stdout.strip()
+    if not bare_sha:
+        return False
+
+    lock_dir = bare_path / "gitseed-sync.lock"
+    acquired = False
+    for _ in range(50):
+        try:
+            lock_dir.mkdir(exist_ok=False)
+            with contextlib_suppress_oserror():
+                (lock_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+            acquired = True
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - lock_dir.stat().st_mtime
+                if age > 60.0:
+                    with contextlib_suppress_oserror():
+                        (lock_dir / "pid").unlink(missing_ok=True)
+                    with contextlib_suppress_oserror():
+                        lock_dir.rmdir()
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.05)
+    if not acquired:
+        return False
+
+    try:
+        safe_ws_prefix = [
+            *_SAFE_WS_GIT_ARGS,
+            "-c",
+            "protocol.file.allow=user",
+            f"--git-dir={git_dir}",
+            f"--work-tree={ws_dir}",
+        ]
+        fetch_res = _run_git(
+            [
+                *safe_ws_prefix,
+                "fetch",
+                "--",
+                str(bare_path),
+                f"refs/heads/{clean_branch}:refs/remotes/origin/{clean_branch}",
+            ]
+        )
+        if fetch_res.returncode != 0:
+            return False
+
+        cur_branch = _run_git([*safe_ws_prefix, "symbolic-ref", "--short", "HEAD"])
+        if cur_branch.returncode != 0 or cur_branch.stdout.strip() != clean_branch:
+            return False
+
+        ws_head = _run_git(
+            [*safe_ws_prefix, "rev-parse", "--verify", "--end-of-options", "HEAD"]
+        )
+        pre_head = ws_head.stdout.strip() if ws_head.returncode == 0 else ""
+        if pre_head == bare_sha:
+            return False
+
+        status_res = _run_git([*safe_ws_prefix, "status", "--porcelain"])
+        is_dirty = bool(status_res.stdout.strip())
+        if not is_dirty:
+            ff_res = _run_git(
+                [
+                    *safe_ws_prefix,
+                    "merge",
+                    "--ff-only",
+                    f"refs/remotes/origin/{clean_branch}",
+                ]
+            )
+            return ff_res.returncode == 0
+
+        stash_res = _run_git(
+            [
+                *safe_ws_prefix,
+                "-c",
+                "user.name=GitSeed Local",
+                "-c",
+                "user.email=local@gitseed.local",
+                "stash",
+                "push",
+                "-u",
+                "-m",
+                "gitseed-auto-sync",
+            ]
+        )
+        if stash_res.returncode != 0:
+            return False
+        ff_res = _run_git(
+            [
+                *safe_ws_prefix,
+                "merge",
+                "--ff-only",
+                f"refs/remotes/origin/{clean_branch}",
+            ]
+        )
+        if ff_res.returncode == 0:
+            pop_res = _run_git([*safe_ws_prefix, "stash", "pop"])
+            if pop_res.returncode != 0 and pre_head:
+                _run_git([*safe_ws_prefix, "reset", "--hard", pre_head])
+                _run_git([*safe_ws_prefix, "stash", "pop"])
+                return False
+            return True
+
+        _run_git([*safe_ws_prefix, "stash", "pop"])
+        return False
+    finally:
+        with contextlib_suppress_oserror():
+            (lock_dir / "pid").unlink(missing_ok=True)
+        with contextlib_suppress_oserror():
+            lock_dir.rmdir()
+
+
+def contextlib_suppress_oserror() -> Any:
+    from contextlib import suppress
+
+    return suppress(OSError)
 
 
 def _ensure_git_repo_initialized(
@@ -596,6 +775,7 @@ def ensure_local_bare_repo(
 
     _run_git(["-C", str(bare_path), "config", "http.receivepack", "true"])
     _run_git(["-C", str(bare_path), "config", "uploadpack.allowReachableSHA1InWant", "true"])
+    _run_git(["-C", str(bare_path), "config", "uploadpack.allowFilter", "true"])
     _run_git(["-C", str(bare_path), "config", "receive.denyCurrentBranch", "ignore"])
     _install_post_receive_hook(bare_path, default_branch=default_branch)
 
@@ -670,7 +850,10 @@ def ensure_local_bare_repo(
 
 
 async def ensure_local_git_backend(
-    session: AsyncSession, actor: User | None = None
+    session: AsyncSession,
+    actor: User | None = None,
+    *,
+    respect_disabled: bool = False,
 ) -> Backend:
     """Find or create the built-in `Local Git` backend."""
     stmt = (
@@ -684,6 +867,8 @@ async def ensure_local_git_backend(
     existing = (await session.execute(stmt)).scalars().first()
     current_root = str(local_repos_root())
     if existing is not None:
+        if respect_disabled and not existing.enabled:
+            return existing
         needs_update = (
             not existing.enabled
             or existing.health != BackendHealth.HEALTHY
@@ -744,33 +929,13 @@ async def maybe_auto_attach_existing_local_workspace(
         if has_seed is None:
             return None
 
-    backend = await ensure_local_git_backend(session, actor=None)
+    backend = await ensure_local_git_backend(session, actor=None, respect_disabled=True)
+    if not backend.enabled:
+        return None
     if getattr(project, "backends_restricted", False):
-        # Clear accidental backends_restricted when no Compute/Inference backends are explicitly bound
-        non_git_allow = (
-            await session.execute(
-                select(ProjectBackend.backend_id)
-                .join(Backend, col(Backend.id) == col(ProjectBackend.backend_id))
-                .where(
-                    ProjectBackend.project_id == project.id,
-                    col(Backend.type).in_([BackendType.COMPUTE, BackendType.INFERENCE]),
-                )
-                .limit(1)
-            )
-        ).first()
-        if non_git_allow is None:
-            project.backends_restricted = False
         existing_allow = await session.get(ProjectBackend, (project.id, backend.id))
         if existing_allow is None:
-            session.add(
-                ProjectBackend(
-                    project_id=project.id,
-                    backend_id=backend.id,
-                    created_by=project.created_by,
-                    created_at=datetime.now(UTC),
-                )
-            )
-            await session.flush()
+            return None
 
     ws_arg = str(candidate_ws) if candidate_ws.exists() else None
     _, resolved_ws = ensure_local_bare_repo(
@@ -792,13 +957,23 @@ async def maybe_auto_attach_existing_local_workspace(
     if existing_repo is not None:
         return existing_repo
 
+    existing_primary = (
+        await session.execute(
+            select(ProjectRepository).where(
+                ProjectRepository.project_id == project.id,
+                col(ProjectRepository.is_primary).is_(True),
+            )
+        )
+    ).scalars().first()
+    make_primary = existing_primary is None
+
     now = datetime.now(UTC)
     repo = ProjectRepository(
         project_id=project.id,
         backend_id=backend.id,
         full_name=full_name,
         default_branch="main",
-        is_primary=True,
+        is_primary=make_primary,
         created_by=project.created_by,
         created_at=now,
         updated_at=now,
@@ -815,7 +990,7 @@ async def maybe_auto_attach_existing_local_workspace(
             "repository_id": repo.id,
             "backend_id": backend.id,
             "full_name": repo.full_name,
-            "is_primary": True,
+            "is_primary": make_primary,
             "local": True,
             "workspace_path": resolved_ws,
         },
@@ -842,21 +1017,12 @@ async def init_project_local_repository(
 
     # Ensure the backend is allowed on this project when backends_restricted is enabled
     if project.backends_restricted:
-        non_git_allow = (
-            await session.execute(
-                select(ProjectBackend.backend_id)
-                .join(Backend, col(Backend.id) == col(ProjectBackend.backend_id))
-                .where(
-                    ProjectBackend.project_id == project.id,
-                    col(Backend.type).in_([BackendType.COMPUTE, BackendType.INFERENCE]),
-                )
-                .limit(1)
-            )
-        ).first()
-        if non_git_allow is None:
-            project.backends_restricted = False
         existing_allow = await session.get(ProjectBackend, (project.id, backend.id))
         if existing_allow is None:
+            if actor.org_role != OrgRole.ADMIN:
+                raise Forbidden(
+                    "Local Git backend is not in the project's allowed backends list"
+                )
             session.add(
                 ProjectBackend(
                     project_id=project.id,
@@ -867,9 +1033,19 @@ async def init_project_local_repository(
             )
             await session.flush()
 
-    default_ws = workspace_path
-    if not default_ws:
-        default_ws = str(default_project_workspace_path(project.slug))
+    canonical_default_ws = default_project_workspace_path(project.slug)
+    if workspace_path and workspace_path.strip():
+        validated_custom = validate_workspace_path(workspace_path)
+        if (
+            validated_custom != canonical_default_ws.resolve()
+            and actor.org_role != OrgRole.ADMIN
+        ):
+            raise Forbidden(
+                "Only organization administrators can attach custom local workspace paths"
+            )
+        default_ws = str(validated_custom)
+    else:
+        default_ws = str(canonical_default_ws)
 
     bare_path, resolved_ws = ensure_local_bare_repo(
         project.slug,
@@ -1165,6 +1341,8 @@ def get_local_seed_changes(
     seed_branch: str,
     merge_commit_sha: str | None = None,
     execute_commits: list[str] | None = None,
+    base_commit_sha: str | None = None,
+    is_merged: bool = False,
 ) -> dict[str, Any]:
     """Compute commits and file diffs for a Seed against a local bare repository."""
     default_branch = validate_refname(default_branch)
@@ -1173,6 +1351,8 @@ def get_local_seed_changes(
         merge_commit_sha = validate_refname(merge_commit_sha)
     if execute_commits:
         execute_commits = [validate_refname(c) for c in execute_commits]
+    if base_commit_sha:
+        base_commit_sha = validate_refname(base_commit_sha)
     bare_path = resolve_local_bare_repo_path(repo.full_name)
     commits: list[dict[str, Any]] = []
     files: list[dict[str, Any]] = []
@@ -1192,35 +1372,60 @@ def get_local_seed_changes(
     branch_Verify = _run_git(
         ["-C", str(bare_path), "rev-parse", "--verify", "--end-of-options", f"refs/heads/{seed_branch}"]
     )
-    target_range: str | None = None
-    diff_range: str | None = None
-
     if branch_Verify.returncode == 0:
         branch_exists = True
-        comparison_mode = "branch"
         head_commit_sha = branch_Verify.stdout.strip()
-        target_range = f"{default_branch}..{seed_branch}"
-        diff_range = f"{default_branch}...{seed_branch}"
-    elif merge_commit_sha:
+
+    candidate_ranges: list[tuple[str, str, str, str | None]] = []
+    if branch_exists and not is_merged:
+        candidate_ranges.append(
+            ("branch", f"{default_branch}..{seed_branch}", f"{default_branch}...{seed_branch}", head_commit_sha)
+        )
+    if merge_commit_sha:
         verify_merge = _run_git(
             ["-C", str(bare_path), "rev-parse", "--verify", "--end-of-options", f"{merge_commit_sha}^{{commit}}"]
         )
         if verify_merge.returncode == 0:
-            comparison_mode = "merge_commit"
-            head_commit_sha = verify_merge.stdout.strip()
-            target_range = f"{head_commit_sha}^1..{head_commit_sha}"
-            diff_range = f"{head_commit_sha}^1..{head_commit_sha}"
-    elif head_commit_sha:
+            m_sha = verify_merge.stdout.strip()
+            verify_parent = _run_git(
+                ["-C", str(bare_path), "rev-parse", "--verify", "--end-of-options", f"{m_sha}^1"]
+            )
+            if verify_parent.returncode == 0:
+                candidate_ranges.append(
+                    ("merged_commit", f"{m_sha}^1..{m_sha}", f"{m_sha}^1..{m_sha}", m_sha)
+                )
+    if head_commit_sha:
         verify_head = _run_git(
             ["-C", str(bare_path), "rev-parse", "--verify", "--end-of-options", f"{head_commit_sha}^{{commit}}"]
         )
         if verify_head.returncode == 0:
-            comparison_mode = "commit_range"
-            first_sha = (execute_commits or [head_commit_sha])[0]
-            target_range = f"{first_sha}^..{head_commit_sha}"
-            diff_range = f"{first_sha}^..{head_commit_sha}"
+            h_sha = verify_head.stdout.strip()
+            mode_name = "merged_commit" if (is_merged or merge_commit_sha) else "commit_range"
+            if base_commit_sha and base_commit_sha != h_sha:
+                verify_base = _run_git(
+                    ["-C", str(bare_path), "rev-parse", "--verify", "--end-of-options", f"{base_commit_sha}^{{commit}}"]
+                )
+                if verify_base.returncode == 0:
+                    b_sha = verify_base.stdout.strip()
+                    candidate_ranges.append(
+                        (mode_name, f"{b_sha}..{h_sha}", f"{b_sha}...{h_sha}", h_sha)
+                    )
+            first_sha = (execute_commits or [h_sha])[0]
+            verify_first_parent = _run_git(
+                ["-C", str(bare_path), "rev-parse", "--verify", "--end-of-options", f"{first_sha}^"]
+            )
+            if verify_first_parent.returncode == 0:
+                candidate_ranges.append(
+                    (mode_name, f"{first_sha}^..{h_sha}", f"{first_sha}^..{h_sha}", h_sha)
+                )
+    if branch_exists and is_merged:
+        candidate_ranges.append(
+            ("branch", f"{default_branch}..{seed_branch}", f"{default_branch}...{seed_branch}", head_commit_sha)
+        )
 
-    if target_range:
+    for cand_mode, target_range, diff_range, cand_head in candidate_ranges:
+        cand_commits: list[dict[str, Any]] = []
+        cand_files: list[dict[str, Any]] = []
         log_res = _run_git(
             [
                 "-C",
@@ -1239,7 +1444,7 @@ def get_local_seed_changes(
                 if len(parts) < 5:
                     continue
                 sha, short_sha, subj, author, date_iso = parts
-                commits.append(
+                cand_commits.append(
                     {
                         "sha": sha,
                         "short_sha": short_sha,
@@ -1250,7 +1455,6 @@ def get_local_seed_changes(
                     }
                 )
 
-    if diff_range:
         numstat_res = _run_git(["-C", str(bare_path), "diff", "--numstat", "--end-of-options", diff_range, "--"])
         status_res = _run_git(["-C", str(bare_path), "diff", "--name-status", "--end-of-options", diff_range, "--"])
         status_map: dict[str, tuple[str, str | None]] = {}
@@ -1274,7 +1478,6 @@ def get_local_seed_changes(
                 if len(cols) < 3:
                     continue
                 add_s, del_s, raw_path = cols[0], cols[1], cols[2]
-                # Handle rename format in numstat if present
                 clean_f = raw_path
                 st_kind, prev_fn = status_map.get(clean_f, ("modified", None))
                 patch_res = _run_git(
@@ -1283,7 +1486,7 @@ def get_local_seed_changes(
                 patch_text = patch_res.stdout if patch_res.returncode == 0 else None
                 if patch_text and len(patch_text) > 120_000:
                     patch_text = patch_text[:120_000]
-                files.append(
+                cand_files.append(
                     {
                         "path": clean_f,
                         "previous_path": prev_fn,
@@ -1294,9 +1497,19 @@ def get_local_seed_changes(
                         + (int(del_s) if del_s.isdigit() else 0),
                         "patch": patch_text,
                         "truncated": bool(patch_res.stdout and len(patch_res.stdout) > 120_000),
-                        "web_url": f"local://{repo.full_name}/blob/{head_commit_sha or default_branch}/{clean_f}",
+                        "web_url": f"local://{repo.full_name}/blob/{cand_head or default_branch}/{clean_f}",
                     }
                 )
+
+        if cand_files or cand_commits:
+            comparison_mode = cand_mode
+            if cand_head:
+                head_commit_sha = cand_head
+            commits = cand_commits
+            files = cand_files
+            break
+        if comparison_mode == "none" and cand_mode == "branch" and branch_exists:
+            comparison_mode = "branch"
 
     return {
         "branch_exists": branch_exists,

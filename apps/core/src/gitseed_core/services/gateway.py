@@ -79,19 +79,37 @@ def extract_enabled_model_ids(backend: Backend) -> list[str]:
     cfg = backend.config or {}
     models = cfg.get("models")
     result: list[str] = []
+    explicit_default: str | None = None
+    cfg_default = str(cfg.get("default_model") or "").strip()
+
     if isinstance(models, list):
         for item in models:
             if isinstance(item, dict) and item.get("enabled", True):
                 mid = str(item.get("id", "")).strip()
                 if mid:
                     result.append(mid)
+                    if explicit_default is None and bool(item.get("is_default")):
+                        explicit_default = mid
     if not result:
         disc = cfg.get("discovered_models")
         if isinstance(disc, list):
             for item in disc:
                 if isinstance(item, str) and item.strip():
                     result.append(item.strip())
+
+    target_default = explicit_default or cfg_default
+    if target_default and result:
+        target_low = target_default.lower()
+        matched = next((m for m in result if m.lower() == target_low), None)
+        if matched is not None and result[0] != matched:
+            result = [matched, *(m for m in result if m != matched)]
     return result
+
+
+def resolve_backend_default_model(backend: Backend) -> str | None:
+    """Return the configured default enabled model ID for an Inference backend, if any."""
+    enabled_ids = extract_enabled_model_ids(backend)
+    return enabled_ids[0] if enabled_ids else None
 
 
 def resolve_model_context_limit(
@@ -134,7 +152,30 @@ def resolve_model_context_limit(
     if not cleaned or cleaned == "default":
         return None
 
-    if any(tag in cleaned for tag in ("1m", "gemini-2.5", "gemini-2.0", "gemini-1.5", "gemini", "gpt-4.1")):
+    prov_low = str(getattr(backend, "provider", "") or "").strip().lower() if backend else ""
+    rt_low = (runtime or "").strip().lower()
+    if cleaned in ("pro", "flash", "flash_lite", "inherit") and (
+        (not rt_low and not prov_low)
+        or rt_low in ("antigravity", "gemini")
+        or prov_low in ("antigravity", "gemini", "google")
+    ):
+        return 1_000_000
+
+    if any(
+        tag in cleaned
+        for tag in (
+            "1m",
+            "gemini-2.5",
+            "gemini-2.0",
+            "gemini-1.5",
+            "gemini",
+            "gpt-4.1",
+            "grok-4.3",
+            "grok-4.5",
+            "grok-4.6",
+            "grok-4.7",
+        )
+    ):
         return 1_000_000
     if "gpt-5" in cleaned:
         return 400_000
@@ -868,7 +909,8 @@ async def resolve_models_backend_for_run(
             key=lambda b: (
                 preferred_providers.index(b.provider.lower())
                 if b.provider.lower() in preferred_providers
-                else (10 if b.provider.lower() == "litellm" else 20)
+                else (10 if b.provider.lower() == "litellm" else 20),
+                0 if bool((b.config or {}).get("is_sdlc_default")) else 1,
             )
         )
     else:
@@ -878,7 +920,8 @@ async def resolve_models_backend_for_run(
                 1
                 if str((b.config or {}).get("auth_mode") or "api_key").lower() == "cli_oauth"
                 and not decrypt_secrets(b.secrets_encrypted).get("api_key")
-                else 0
+                else 0,
+                0 if bool((b.config or {}).get("is_sdlc_default")) else 1,
             )
         )
 
@@ -901,16 +944,21 @@ async def resolve_models_backend_for_run(
             cfg = dict(b.config or {})
             cfg["discovered_models"] = probed
             if not cfg.get("models"):
-                cfg["models"] = [{"id": mid, "enabled": True} for mid in probed]
+                cfg["models"] = [
+                    {"id": mid, "enabled": True, "is_default": idx == 0}
+                    for idx, mid in enumerate(probed)
+                ]
+                cfg["default_model"] = probed[0]
             b.config = cfg
             await session.flush()
             return b, probed[0]
 
     default_by_provider = {
-        "anthropic": "claude-sonnet-4-5",
+        "anthropic": "claude-sonnet-5-5",
         "openai": "gpt-5.4",
-        "antigravity": "gemini-2.5-pro",
-        "gemini": "gemini-2.5-pro",
+        "antigravity": "gemini-4-argon",
+        "gemini": "gemini-4-argon",
+        "google": "gemini-4-argon",
         "xai": "grok-4.7",
         "ollama": "qwen2.5-coder:32b",
         "lmstudio": "local-model",
@@ -1014,8 +1062,7 @@ async def _compute_remaining_budget(
     if effective_checkpoint is not None:
         cp_val = Decimal(str(effective_checkpoint))
         approved_through = Decimal(str(seed.checkpoint_approved_through or 0))
-        next_cp = ((max(seed_spent, approved_through) // cp_val) + 1) * cp_val
-        if seed_spent >= cp_val and seed_spent > approved_through:
+        if seed_spent >= cp_val and seed_spent >= approved_through:
             return (
                 Decimal("0"),
                 f"Spend checkpoint ({effective_checkpoint}) reached",
@@ -1027,6 +1074,10 @@ async def _compute_remaining_budget(
                     "enforcement_detail": enf_detail,
                 },
             )
+        if approved_through > seed_spent:
+            next_cp = approved_through
+        else:
+            next_cp = ((seed_spent // cp_val) + 1) * cp_val
         candidates.append(next_cp - seed_spent)
 
     if project.monthly_budget is not None:
@@ -1731,6 +1782,18 @@ async def resolve_session_context_window(
         turns=turns,
     )
     if sid:
+        if len(_SESSION_CTX_CACHE) > 512:
+            stale_keys = [
+                k for k, (ts, _) in _SESSION_CTX_CACHE.items() if (now_mono - ts) > 60.0
+            ]
+            for k in stale_keys:
+                _SESSION_CTX_CACHE.pop(k, None)
+            if len(_SESSION_CTX_CACHE) > 512:
+                oldest_keys = sorted(
+                    _SESSION_CTX_CACHE, key=lambda k: _SESSION_CTX_CACHE[k][0]
+                )[:256]
+                for k in oldest_keys:
+                    _SESSION_CTX_CACHE.pop(k, None)
         _SESSION_CTX_CACHE[sid] = (now_mono, info)
     return info
 
@@ -1822,15 +1885,19 @@ async def finalize_run_litellm_key(
                             reported_spend = quant_sp
                 if reported_in_tokens > 0 or reported_out_tokens > 0:
                     break
-
-            if delete_key:
-                await client.post(
-                    f"{base_url}/key/delete",
-                    headers=_litellm_headers(),
-                    json={"keys": [virtual_key], "key_aliases": [f"run:{run.id}"]},
-                )
     except Exception as exc:
         logger.debug("LiteLLM finalize_run_litellm_key(%s) skipped: %s", run.id, exc)
+    finally:
+        if delete_key:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    await client.post(
+                        f"{base_url}/key/delete",
+                        headers=_litellm_headers(),
+                        json={"keys": [virtual_key], "key_aliases": [f"run:{run.id}"]},
+                    )
+            except Exception as exc:
+                logger.debug("LiteLLM finalize key delete(%s) skipped: %s", run.id, exc)
 
     if reported_in_tokens > 0 or reported_out_tokens > 0:
         run.input_tokens = reported_in_tokens

@@ -82,7 +82,7 @@ export const RepoClonePopover: React.FC<RepoClonePopoverProps> = ({
                     key={tab.id}
                     type="button"
                     onClick={() => setCloneTab(tab.id)}
-                    className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                    className={`px-2 py-0.5 rounded-md text-xs font-semibold transition cursor-pointer ${
                       cloneTab === tab.id
                         ? 'bg-white dark:bg-zinc-900 text-teal-700 dark:text-teal-300 shadow-2xs'
                         : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -209,7 +209,7 @@ export const CodeBlobViewer: React.FC<CodeBlobViewerProps> = ({
             {blobData?.name || currentPath.split('/').pop()}
           </span>
           {blobLanguage !== 'plain' && (
-            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono uppercase tracking-wider bg-zinc-200/80 dark:bg-zinc-700/80 text-zinc-600 dark:text-zinc-300">
+            <span className="px-2 py-0.5 rounded-md text-xs font-mono uppercase tracking-wider bg-zinc-200/80 dark:bg-zinc-700/80 text-zinc-600 dark:text-zinc-300">
               {blobLanguage}
             </span>
           )}

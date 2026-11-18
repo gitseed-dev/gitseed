@@ -6,6 +6,9 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import re
+import time
 import urllib.parse
 from datetime import datetime
 from typing import Any
@@ -21,6 +24,66 @@ from gitseed_core.services.git_browse import (
 )
 
 logger = logging.getLogger("uvicorn.error")
+
+_GITHUB_RATE_LIMIT_UNTIL: dict[str, float] = {}
+_PR_URL_NUMBER_RE = re.compile(
+    r"/(?:pull|pulls|merge_requests|pull-requests)/(\d+)(?:[/?#]|$)"
+)
+
+
+def extract_pr_number_from_url(url: str | None) -> int | None:
+    """Extract a numeric PR/MR ID from a GitHub, GitLab, or Bitbucket URL."""
+    if not url or not isinstance(url, str):
+        return None
+    m = _PR_URL_NUMBER_RE.search(url.strip())
+    if not m:
+        return None
+    try:
+        num = int(m.group(1))
+        return num if num > 0 else None
+    except ValueError:
+        return None
+
+
+def record_github_rate_limit(backend_id: str | None, resp: httpx.Response) -> bool:
+    """Record GitHub primary/secondary rate-limit reset window when HTTP 403/429 occurs."""
+    if resp.status_code not in (403, 429):
+        return False
+    remaining = resp.headers.get("x-ratelimit-remaining", "")
+    retry_after = resp.headers.get("retry-after", "")
+    is_rl = remaining == "0" or resp.status_code == 429
+    if not is_rl:
+        try:
+            body_text = resp.text[:400].lower()
+            if "rate limit" in body_text:
+                is_rl = True
+        except Exception:
+            pass
+    if not is_rl:
+        return False
+    if backend_id and "PYTEST_CURRENT_TEST" not in os.environ:
+        now_ts = time.time()
+        reset_hdr = resp.headers.get("x-ratelimit-reset", "")
+        until_ts = now_ts + 60.0
+        if retry_after.isdigit():
+            until_ts = max(until_ts, now_ts + min(int(retry_after), 3600))
+        elif reset_hdr.isdigit():
+            until_ts = max(now_ts + 15.0, min(float(int(reset_hdr)), now_ts + 3600.0))
+        _GITHUB_RATE_LIMIT_UNTIL[str(backend_id)] = until_ts
+    return True
+
+
+def is_github_rate_limited(backend_id: str | None) -> bool:
+    """Return True if `backend_id` is currently within a recorded GitHub REST rate-limit cooldown."""
+    if not backend_id or "PYTEST_CURRENT_TEST" in os.environ:
+        return False
+    until_ts = _GITHUB_RATE_LIMIT_UNTIL.get(str(backend_id))
+    if until_ts is None:
+        return False
+    if time.time() >= until_ts:
+        _GITHUB_RATE_LIMIT_UNTIL.pop(str(backend_id), None)
+        return False
+    return True
 
 
 def _bitbucket_api_base_and_headers(
@@ -226,6 +289,24 @@ async def ensure_provider_pull_request(
     return found_url
 
 
+def _github_pr_targets_branch(pr: dict[str, Any], expected_base: str) -> bool:
+    base_obj = pr.get("base") if isinstance(pr.get("base"), dict) else {}
+    base_ref = str(base_obj.get("ref") or "").strip()
+    return not base_ref or base_ref == expected_base
+
+
+def _gitlab_mr_targets_branch(mr: dict[str, Any], expected_base: str) -> bool:
+    target = str(mr.get("target_branch") or "").strip()
+    return not target or target == expected_base
+
+
+def _bitbucket_pr_targets_branch(pr: dict[str, Any], expected_base: str) -> bool:
+    dest = pr.get("destination") if isinstance(pr.get("destination"), dict) else {}
+    br = dest.get("branch") if isinstance(dest.get("branch"), dict) else {}
+    target = str(br.get("name") or "").strip()
+    return not target or target == expected_base
+
+
 async def inspect_github_pr_status(
     client: httpx.AsyncClient,
     *,
@@ -233,27 +314,83 @@ async def inspect_github_pr_status(
     repo: ProjectRepository,
     token: str,
     seed_branch: str,
+    pr_number_hint: int | None = None,
 ) -> dict[str, Any] | None:
     """Inspect a GitHub Pull Request's state, reviews, comments, and CI check-runs/statuses."""
+    if is_github_rate_limited(backend.id):
+        return None
     api_base, headers = _github_api_base_and_headers(backend.endpoint, token)
     owner = repo.full_name.split("/", 1)[0] if "/" in repo.full_name else ""
     head_filter = f"{owner}:{seed_branch}" if owner else seed_branch
+    expected_base = str(repo.default_branch or "main").strip() or "main"
     try:
-        resp = await client.get(
-            f"{api_base}/repos/{repo.full_name}/pulls",
-            headers=headers,
-            params={"state": "all", "head": head_filter, "per_page": 5},
-        )
-        if resp.status_code == 200 and isinstance(resp.json(), list):
-            pulls = [p for p in resp.json() if isinstance(p, dict)]
-            if pulls:
-                pr = pulls[0]
+        pr: dict[str, Any] | None = None
+        already_fetched_detail = False
+        if pr_number_hint:
+            direct_resp = await client.get(
+                f"{api_base}/repos/{repo.full_name}/pulls/{pr_number_hint}",
+                headers=headers,
+            )
+            record_github_rate_limit(backend.id, direct_resp)
+            if direct_resp.status_code == 200 and isinstance(direct_resp.json(), dict):
+                cand = direct_resp.json()
+                cand_head = cand.get("head") if isinstance(cand.get("head"), dict) else {}
+                cand_head_ref = str(cand_head.get("ref") or "").strip()
+                if (not cand_head_ref or cand_head_ref == seed_branch) and _github_pr_targets_branch(
+                    cand, expected_base
+                ):
+                    pr = cand
+                    already_fetched_detail = True
+
+        if pr is None:
+            if is_github_rate_limited(backend.id):
+                return None
+            resp = await client.get(
+                f"{api_base}/repos/{repo.full_name}/pulls",
+                headers=headers,
+                params={
+                    "state": "all",
+                    "head": head_filter,
+                    "base": expected_base,
+                    "per_page": 5,
+                },
+            )
+            record_github_rate_limit(backend.id, resp)
+            if resp.status_code == 200 and isinstance(resp.json(), list):
+                pulls = [
+                    p
+                    for p in resp.json()
+                    if isinstance(p, dict) and _github_pr_targets_branch(p, expected_base)
+                ]
+                if not pulls:
+                    fallback_resp = await client.get(
+                        f"{api_base}/repos/{repo.full_name}/pulls",
+                        headers=headers,
+                        params={"state": "all", "base": expected_base, "per_page": 25},
+                    )
+                    record_github_rate_limit(backend.id, fallback_resp)
+                    if fallback_resp.status_code == 200 and isinstance(fallback_resp.json(), list):
+                        pulls = [
+                            p
+                            for p in fallback_resp.json()
+                            if isinstance(p, dict)
+                            and isinstance(p.get("head"), dict)
+                            and str(p["head"].get("ref") or "").strip() == seed_branch
+                            and _github_pr_targets_branch(p, expected_base)
+                        ]
+                if pulls:
+                    pr = pulls[0]
+
+        if pr is not None:
+            if True:
                 pr_number = pr.get("number")
                 head_obj = pr.get("head") if isinstance(pr.get("head"), dict) else {}
                 head_sha = str(head_obj.get("sha") or "").strip()
 
                 tasks: list[Any] = [
-                    client.get(
+                    asyncio.sleep(0, result=None)
+                    if already_fetched_detail
+                    else client.get(
                         f"{api_base}/repos/{repo.full_name}/pulls/{pr_number}",
                         headers=headers,
                     ),
@@ -658,14 +795,24 @@ async def inspect_gitlab_mr_status(
     """Inspect a GitLab Merge Request's state, approvals, notes, and pipeline jobs."""
     api_base, headers = _gitlab_api_base_and_headers(backend.endpoint, token)
     enc_repo = urllib.parse.quote(repo.full_name, safe="")
+    expected_base = str(repo.default_branch or "main").strip() or "main"
     try:
         resp = await client.get(
             f"{api_base}/projects/{enc_repo}/merge_requests",
             headers=headers,
-            params={"state": "all", "source_branch": seed_branch, "per_page": 5},
+            params={
+                "state": "all",
+                "source_branch": seed_branch,
+                "target_branch": expected_base,
+                "per_page": 5,
+            },
         )
         if resp.status_code == 200 and isinstance(resp.json(), list):
-            mrs = [m for m in resp.json() if isinstance(m, dict)]
+            mrs = [
+                m
+                for m in resp.json()
+                if isinstance(m, dict) and _gitlab_mr_targets_branch(m, expected_base)
+            ]
             if mrs:
                 mr = mrs[0]
                 mr_iid = mr.get("iid")
@@ -990,18 +1137,23 @@ async def inspect_bitbucket_pr_status(
 ) -> dict[str, Any] | None:
     """Inspect a Bitbucket Pull Request's state, participants, comments, and commit build statuses."""
     api_base, headers = _bitbucket_api_base_and_headers(backend.endpoint, token)
+    expected_base = str(repo.default_branch or "main").strip() or "main"
     try:
         resp = await client.get(
             f"{api_base}/repositories/{repo.full_name}/pullrequests",
             headers=headers,
             params={
                 "state": "OPEN,MERGED,DECLINED",
-                "q": f'source.branch.name="{seed_branch}"',
+                "q": f'source.branch.name="{seed_branch}" AND destination.branch.name="{expected_base}"',
                 "pagelen": 5,
             },
         )
         if resp.status_code == 200 and isinstance(resp.json(), dict):
-            vals = [p for p in (resp.json().get("values") or []) if isinstance(p, dict)]
+            vals = [
+                p
+                for p in (resp.json().get("values") or [])
+                if isinstance(p, dict) and _bitbucket_pr_targets_branch(p, expected_base)
+            ]
             if vals:
                 bb_pr = vals[0]
                 pr_id = bb_pr.get("id")
@@ -1264,10 +1416,19 @@ async def merge_provider_pull_request(
             list_pr = await client.get(
                 f"{api_base}/repos/{repo.full_name}/pulls",
                 headers=headers,
-                params={"state": "all", "head": head_filter, "per_page": 5},
+                params={
+                    "state": "all",
+                    "head": head_filter,
+                    "base": default_branch,
+                    "per_page": 5,
+                },
             )
             if list_pr.status_code == 200 and isinstance(list_pr.json(), list):
-                pulls = [p for p in list_pr.json() if isinstance(p, dict)]
+                pulls = [
+                    p
+                    for p in list_pr.json()
+                    if isinstance(p, dict) and _github_pr_targets_branch(p, default_branch)
+                ]
                 if pulls:
                     pr = pulls[0]
                     pr_number = pr.get("number")
@@ -1281,12 +1442,16 @@ async def merge_provider_pull_request(
                             headers=headers,
                         )
                     elif str(pr.get("state") or "").lower() == "open" and pr_number:
+                        merge_body: dict[str, Any] = {
+                            "commit_title": f"Merge PR #{pr_number} ({merge_label}) into {default_branch}",
+                        }
+                        head_obj = pr.get("head")
+                        if isinstance(head_obj, dict) and isinstance(head_obj.get("sha"), str) and head_obj["sha"].strip():
+                            merge_body["sha"] = head_obj["sha"].strip()
                         pr_merge_resp = await client.put(
                             f"{api_base}/repos/{repo.full_name}/pulls/{pr_number}/merge",
                             headers=headers,
-                            json={
-                                "commit_title": f"Merge PR #{pr_number} ({merge_label}) into {default_branch}",
-                            },
+                            json=merge_body,
                         )
                         if pr_merge_resp.status_code in (200, 201) and isinstance(
                             pr_merge_resp.json(), dict
@@ -1299,7 +1464,7 @@ async def merge_provider_pull_request(
                                 f"{api_base}/repos/{repo.full_name}/git/refs/heads/{encoded_branch}",
                                 headers=headers,
                             )
-                        elif pr_merge_resp.status_code in (405, 409, 422):
+                        else:
                             err_msg = (
                                 pr_merge_resp.json().get("message")
                                 if isinstance(pr_merge_resp.json(), dict)
@@ -1356,10 +1521,19 @@ async def merge_provider_pull_request(
             list_mr = await client.get(
                 f"{api_base}/projects/{enc_repo}/merge_requests",
                 headers=headers,
-                params={"state": "all", "source_branch": seed_branch, "per_page": 5},
+                params={
+                    "state": "all",
+                    "source_branch": seed_branch,
+                    "target_branch": default_branch,
+                    "per_page": 5,
+                },
             )
             if list_mr.status_code == 200 and isinstance(list_mr.json(), list):
-                mrs = [m for m in list_mr.json() if isinstance(m, dict)]
+                mrs = [
+                    m
+                    for m in list_mr.json()
+                    if isinstance(m, dict) and _gitlab_mr_targets_branch(m, default_branch)
+                ]
                 if mrs:
                     mr = mrs[0]
                     mr_state = str(mr.get("state") or "").lower()
@@ -1409,12 +1583,16 @@ async def merge_provider_pull_request(
                 headers=headers,
                 params={
                     "state": "OPEN,MERGED",
-                    "q": f'source.branch.name="{seed_branch}"',
+                    "q": f'source.branch.name="{seed_branch}" AND destination.branch.name="{default_branch}"',
                     "pagelen": 5,
                 },
             )
             if list_bb.status_code == 200 and isinstance(list_bb.json(), dict):
-                vals = [p for p in (list_bb.json().get("values") or []) if isinstance(p, dict)]
+                vals = [
+                    p
+                    for p in (list_bb.json().get("values") or [])
+                    if isinstance(p, dict) and _bitbucket_pr_targets_branch(p, default_branch)
+                ]
                 if vals:
                     bb_pr = vals[0]
                     pr_id = bb_pr.get("id")

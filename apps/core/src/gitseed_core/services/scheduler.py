@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections import defaultdict, deque
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -51,6 +52,7 @@ from gitseed_core.security import create_run_token
 from gitseed_core.services import events as events_service
 from gitseed_core.services.activity import record
 from gitseed_core.services.compute_runtime import (
+    RunnerPreparePhaseError,
     _attach_run_log_tail,
     _demux_docker_logs,
     _docker_client_for_backend,
@@ -93,8 +95,9 @@ logger = logging.getLogger("uvicorn.error")
 _SCHEDULER_ADVISORY_LOCK_ID = 748291042
 _RUNNING_STATUSES = (RunStatus.STARTING, RunStatus.RUNNING)
 _LAST_EXTERNAL_PR_CHECK_AT: datetime | None = None
-_EXTERNAL_PR_CHECK_INTERVAL = timedelta(seconds=5)
+_EXTERNAL_PR_CHECK_INTERVAL = timedelta(seconds=45)
 _LAST_PR_READINESS_CACHE: dict[str, tuple[str | None, str | None, bool]] = {}
+_PR_LAST_CHECKED_AT: dict[str, float] = {}
 
 __all__ = [
     "_attach_run_log_tail",
@@ -382,7 +385,29 @@ async def _reconcile_seed_after_run_failure(
     is_second_opinion = isinstance(run.output, dict) and bool(
         run.output.get("second_opinion")
     )
-    if not is_second_opinion and run.attempt < pol.max_attempts:
+    recent_failures: int | None = None
+    try:
+        reset_ts = await _latest_stage_reset_timestamp(session, seed)
+        if reset_ts is None or isinstance(reset_ts, datetime):
+            fail_stmt = select(func.count()).select_from(Run).where(
+                Run.seed_id == seed.id,
+                Run.stage == run.stage,
+                col(Run.status).in_([RunStatus.FAILED, RunStatus.TIMED_OUT]),
+            )
+            if run.task_id is not None:
+                fail_stmt = fail_stmt.where(Run.task_id == run.task_id)
+            else:
+                fail_stmt = fail_stmt.where(col(Run.task_id).is_(None))
+            if reset_ts is not None:
+                fail_stmt = fail_stmt.where(col(Run.created_at) >= reset_ts)
+            raw_cnt = await session.scalar(fail_stmt)
+            if isinstance(raw_cnt, int) and not isinstance(raw_cnt, bool):
+                recent_failures = raw_cnt
+    except Exception:
+        recent_failures = None
+
+    effective_failures = recent_failures if recent_failures is not None else run.attempt
+    if not is_second_opinion and effective_failures < pol.max_attempts:
         seed.status = SeedStatus.QUEUED
         seed.blocked_reason = None
     else:
@@ -426,7 +451,11 @@ async def _cleanup_finished_run_containers(session: AsyncSession) -> None:
             _attach_run_log_tail(run, logs)
             await _stop_run_containers(backend, run.container_id, run.id)
             if seed is not None and seed.status in (SeedStatus.MERGED, SeedStatus.CLOSED):
-                await remove_docker_seed_workspace_volume(backend, seed.id)
+                await remove_docker_seed_workspace_volume(
+                    backend,
+                    seed.id,
+                    project_slug=project.slug if project is not None else None,
+                )
         run.container_id = None
         run.updated_at = datetime.now(UTC)
 
@@ -480,7 +509,7 @@ async def _project_has_connected_repository(
         from gitseed_core.services.local_git import maybe_auto_attach_existing_local_workspace
 
         attached = await maybe_auto_attach_existing_local_workspace(
-            session, project, create_if_missing=True
+            session, project, create_if_missing=False
         )
         if attached is not None:
             return True
@@ -939,13 +968,85 @@ async def _dispatch_queued_runs(session: AsyncSession) -> int:
                 await _stop_run_containers(compute_backend, None, locked_run.id)
             with suppress(Exception):
                 await session.refresh(locked_run)
+            with suppress(Exception):
+                await session.refresh(cand_seed)
+
+            broker_state: dict[str, Any] = (
+                dict(locked_run.output["_broker"])
+                if isinstance(locked_run.output, dict)
+                and isinstance(locked_run.output.get("_broker"), dict)
+                else {}
+            )
+            recorded_prep_error = str(broker_state.get("prepare_error") or "").strip()
+            is_prepare_failure = isinstance(exc, RunnerPreparePhaseError) or bool(
+                recorded_prep_error
+            )
+
+            if is_prepare_failure:
+                fail_now = datetime.now(UTC)
+                prep_log_tail = (
+                    exc.log_tail if isinstance(exc, RunnerPreparePhaseError) else ""
+                )
+                effective_err = recorded_prep_error
+                if not effective_err and prep_log_tail:
+                    err_lines = [
+                        ln.strip()
+                        for ln in prep_log_tail.splitlines()
+                        if "[ERROR]" in ln or "prepare:" in ln
+                    ]
+                    if err_lines:
+                        effective_err = err_lines[-1]
+                if not effective_err:
+                    effective_err = str(exc)
+
+                _attach_run_log_tail(locked_run, prep_log_tail or effective_err)
+                await finalize_run_litellm_key(
+                    session, locked_run, cand_seed, cand_project, delete_key=True
+                )
+                locked_run.status = RunStatus.FAILED
+                if locked_run.started_at is None:
+                    locked_run.started_at = now
+                locked_run.finished_at = fail_now
+                locked_run.exit_code = (
+                    exc.exit_code if isinstance(exc, RunnerPreparePhaseError) else 1
+                )
+                locked_run.error = effective_err
+                locked_run.updated_at = fail_now
+                if locked_run.stage == SeedStage.EXECUTE:
+                    await reset_orphaned_running_tasks(
+                        session, cand_seed.id, exclude_run_id=locked_run.id, now=fail_now
+                    )
+                if "does not exist on the remote repository" in effective_err:
+                    cand_seed.status = SeedStatus.FAILED
+                    cand_seed.blocked_reason = None
+                    cand_seed.updated_at = fail_now
+                else:
+                    await _reconcile_seed_after_run_failure(
+                        session, cand_seed, locked_run, pol, fail_now
+                    )
+                record(
+                    session,
+                    type=ActivityType.RUN_FAILED,
+                    actor_type=ActorType.SYSTEM,
+                    actor_id=None,
+                    project_id=cand_project.id,
+                    seed_id=cand_seed.id,
+                    data={
+                        "run_id": locked_run.id,
+                        "stage": str(locked_run.stage),
+                        "attempt": locked_run.attempt,
+                        "error": effective_err,
+                    },
+                )
+                await session.commit()
+                continue
+
             # Revert to queued if image/socket isn't ready yet so it doesn't burn attempts,
             # and reset single-use prepare flags in case prepare ran before spawn failed.
             if isinstance(locked_run.output, dict) and isinstance(
                 locked_run.output.get("_broker"), dict
             ):
                 updated_output = dict(locked_run.output)
-                broker_state = dict(updated_output["_broker"])
                 broker_state.pop("prepare_context_used", None)
                 broker_state.pop("prepare_complete_used", None)
                 updated_output["_broker"] = broker_state
@@ -976,7 +1077,6 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                 .where(
                     col(Seed.stage).in_(
                         [
-                            SeedStage.EXECUTE.value,
                             SeedStage.REVIEW.value,
                             SeedStage.MERGE.value,
                         ]
@@ -986,19 +1086,27 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                             SeedStatus.AWAITING_APPROVAL.value,
                             SeedStatus.QUEUED.value,
                             SeedStatus.RUNNING.value,
-                            SeedStatus.FAILED.value,
-                            SeedStatus.STOPPED.value,
                         ]
                     ),
                 )
                 .order_by(col(Seed.updated_at).desc())
-                .limit(15)
+                .limit(50)
             )
         )
         .scalars()
         .all()
     )
-    for seed in review_or_merge_seeds:
+    review_or_merge_seeds.sort(key=lambda s: _PR_LAST_CHECKED_AT.get(s.id, 0.0))
+    if len(_PR_LAST_CHECKED_AT) > 512 or len(_LAST_PR_READINESS_CACHE) > 512:
+        active_ids = {s.id for s in review_or_merge_seeds}
+        for cached_id in list(_PR_LAST_CHECKED_AT):
+            if cached_id not in active_ids:
+                _PR_LAST_CHECKED_AT.pop(cached_id, None)
+        for cached_id in list(_LAST_PR_READINESS_CACHE):
+            if cached_id not in active_ids:
+                _LAST_PR_READINESS_CACHE.pop(cached_id, None)
+    for seed in review_or_merge_seeds[:15]:
+        _PR_LAST_CHECKED_AT[seed.id] = time.monotonic()
         project = await session.get(Project, seed.project_id)
         if project is None or project.archived_at is not None:
             continue
@@ -1009,6 +1117,7 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                     session, seed, project, pr_info=pr_info
                 )
                 _LAST_PR_READINESS_CACHE.pop(seed.id, None)
+                _PR_LAST_CHECKED_AT.pop(seed.id, None)
                 continue
 
             if (
@@ -1034,20 +1143,21 @@ async def _reconcile_external_pr_merges(session: AsyncSession) -> None:
                 seed.stage == SeedStage.MERGE
                 and seed.status == SeedStatus.AWAITING_APPROVAL
                 and pr_info.get("state") == "open"
-                and pr_info.get("ready_to_merge", True)
+                and pr_info.get("ready_to_merge", False)
             ):
                 auto_merged = await maybe_auto_merge_ready_pr(
                     session, seed, project, pr_info=pr_info
                 )
                 if auto_merged:
                     _LAST_PR_READINESS_CACHE.pop(seed.id, None)
+                    _PR_LAST_CHECKED_AT.pop(seed.id, None)
                     continue
 
             if pr_info.get("pull_request_url") or pr_info.get("state"):
                 state_tuple = (
                     str(pr_info.get("ci_status") or "none"),
                     str(pr_info.get("review_status") or "none"),
-                    bool(pr_info.get("ready_to_merge", True)),
+                    bool(pr_info.get("ready_to_merge", False)),
                 )
                 prev_tuple = _LAST_PR_READINESS_CACHE.get(seed.id)
                 if prev_tuple != state_tuple:

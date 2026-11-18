@@ -65,7 +65,7 @@ jobs:
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
         if: ${{ steps.meta.outputs.push == 'true' }}
@@ -76,7 +76,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Control Plane image (ghcr.io/gitseed-dev/gitseed)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -91,7 +91,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=control-plane
 
       - name: Build Runner Sandbox image (ghcr.io/gitseed-dev/runner)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./apps/runner
           file: ./apps/runner/Dockerfile
@@ -141,22 +141,26 @@ jobs:
           fi
 
       - name: Lint & package Helm chart
+        env:
+          CHART_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           helm lint charts/gitseed
           helm template gitseed charts/gitseed >/dev/null
           mkdir -p dist-charts
           helm package charts/gitseed \
-            --version "${{ steps.meta.outputs.version }}" \
-            --app-version "${{ steps.meta.outputs.version }}" \
+            --version "${CHART_VERSION}" \
+            --app-version "${CHART_VERSION}" \
             --destination dist-charts
 
       - name: Push Helm chart to GHCR OCI registry
         if: ${{ steps.meta.outputs.push == 'true' }}
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+          CHART_VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          echo "${GHCR_TOKEN}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm push "dist-charts/gitseed-${{ steps.meta.outputs.version }}.tgz" oci://ghcr.io/gitseed-dev/charts
+          echo "${GHCR_TOKEN}" | helm registry login ghcr.io -u "${GHCR_ACTOR}" --password-stdin
+          helm push "dist-charts/gitseed-${CHART_VERSION}.tgz" oci://ghcr.io/gitseed-dev/charts
 
   python-build:
     name: Build Python Packages (common, cli, mcp)
@@ -167,7 +171,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
 
@@ -259,7 +263,7 @@ jobs:
       contents: read
     steps:
       - name: Download built Python distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-dist
           path: dist

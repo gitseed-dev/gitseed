@@ -13,7 +13,7 @@ import subprocess
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from gitseed_common.enums import OrgRole, ProjectRole, ProjectVisibility
-from sqlmodel import select
+from sqlmodel import col, select
 
 from gitseed_core.api.deps import DBSession, verify_csrf
 from gitseed_core.config import settings
@@ -27,6 +27,7 @@ from gitseed_core.services.local_git import (
     ensure_local_bare_repo,
     extract_repo_slug,
     resolve_local_bare_repo_path,
+    sync_bare_repo_to_workspace,
     sync_workspace_commits_to_bare_repo,
 )
 
@@ -103,8 +104,15 @@ async def _check_user_repo_access(
     require_write: bool,
 ) -> None:
     slug = extract_repo_slug(repo_slug)
-    proj = (await session.execute(select(Project).where(Project.slug == slug))).scalars().first()
-    if proj is None:
+    proj = (
+        await session.execute(
+            select(Project).where(
+                Project.slug == slug,
+                col(Project.archived_at).is_(None),
+            )
+        )
+    ).scalars().first()
+    if proj is None or getattr(proj, "archived_at", None) is not None:
         raise Forbidden(f"Local Git repository '{slug}' is not bound to an accessible project")
     if user.org_role == OrgRole.ADMIN:
         return
@@ -268,6 +276,8 @@ async def local_git_rpc(
         check=False,
         timeout=120,
     )
+    if service == "git-receive-pack" and proc.returncode == 0:
+        await asyncio.to_thread(sync_bare_repo_to_workspace, bare_path)
     return Response(
         content=proc.stdout,
         media_type=f"application/x-{service}-result",

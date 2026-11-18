@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -27,13 +28,77 @@ from gitseed_common.schemas import (
 )
 from pydantic import BaseModel
 from rich.console import Console
-from rich.markup import escape
+from rich.markup import escape as _rich_escape
 from rich.panel import Panel
+from rich.segment import Segment
 from rich.syntax import Syntax
 from rich.table import Table
 
-console = Console()
-err_console = Console(stderr=True)
+# ── Terminal sanitization ─────────────────────────────────────────────
+#
+# Run logs, specs, plans, diffs, comments and PR text are produced by untrusted
+# agents. Writing them verbatim to a terminal lets an attacker inject escape
+# sequences (OSC 52 clipboard writes, OSC 8 hyperlinks, screen clears, cursor
+# movement that spoofs "approved" output, ...). Rich's ``markup=False`` and
+# ``Text`` only strip a handful of C0 controls, never ESC, so everything that
+# reaches the terminal goes through :func:`sanitize_terminal`.
+
+# String-type sequences: OSC (ESC ]), DCS (ESC P), SOS (ESC X), PM (ESC ^),
+# APC (ESC _). Payload runs until BEL / ST (ESC \) or the next ESC / end of text
+# (an unterminated sequence would otherwise swallow following output).
+_ANSI_STRING_SEQ = r"\x1b[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?"
+# CSI: ESC [ params intermediates final.
+_ANSI_CSI_SEQ = r"\x1b\[[0-?]*[ -/]*[@-~]?"
+# Other two-byte (or nF) escape sequences, e.g. ESC c (reset), ESC 7, ESC ( B.
+_ANSI_OTHER_SEQ = r"\x1b[ -/]*[0-~]"
+_TERMINAL_SEQ_RE = re.compile(f"{_ANSI_STRING_SEQ}|{_ANSI_CSI_SEQ}|{_ANSI_OTHER_SEQ}")
+# Remaining C0 controls (except \t and \n), DEL, lone ESC, and C1 controls (0x80-0x9f,
+# which include the 8-bit CSI/OSC/DCS introducers).
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def sanitize_terminal(s: str) -> str:
+    """Strip terminal escape sequences and control characters from untrusted text.
+
+    Keeps ``\\n`` and ``\\t``; normalizes ``\\r\\n`` to ``\\n`` and drops bare
+    carriage returns (which could overwrite previously printed lines).
+    """
+    if not s:
+        return s
+    s = s.replace("\r\n", "\n")
+    s = _TERMINAL_SEQ_RE.sub("", s)
+    return _CONTROL_CHARS_RE.sub("", s)
+
+
+def escape(markup: str) -> str:
+    """Escape Rich markup *and* strip terminal control sequences."""
+    return _rich_escape(sanitize_terminal(markup))
+
+
+def _sanitize_segments(buffer: Iterable[Segment]) -> Iterator[Segment]:
+    for segment in buffer:
+        text, style, control = segment
+        if control:
+            # Rich-generated control segments (cursor movement for Live, etc.).
+            yield segment
+        else:
+            yield Segment(sanitize_terminal(text), style, control)
+
+
+class SafeConsole(Console):
+    """Rich console that sanitizes every rendered (non-control) text segment.
+
+    Defense in depth: even renderables built directly from untrusted strings
+    (``Text``, ``Syntax``, table cells, ``markup=False`` prints) cannot emit raw
+    escape sequences to the terminal.
+    """
+
+    def _render_buffer(self, buffer: Iterable[Segment]) -> str:
+        return super()._render_buffer(_sanitize_segments(buffer))
+
+
+console = SafeConsole()
+err_console = SafeConsole(stderr=True)
 
 
 def _add_plain_row(table: Table, *cells: str) -> None:
@@ -610,11 +675,11 @@ def describe_seed(
 
     if seed.description:
         console.print("\n[bold cyan]## Summary[/bold cyan]")
-        console.print(seed.description.strip(), markup=False, highlight=False)
+        console.print(sanitize_terminal(seed.description.strip()), markup=False, highlight=False)
 
     if seed.specification:
         console.print("\n[bold cyan]## Specification[/bold cyan]")
-        console.print(seed.specification.strip(), markup=False, highlight=False)
+        console.print(sanitize_terminal(seed.specification.strip()), markup=False, highlight=False)
 
     if seed.acceptance_criteria:
         console.print("\n[bold cyan]## Acceptance Criteria[/bold cyan]")
@@ -623,7 +688,7 @@ def describe_seed(
 
     if seed.plan:
         console.print("\n[bold cyan]## Plan[/bold cyan]")
-        console.print(seed.plan.strip(), markup=False, highlight=False)
+        console.print(sanitize_terminal(seed.plan.strip()), markup=False, highlight=False)
 
     if tasks:
         console.print(f"\n[bold cyan]## Tasks ({len(tasks)})[/bold cyan]")
@@ -684,4 +749,4 @@ def render_seed_diff(changes: SeedChangesResponse) -> None:
             f"([green]+{f.additions}[/green]/[red]-{f.deletions}[/red])"
         )
         if f.patch:
-            console.print(Syntax(f.patch, "diff", theme="ansi_dark"))
+            console.print(Syntax(sanitize_terminal(f.patch), "diff", theme="ansi_dark"))

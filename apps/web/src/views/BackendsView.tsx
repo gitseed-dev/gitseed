@@ -448,7 +448,7 @@ export const BackendsView: React.FC = () => {
                 role="menu"
                 className="absolute right-0 mt-2 w-72 rounded-2xl border border-zinc-200 dark:border-zinc-700/80 bg-white dark:bg-zinc-900 shadow-xl dark:shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150"
               >
-                <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                <div className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                   Select Backend Type
                 </div>
                 <div className="flex flex-col gap-0.5">
@@ -664,7 +664,7 @@ export const BackendsView: React.FC = () => {
                           </span>
                         </div>
                         <span
-                          className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500 truncate pl-[23px]"
+                          className="text-xs font-mono text-zinc-400 dark:text-zinc-500 truncate pl-[23px]"
                           title={cleanEndpoint}
                         >
                           {cleanEndpoint}
@@ -718,7 +718,7 @@ export const BackendsView: React.FC = () => {
                     <td className="py-3 px-3 whitespace-nowrap">
                       {access.isRestrictedToOne || access.isRestrictedEmpty ? (
                         <Tooltip content={access.tooltip} placement="top">
-                          <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25 cursor-default">
+                          <span className="inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/25 cursor-default">
                             <ShieldAlert
                               size={11}
                               className="shrink-0 text-amber-600 dark:text-amber-400"

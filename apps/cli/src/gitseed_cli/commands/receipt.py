@@ -11,12 +11,11 @@ import typer
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
 from gitseed_cli.config import get_opts, make_client
-from gitseed_cli.formatting import console, dump_json, err_console
+from gitseed_cli.formatting import console, dump_json, err_console, escape, sanitize_terminal
 
 receipt_app = typer.Typer(
     name="receipt",
@@ -138,7 +137,7 @@ def receipt_get(
         return
 
     if opts.output == "md" and envelope.markdown:
-        typer.echo(envelope.markdown)
+        typer.echo(sanitize_terminal(envelope.markdown))
         return
 
     if opts.output == "json":

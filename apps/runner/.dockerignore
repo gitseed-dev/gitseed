@@ -1,0 +1,23 @@
+# Python caches & virtual environments
+__pycache__
+**/__pycache__
+*.py[cod]
+*$py.class
+*.egg-info
+.venv
+venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Tests & local secrets (not needed in production runner image)
+tests
+.env
+.env.*
+*.pem
+*.key
+*.cert
+*.log
+.DS_Store
+Thumbs.db
+

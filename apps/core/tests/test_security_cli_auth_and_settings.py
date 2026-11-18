@@ -630,10 +630,12 @@ class TestCoreHardeningW2:
         assert "LITELLM_MASTER_KEY:?" in compose_text
         assert "LITELLM_SALT_KEY:?" in compose_text
         assert "POSTGRES_PASSWORD:?" in compose_text
+        assert "VALKEY_PASSWORD:?" in compose_text
+        assert "--requirepass" in compose_text
 
         # 2. Docker socket proxy and internal runner/sandbox networks configured
         assert "docker-socket-proxy:" in compose_text
-        assert "tecnativa/docker-socket-proxy:v0.3.0" in compose_text
+        assert "tecnativa/docker-socket-proxy:0.3.0" in compose_text
         assert "tcp://docker-socket-proxy:2375" in compose_text
         assert "egress-proxy:" in compose_text
         assert "http://egress-proxy:3128" in compose_text
@@ -681,6 +683,7 @@ class TestCoreHardeningW2:
         assert "gitseed-dev-secret-key-change-in-production" not in env_content_1
         assert "sk-gitseed-litellm-master-key" not in env_content_1
         assert "gitseed_password" not in env_content_1
+        assert "gitseed_valkey_password" not in env_content_1
 
         # Re-running init.sh must NOT overwrite already-generated custom secrets
         res2 = subprocess.run(

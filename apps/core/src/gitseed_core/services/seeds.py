@@ -902,7 +902,7 @@ async def advance_seed(
 
     await session.commit()
 
-    if is_fast_track_to_execute and old_status in (SeedStatus.RUNNING, SeedStatus.QUEUED):
+    if old_status in (SeedStatus.RUNNING, SeedStatus.QUEUED):
         from gitseed_core.services.runs import cancel_run
 
         active_runs_res = await session.execute(
@@ -978,6 +978,7 @@ async def close_seed(
     if seed.status == SeedStatus.MERGED:
         raise Invalid("Cannot close a seed that has already been merged")
 
+    old_status = seed.status
     now = datetime.now(UTC)
     seed.status = SeedStatus.CLOSED
     seed.blocked_reason = None
@@ -995,6 +996,28 @@ async def close_seed(
         data={"stage": str(seed.stage)},
     )
     await session.commit()
+
+    if old_status in (SeedStatus.RUNNING, SeedStatus.QUEUED):
+        from gitseed_core.services.runs import cancel_run
+
+        active_runs_res = await session.execute(
+            select(Run).where(
+                Run.seed_id == seed.id,
+                col(Run.status).in_([s.value for s in RUN_ACTIVE_STATUSES]),
+            )
+        )
+        scalars_fn = getattr(active_runs_res, "scalars", None)
+        if callable(scalars_fn):
+            scalars_obj = scalars_fn()
+            if not inspect.iscoroutine(scalars_obj):
+                all_fn = getattr(scalars_obj, "all", None)
+                if callable(all_fn):
+                    rows = all_fn()
+                    if isinstance(rows, (list, tuple)):
+                        for r in rows:
+                            if isinstance(r, Run):
+                                await cancel_run(session, actor, r.id)
+
     await session.refresh(seed)
     return seed
 
@@ -1925,6 +1948,10 @@ async def create_approval(
         if len(approvers) >= pol.min_approvers:
             if seed.stage == SeedStage.MERGE:
                 merge_sha = await merge_seed_branch_into_default(session, seed)
+                if not merge_sha:
+                    raise Conflict(
+                        "Failed to merge seed branch into default branch; check PR mergeability and repository credentials."
+                    )
                 seed.status = SeedStatus.MERGED
                 seed.blocked_reason = None
                 seed.merged_at = now
@@ -1932,6 +1959,22 @@ async def create_approval(
                 merged_data: dict[str, Any] = {"approval_id": approval.id}
                 if merge_sha:
                     merged_data["merge_commit_sha"] = merge_sha
+                    latest_merge_run = (
+                        await session.execute(
+                            select(Run)
+                            .where(
+                                Run.seed_id == seed.id,
+                                Run.stage == SeedStage.MERGE,
+                            )
+                            .order_by(col(Run.created_at).desc())
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    if latest_merge_run is not None:
+                        latest_merge_run.output = {
+                            **(latest_merge_run.output if isinstance(latest_merge_run.output, dict) else {}),
+                            "merge_commit_sha": merge_sha,
+                        }
                 record(
                     session,
                     type=ActivityType.SEED_MERGED,
@@ -2300,10 +2343,14 @@ async def create_comment(
                     or actor_role == ProjectRole.MAINTAINER
                 )
                 if can_request_changes:
+                    original_stage = seed.stage
+                    approval_snapshot = await build_stage_approval_snapshot(
+                        session, seed, original_stage
+                    )
                     approval = Approval(
                         seed_id=seed.id,
-                        stage=seed.stage,
-                        snapshot=_build_stage_snapshot(seed),
+                        stage=original_stage,
+                        snapshot=approval_snapshot,
                         decision=ApprovalDecision.CHANGES_REQUESTED,
                         comment=cleaned_body,
                         automatic=False,
@@ -2313,9 +2360,6 @@ async def create_comment(
                     )
                     session.add(approval)
                     await session.flush()
-                    seed.status = SeedStatus.QUEUED
-                    seed.blocked_reason = None
-                    seed.updated_at = now
                     record(
                         session,
                         type=ActivityType.APPROVAL_CHANGES_REQUESTED,
@@ -2324,14 +2368,35 @@ async def create_comment(
                         project_id=seed.project_id,
                         seed_id=seed.id,
                         data={
-                            "stage": str(seed.stage),
+                            "stage": str(original_stage),
                             "approval_id": approval.id,
                             "via": "comment_mention",
                         },
                     )
+                    if original_stage in (SeedStage.REVIEW, SeedStage.MERGE):
+                        review_summary, review_findings = (
+                            await _extract_latest_review_feedback(session, seed.id)
+                        )
+                        await create_remediation_task_and_return_to_execute(
+                            session,
+                            seed,
+                            from_stage=original_stage,
+                            operator_comment=cleaned_body,
+                            review_summary=review_summary,
+                            review_findings=review_findings,
+                            actor_type=ActorType.USER,
+                            actor_id=actor.id,
+                            now=now,
+                        )
+                    else:
+                        seed.status = SeedStatus.QUEUED
+                        seed.blocked_reason = None
+                        seed.stage_entered_at = now
+                        seed.updated_at = now
             elif seed.status == SeedStatus.FAILED:
                 seed.status = SeedStatus.QUEUED
                 seed.blocked_reason = None
+                seed.stage_entered_at = now
                 seed.updated_at = now
 
     await session.commit()

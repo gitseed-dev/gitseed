@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   Code2,
+  Columns2,
   Copy,
   ExternalLink,
   FlaskConical,
@@ -214,25 +215,25 @@ const SessionMoreMenu: React.FC<SessionMoreMenuProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowCheckout(false)}
-                  className="text-[11px] font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 cursor-pointer"
+                  className="text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 cursor-pointer"
                 >
                   ← Back
                 </button>
               </div>
-              <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
                 Check out <code className="font-mono text-teal-600 dark:text-teal-400">{branch}</code> in your own IDE:
               </span>
 
               <div className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-zinc-500">
+                <span className="text-xs font-medium text-zinc-500">
                   Existing local clone
                 </span>
-                <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 font-mono text-[11px] text-zinc-800 dark:text-zinc-200">
+                <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 font-mono text-xs text-zinc-800 dark:text-zinc-200">
                   <span className="truncate select-all">{checkoutCmd}</span>
                   <button
                     type="button"
                     onClick={() => copyText('checkout', checkoutCmd)}
-                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-[11px] font-sans font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer"
+                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-sans font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer"
                   >
                     {copiedKey === 'checkout' ? <Check size={11} /> : <Copy size={11} />}
                     {copiedKey === 'checkout' ? 'Copied' : 'Copy'}
@@ -242,15 +243,15 @@ const SessionMoreMenu: React.FC<SessionMoreMenuProps> = ({
 
               {cloneCmd && (
                 <div className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium text-zinc-500">
+                  <span className="text-xs font-medium text-zinc-500">
                     Fresh clone
                   </span>
-                  <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 font-mono text-[11px] text-zinc-800 dark:text-zinc-200">
+                  <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 font-mono text-xs text-zinc-800 dark:text-zinc-200">
                     <span className="truncate select-all">{cloneCmd}</span>
                     <button
                       type="button"
                       onClick={() => copyText('clone', cloneCmd)}
-                      className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-[11px] font-sans font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer"
+                      className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-xs font-sans font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer"
                     >
                       {copiedKey === 'clone' ? <Check size={11} /> : <Copy size={11} />}
                       {copiedKey === 'clone' ? 'Copied' : 'Copy'}
@@ -445,18 +446,29 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const initialPane = new URLSearchParams(window.location.search).get('pane')
-  const initialActivePane: 'code' | 'vscode' | 'terminal' | 'artifacts' =
+  const initialActivePane: 'code' | 'split' | 'vscode' | 'terminal' | 'artifacts' =
     initialPane === 'code'
       ? 'code'
-      : initialPane === 'vscode' && canContribute
-        ? 'vscode'
-        : 'terminal'
-  const [activePane, setActivePane] = useState<'code' | 'vscode' | 'terminal' | 'artifacts'>(
+      : initialPane === 'split'
+        ? 'split'
+        : initialPane === 'vscode' && canContribute
+          ? 'vscode'
+          : 'terminal'
+  const [activePane, setActivePane] = useState<'code' | 'split' | 'vscode' | 'terminal' | 'artifacts'>(
     initialActivePane
   )
+  const [splitRatio, setSplitRatio] = useState<number>(() => {
+    try {
+      const saved = Number(window.localStorage.getItem('gitseed.sessionDetail.splitRatio'))
+      if (Number.isFinite(saved) && saved >= 25 && saved <= 75) return saved
+    } catch {
+      /* ignore storage errors */
+    }
+    return 48
+  })
   const [showCodeTerminal, setShowCodeTerminal] = useState<boolean>(false)
   const [terminalMounted, setTerminalMounted] = useState<boolean>(
-    initialActivePane === 'terminal'
+    initialActivePane === 'terminal' || initialActivePane === 'split'
   )
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false)
   const [paneInitialized, setPaneInitialized] = useState(false)
@@ -467,6 +479,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
   const [, setTick] = useState(0)
   const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
   const workspaceRef = useRef<HTMLDivElement | null>(null)
+  const splitDragCleanupRef = useRef<(() => void) | null>(null)
   const terminalRef = useRef<SessionTerminalHandle | null>(null)
 
   useEffect(() => {
@@ -475,10 +488,54 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
     vscodeContainerIdRef.current = null
   }, [sessionId])
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('gitseed.sessionDetail.splitRatio', String(splitRatio))
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [splitRatio])
+
+  useEffect(() => {
+    return () => {
+      splitDragCleanupRef.current?.()
+    }
+  }, [])
+
+  const onSplitDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    splitDragCleanupRef.current?.()
+    const container = workspaceRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0) return
+
+    const onMove = (ev: MouseEvent) => {
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100
+      const clamped = Math.min(75, Math.max(25, Math.round(pct * 10) / 10))
+      setSplitRatio(clamped)
+    }
+    const cleanup = () => {
+      splitDragCleanupRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+    }
+    const onUp = () => {
+      cleanup()
+    }
+    splitDragCleanupRef.current = cleanup
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
   const showCode = activePane === 'code'
+  const showSplit = activePane === 'split'
   const showVsCode = activePane === 'vscode'
   const showArtifacts = activePane === 'artifacts'
-  const showTerminal = activePane === 'terminal' || (activePane === 'code' && showCodeTerminal)
+  const showTerminal =
+    activePane === 'terminal' || activePane === 'split' || (activePane === 'code' && showCodeTerminal)
 
   useEffect(() => {
     const t = window.setInterval(() => setTick((x) => x + 1), 30_000)
@@ -600,7 +657,14 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
       projectId: project.id,
       title,
       agentHandle: agentSession?.agent_handle,
-      pane: activePane === 'vscode' ? 'vscode' : activePane === 'code' ? 'code' : 'terminal',
+      pane:
+        activePane === 'vscode'
+          ? 'vscode'
+          : activePane === 'split'
+            ? 'split'
+            : activePane === 'code'
+              ? 'code'
+              : 'terminal',
       vscodeUrl: vscodeInfo?.url || null,
     })
     // Go back to wherever the user came from; the session stays open in the dock
@@ -651,7 +715,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
     if (terminal?.kind === 'terminal') {
       if (activePane === 'code') {
         setShowCodeTerminal(true)
-      } else {
+      } else if (activePane !== 'split') {
         setActivePane('terminal')
       }
       window.setTimeout(() => {
@@ -815,15 +879,17 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
     sessionDock && (kind === 'chat' || (terminal?.kind === 'terminal' && terminalRunning))
   )
 
-  const orderedTabs: Array<'terminal' | 'code' | 'vscode' | 'artifacts'> = isEditorSession
+  const orderedTabs: Array<'terminal' | 'split' | 'code' | 'vscode' | 'artifacts'> = isEditorSession
     ? [
         'code',
+        'split',
         'terminal',
         ...(canContribute ? (['vscode'] as const) : []),
         ...(kind === 'terminal' && artifactCount > 0 ? (['artifacts'] as const) : []),
       ]
     : [
         'terminal',
+        'split',
         'code',
         ...(canContribute ? (['vscode'] as const) : []),
         ...(kind === 'terminal' && artifactCount > 0 ? (['artifacts'] as const) : []),
@@ -940,7 +1006,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                   <Pencil size={11} className="opacity-0 group-hover:opacity-100 text-zinc-400" />
                 </button>
               )}
-              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusBadge.className}`}>
+              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold border ${statusBadge.className}`}>
                 {statusBadge.spin ? (
                   <Loader2 size={10} className="animate-spin" />
                 ) : (
@@ -949,7 +1015,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                 {statusBadge.label}
               </span>
               {isRoot && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
+                <span className="px-1.5 py-0.5 rounded text-xs font-mono font-bold bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
                   root
                 </span>
               )}
@@ -963,7 +1029,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
               )}
             </div>
 
-            <span className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 inline-flex items-center gap-1 flex-wrap">
+            <span className="text-xs font-mono text-zinc-500 dark:text-zinc-400 inline-flex items-center gap-1 flex-wrap">
               <GitBranch size={11} />
               {session.ref}
               {session.head_sha ? `@${session.head_sha.slice(0, 7)}` : ''}
@@ -994,6 +1060,25 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                       >
                         <Terminal size={13} />
                         <span>Terminal</span>
+                      </button>
+                    )
+                  }
+                  if (tab === 'split') {
+                    return (
+                      <button
+                        key="split"
+                        type="button"
+                        onClick={() => setActivePane('split')}
+                        title="Side-by-side Terminal and Code/Diff for this session container"
+                        className={baseTabClass}
+                      >
+                        <Columns2 size={13} />
+                        <span>Split</span>
+                        {hasChanges && (
+                          <span className="px-1.5 rounded-full bg-teal-500/15 text-teal-700 dark:text-teal-300 text-xs font-mono">
+                            {changedFilesCount}
+                          </span>
+                        )}
                       </button>
                     )
                   }
@@ -1034,7 +1119,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                     >
                       <Package size={13} />
                       <span>Artifacts</span>
-                      <span className="px-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-[10px]">
+                      <span className="px-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-xs">
                         {artifactCount}
                       </span>
                     </button>
@@ -1052,7 +1137,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                 >
                   <Package size={13} />
                   <span>Artifacts</span>
-                  <span className="px-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-[10px]">
+                  <span className="px-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-xs">
                     {artifactCount}
                   </span>
                 </button>
@@ -1081,7 +1166,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                     <Sprout size={13} />
                     <span>Push to seed</span>
                     {hasChanges && (
-                      <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">
+                      <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-xs font-mono">
                         {changedFilesCount}
                       </span>
                     )}
@@ -1133,9 +1218,13 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
           </div>
         )}
 
-        {/* ------------------------- Agent: Unified Code / VS Code + Docked Terminal ------------------------- */}
+        {/* ------------------------- Agent: Unified Code / Split / VS Code + Docked Terminal ------------------------- */}
         {kind === 'chat' && agentSession && (agentAwake || resumeRequested || agentSession.status === 'starting') && (
-          <div ref={workspaceRef} style={workspaceStyle} className={workspaceHeightClass}>
+          <div
+            ref={workspaceRef}
+            style={workspaceStyle}
+            className={`${workspaceHeightClass} ${showSplit && !showVsCode ? '!flex-row' : ''}`}
+          >
             {showVsCode && (
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-zinc-950">
                 {vscodeLoading || !vscodeInfo?.url ? (
@@ -1150,7 +1239,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                     return (
                       <>
                         {!resolvedVsCode.sandbox.includes('allow-same-origin') && (
-                          <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
+                          <div className="px-3 py-1.5 text-xs bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
                             <span>
                               Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
                             </span>
@@ -1181,8 +1270,14 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
               </div>
             )}
 
-            {!showVsCode && showCode && agentAwake && (
-              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {!showVsCode && (showCode || showSplit) && agentAwake && (
+              <div
+                className={
+                  showSplit
+                    ? 'order-3 flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden'
+                    : 'order-1 flex-1 min-h-0 flex flex-col overflow-hidden'
+                }
+              >
                 <SessionEditorPane
                   projectId={project.id}
                   kind="chat"
@@ -1190,6 +1285,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                   canContribute={canContribute}
                   isAgentBusy={agentSession.status === 'running_turn' || agentSession.status === 'starting'}
                   agentHandle={agentSession.agent_handle}
+                  preferDiffOnInitialChange={showSplit}
                   onOpenPush={canPush ? () => setPushOpen(true) : undefined}
                   onChanged={() => void refresh()}
                   className="flex-1 min-h-0"
@@ -1197,12 +1293,21 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
               </div>
             )}
 
+            {!showVsCode && showSplit && agentAwake && (
+              <div
+                onMouseDown={onSplitDragStart}
+                onDoubleClick={() => setSplitRatio(48)}
+                className="order-2 w-1.5 -mx-px cursor-col-resize bg-zinc-200/80 dark:bg-zinc-800 hover:bg-teal-500/50 transition-colors shrink-0 z-10"
+                title="Drag to resize Terminal / Code split · Double-click to reset"
+              />
+            )}
+
             {!showVsCode && showCode && (
-              <div className="h-8 px-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 flex items-center justify-between text-xs shrink-0">
+              <div className="order-2 h-8 px-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 flex items-center justify-between text-xs shrink-0">
                 <button
                   type="button"
                   onClick={() => setShowCodeTerminal((v) => !v)}
-                  className="inline-flex items-center gap-2 font-mono text-[11px] font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors"
+                  className="inline-flex items-center gap-2 font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors"
                 >
                   <Terminal size={12} className="text-teal-600 dark:text-teal-400" />
                   <span>Terminal · @{agentSession.agent_handle}</span>
@@ -1210,6 +1315,15 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                 <div className="flex items-center gap-1">
                   {showCodeTerminal ? (
                     <>
+                      <button
+                        type="button"
+                        onClick={() => setActivePane('split')}
+                        title="Split side-by-side with Code"
+                        className="px-2 py-0.5 rounded hover:bg-zinc-200/70 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Columns2 size={11} />
+                        <span>Split</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => setActivePane('terminal')}
@@ -1245,12 +1359,15 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
 
             {(terminalMounted || showTerminal) && (
               <div
+                style={showSplit && agentAwake ? { width: `${splitRatio}%` } : undefined}
                 className={
                   !showTerminal || showVsCode
                     ? 'hidden'
-                    : showCode && agentAwake
-                      ? 'h-[38%] min-h-[200px] max-h-[55%] shrink-0 flex flex-col border-t border-zinc-200 dark:border-zinc-800'
-                      : 'flex-1 min-h-0 flex flex-col'
+                    : showSplit && agentAwake
+                      ? 'order-1 shrink-0 min-w-0 min-h-0 flex flex-col'
+                      : showCode && agentAwake
+                        ? 'order-3 h-[38%] min-h-[200px] max-h-[55%] shrink-0 flex flex-col border-t border-zinc-200 dark:border-zinc-800'
+                        : 'order-1 flex-1 min-w-0 min-h-0 flex flex-col'
                 }
               >
                 <SessionTerminal
@@ -1274,13 +1391,17 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
           />
         )}
 
-        {/* ------------------------------ Shell terminal / Code editor / VS Code ------------------------------ */}
+        {/* ------------------------------ Shell terminal / Split / Code editor / VS Code ------------------------------ */}
         {kind === 'terminal' && terminal && (
           <>
             {showArtifacts ? (
               <SandboxArtifactsList projectId={project.id} session={terminal} canContribute={canContribute} onChanged={() => void refresh()} />
             ) : terminalRunning ? (
-              <div ref={workspaceRef} style={workspaceStyle} className={workspaceHeightClass}>
+              <div
+                ref={workspaceRef}
+                style={workspaceStyle}
+                className={`${workspaceHeightClass} ${showSplit && !showVsCode ? '!flex-row' : ''}`}
+              >
                 {showVsCode && (
                   <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-zinc-950">
                     {vscodeLoading || !vscodeInfo?.url ? (
@@ -1295,7 +1416,7 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                         return (
                           <>
                             {!resolvedVsCode.sandbox.includes('allow-same-origin') && (
-                              <div className="px-3 py-1.5 text-[11px] bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
+                              <div className="px-3 py-1.5 text-xs bg-amber-500/15 text-amber-200 border-b border-amber-500/30 flex items-center justify-between gap-2 shrink-0">
                                 <span>
                                   Same-origin iframe sandbox active (`allow-same-origin` omitted to protect control-plane cookies). Configure dedicated port 8423 for full VS Code Web storage.
                                 </span>
@@ -1326,13 +1447,20 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                   </div>
                 )}
 
-                {!showVsCode && showCode && (
-                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                {!showVsCode && (showCode || showSplit) && (
+                  <div
+                    className={
+                      showSplit
+                        ? 'order-3 flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden'
+                        : 'order-1 flex-1 min-h-0 flex flex-col overflow-hidden'
+                    }
+                  >
                     <SessionEditorPane
                       projectId={project.id}
                       kind="terminal"
                       sessionId={terminal.id}
                       canContribute={canContribute}
+                      preferDiffOnInitialChange={showSplit}
                       onOpenPush={canPush ? () => setPushOpen(true) : undefined}
                       onChanged={() => void refresh()}
                       className="flex-1 min-h-0"
@@ -1340,12 +1468,21 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                   </div>
                 )}
 
+                {!showVsCode && showSplit && (
+                  <div
+                    onMouseDown={onSplitDragStart}
+                    onDoubleClick={() => setSplitRatio(48)}
+                    className="order-2 w-1.5 -mx-px cursor-col-resize bg-zinc-200/80 dark:bg-zinc-800 hover:bg-teal-500/50 transition-colors shrink-0 z-10"
+                    title="Drag to resize Terminal / Code split · Double-click to reset"
+                  />
+                )}
+
                 {!showVsCode && showCode && (
-                  <div className="h-8 px-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 flex items-center justify-between text-xs shrink-0">
+                  <div className="order-2 h-8 px-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300 flex items-center justify-between text-xs shrink-0">
                     <button
                       type="button"
                       onClick={() => setShowCodeTerminal((v) => !v)}
-                      className="inline-flex items-center gap-2 font-mono text-[11px] font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors"
+                      className="inline-flex items-center gap-2 font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-200 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors"
                     >
                       <Terminal size={12} className="text-teal-600 dark:text-teal-400" />
                       <span>Terminal · /workspace</span>
@@ -1353,6 +1490,15 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
                     <div className="flex items-center gap-1">
                       {showCodeTerminal ? (
                         <>
+                          <button
+                            type="button"
+                            onClick={() => setActivePane('split')}
+                            title="Split side-by-side with Code"
+                            className="px-2 py-0.5 rounded hover:bg-zinc-200/70 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <Columns2 size={11} />
+                            <span>Split</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => setActivePane('terminal')}
@@ -1388,12 +1534,15 @@ export const SessionDetail: React.FC<SessionDetailProps> = ({ project, kind, ses
 
                 {(terminalMounted || showTerminal) && (
                   <div
+                    style={showSplit ? { width: `${splitRatio}%` } : undefined}
                     className={
                       !showTerminal || showVsCode
                         ? 'hidden'
-                        : showCode
-                          ? 'h-[38%] min-h-[200px] max-h-[55%] shrink-0 flex flex-col border-t border-zinc-200 dark:border-zinc-800'
-                          : 'flex-1 min-h-0 flex flex-col'
+                        : showSplit
+                          ? 'order-1 shrink-0 min-w-0 min-h-0 flex flex-col'
+                          : showCode
+                            ? 'order-3 h-[38%] min-h-[200px] max-h-[55%] shrink-0 flex flex-col border-t border-zinc-200 dark:border-zinc-800'
+                            : 'order-1 flex-1 min-w-0 min-h-0 flex flex-col'
                     }
                   >
                     {terminal.kind === 'terminal' ? (

@@ -179,7 +179,7 @@ export const SeedRelatedCard: React.FC<{
                       {c.title}
                     </span>
                     <span
-                      className={`shrink-0 px-1.5 py-0.5 rounded border text-[11px] font-medium ${getSeedStatusClasses(
+                      className={`shrink-0 px-1.5 py-0.5 rounded border text-xs font-medium ${getSeedStatusClasses(
                         c.status
                       )}`}
                     >
@@ -224,10 +224,10 @@ export const SeedRelatedCard: React.FC<{
                   </div>
                   <div className="mt-0.5 pl-5 flex items-center gap-1.5 flex-wrap">
                     {relLabel && (
-                      <span className="text-[11px] text-zinc-400">{relLabel} ·</span>
+                      <span className="text-xs text-zinc-400">{relLabel} ·</span>
                     )}
                     <span
-                      className={`inline-flex items-center px-1.5 py-0.2 rounded border text-[11px] font-medium ${getSeedStatusClasses(
+                      className={`inline-flex items-center px-1.5 py-0.2 rounded border text-xs font-medium ${getSeedStatusClasses(
                         item.status
                       )}`}
                     >

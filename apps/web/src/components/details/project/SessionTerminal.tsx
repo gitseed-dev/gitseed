@@ -36,6 +36,8 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
     const rootDetectedRef = useRef(false)
     const onRootDetectedRef = useRef(onRootDetected)
     onRootDetectedRef.current = onRootDetected
+    const onDisconnectedRef = useRef(onDisconnected)
+    onDisconnectedRef.current = onDisconnected
     const [ready, setReady] = useState(false)
     const [state, setState] = useState<ConnState>('connecting')
     const [closeReason, setCloseReason] = useState<string>('')
@@ -170,7 +172,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
           setState('closed')
           setCloseReason(ev.reason || (ev.code === 1000 ? 'Shell exited' : 'Connection lost'))
           term.write('\r\n\x1b[2m[disconnected]\x1b[0m\r\n')
-          onDisconnected?.()
+          onDisconnectedRef.current?.()
         }
       }
       connect()
@@ -193,7 +195,7 @@ export const SessionTerminal = forwardRef<SessionTerminalHandle, SessionTerminal
             doesn't subtract its padding, which made the terminal overflow by the padding. */}
         <div ref={hostRef} className="absolute inset-2" />
         {state !== 'open' && (
-          <div className="absolute top-2 right-3 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-zinc-900/90 border border-zinc-700 text-[11px] text-zinc-300">
+          <div className="absolute top-2 right-3 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-zinc-900/90 border border-zinc-700 text-xs text-zinc-300">
             {state === 'connecting' ? (
               <>
                 <Loader2 size={12} className="animate-spin text-teal-400" />

@@ -33,10 +33,7 @@ import {
   EntityTableHeaderRow,
   SortableTh,
 } from '../components/layout/EntityPageLayout'
-import {
-  ProjectModal,
-  type ProjectRepoSetupMode,
-} from '../components/modals/ProjectModal'
+import { ProjectModal } from '../components/modals/ProjectModal'
 import { useAuth } from '../context/AuthContext'
 import { useData } from '../context/DataContext'
 import { useTranslation } from '../context/I18nContext'
@@ -88,9 +85,6 @@ export const ProjectsView: React.FC = () => {
   const [filterTab, setFilterTab] = useState<ProjectFilterTab>('active')
   const [searchQuery, setSearchQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
-  const [modalInitialRepoMode, setModalInitialRepoMode] = useState<
-    ProjectRepoSetupMode | undefined
-  >(undefined)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [archiveConfirmProject, setArchiveConfirmProject] =
     useState<Project | null>(null)
@@ -255,10 +249,10 @@ export const ProjectsView: React.FC = () => {
     )?.agent_id
     const planAgentId = effective.find((p) => p.stage === 'plan')?.agent_id
     return (
-      list.find((a) => a.handle === 'coder') ||
       list.find((a) => a.id === executeAgentId) ||
+      list.find((a) => a.handle === 'coder') ||
+      list.find((a) => a.handle.endsWith('-coder')) ||
       list.find((a) => a.id === planAgentId) ||
-      list.find((a) => a.handle === 'ideator' || a.handle === 'planner') ||
       list.find((a) => a.kind !== 'assistant') ||
       list[0] ||
       null
@@ -449,7 +443,7 @@ export const ProjectsView: React.FC = () => {
   const renderStatusPill = (summary: ProjectSummary) => {
     if (summary.project.archived_at) {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700/80">
           <Archive size={11} />
           <span>Archived</span>
         </span>
@@ -457,7 +451,7 @@ export const ProjectsView: React.FC = () => {
     }
     if (summary.blockedSeeds.length > 0) {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/25">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/25">
           <AlertTriangle size={11} />
           <span>
             {t('projects.blockedCount', {
@@ -469,7 +463,7 @@ export const ProjectsView: React.FC = () => {
     }
     if (summary.needsYouSeeds.length > 0) {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
           <span>
             {summary.needsYouSeeds.length === 1
@@ -504,37 +498,19 @@ export const ProjectsView: React.FC = () => {
         showViewModeToggle
         primaryAction={
           canCreateProject ? (
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                data-testid="link-local-workspace-btn"
-                onClick={() => {
-                  setEditingProject(null)
-                  setModalInitialRepoMode('local')
-                  setModalOpen(true)
-                }}
-                className="rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700/80 cursor-pointer"
-              >
-                <FolderGit2 size={14} className="text-teal-600 dark:text-teal-400" />
-                <span>Link Local Folder</span>
-              </Button>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                onClick={() => {
-                  setEditingProject(null)
-                  setModalInitialRepoMode(undefined)
-                  setModalOpen(true)
-                }}
-                className="rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm shadow-teal-600/20 cursor-pointer"
-              >
-                <Plus size={15} />
-                <span>{t('projects.create')}</span>
-              </Button>
-            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEditingProject(null)
+                setModalOpen(true)
+              }}
+              className="rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm shadow-teal-600/20 cursor-pointer"
+            >
+              <Plus size={15} />
+              <span>{t('projects.create')}</span>
+            </Button>
           ) : undefined
         }
         filterTabs={
@@ -592,34 +568,18 @@ export const ProjectsView: React.FC = () => {
                 {t('projects.emptySubtitle')}
               </p>
               {canCreateProject && (
-                <div className="mt-1 flex items-center gap-2 flex-wrap justify-center">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => {
-                      setEditingProject(null)
-                      setModalInitialRepoMode(undefined)
-                      setModalOpen(true)
-                    }}
-                    className="rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus size={14} />
-                    <span>{t('projects.createFirst')}</span>
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      setEditingProject(null)
-                      setModalInitialRepoMode('local')
-                      setModalOpen(true)
-                    }}
-                    className="rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700/80 cursor-pointer"
-                  >
-                    <FolderGit2 size={14} className="text-teal-600 dark:text-teal-400" />
-                    <span>Link Local Folder</span>
-                  </Button>
-                </div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    setEditingProject(null)
+                    setModalOpen(true)
+                  }}
+                  className="mt-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>{t('projects.createFirst')}</span>
+                </Button>
               )}
             </div>
           ) : (
@@ -765,13 +725,13 @@ export const ProjectsView: React.FC = () => {
                               />
                             )}
                             {isFocused && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30">
+                              <span className="px-1.5 py-0.5 rounded text-xs font-bold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30">
                                 {t('projects.focusedBadge')}
                               </span>
                             )}
                           </div>
                           {project.description && (
-                            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate max-w-xs mt-0.5">
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate max-w-xs mt-0.5">
                               {project.description}
                             </p>
                           )}
@@ -794,7 +754,7 @@ export const ProjectsView: React.FC = () => {
                             <span className="font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-200">
                               {primaryRepo.full_name}
                             </span>
-                            <span className="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-400">
+                            <span className="inline-flex items-center gap-1 text-xs font-mono text-zinc-400">
                               <GitBranch size={10} />
                               {primaryRepo.default_branch}
                               {summary.repos.length > 1 &&
@@ -821,7 +781,7 @@ export const ProjectsView: React.FC = () => {
                               })}
                             </span>
                           </div>
-                          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                          <span className="text-xs text-zinc-500 dark:text-zinc-400">
                             {summary.runningSeeds.length > 0
                               ? `${summary.runningSeeds.length} running`
                               : `${summary.merged30dCount} merged (30d)`}
@@ -849,7 +809,7 @@ export const ProjectsView: React.FC = () => {
                             {formatUsd(summary.totalSpend)}
                           </span>
                           {summary.effectiveMonthlyBudget !== null && (
-                            <span className="text-[10px] text-zinc-400">
+                            <span className="text-xs text-zinc-400">
                               / ${summary.effectiveMonthlyBudget.toFixed(0)}
                             </span>
                           )}
@@ -933,12 +893,12 @@ export const ProjectsView: React.FC = () => {
                               {project.name}
                             </h3>
                             {isFocused && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30">
+                              <span className="px-1.5 py-0.5 rounded text-xs font-bold bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30">
                                 {t('projects.focusedBadge')}
                               </span>
                             )}
                           </div>
-                          <span className="text-[11px] font-mono text-zinc-400">
+                          <span className="text-xs font-mono text-zinc-400">
                             {project.slug}
                           </span>
                         </div>
@@ -984,7 +944,7 @@ export const ProjectsView: React.FC = () => {
                         {summary.members.length}
                       </span>
                     </div>
-                    <span className="font-mono text-[11px]">
+                    <span className="font-mono text-xs">
                       {formatRelativeTime(summary.lastActivityAt)}
                     </span>
                   </div>
@@ -999,11 +959,9 @@ export const ProjectsView: React.FC = () => {
         isOpen={modalOpen}
         onClose={() => {
           setModalOpen(false)
-          setModalInitialRepoMode(undefined)
           setEditingProject(null)
         }}
         project={editingProject}
-        initialRepoMode={modalInitialRepoMode}
         onSaved={(saved) => {
           if (!editingProject) {
             navigateToDetail(VIEWS.PROJECTS, saved.slug || saved.id)

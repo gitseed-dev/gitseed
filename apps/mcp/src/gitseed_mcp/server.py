@@ -15,6 +15,8 @@ from gitseed_mcp.catalog import (
     RESOURCES_CATALOG,
     TOOLS,
     TOOLS_CATALOG,
+    TOOLSET_BY_TOOL,
+    TOOLSETS,
 )
 from gitseed_mcp.client import GitSeedApiClient, GitSeedApiError
 from gitseed_mcp.config import MCPSettings, get_settings
@@ -32,6 +34,8 @@ __all__ = [
     "SUPPORTED_PROTOCOL_VERSIONS",
     "TOOLS",
     "TOOLS_CATALOG",
+    "TOOLSETS",
+    "TOOLSET_BY_TOOL",
     "TOOL_HANDLERS",
     "GitSeedMCPServer",
     "ToolHandler",
@@ -287,6 +291,7 @@ async def _tool_update_org_policy(
         min_approver_role=_optional_str(args, "min_approver_role"),
         allow_auto_approve=_optional_bool(args, "allow_auto_approve"),
         allow_self_approval=_optional_bool(args, "allow_self_approval"),
+        allow_second_opinions=_optional_bool(args, "allow_second_opinions"),
         max_attempts=_optional_int(args, "max_attempts"),
         timeout_minutes=_optional_int(args, "timeout_minutes"),
         min_acceptance_criteria=_optional_int(args, "min_acceptance_criteria"),
@@ -310,6 +315,7 @@ async def _tool_update_project_policy(
         min_approver_role=_optional_str(args, "min_approver_role"),
         allow_auto_approve=_optional_bool(args, "allow_auto_approve"),
         allow_self_approval=_optional_bool(args, "allow_self_approval"),
+        allow_second_opinions=_optional_bool(args, "allow_second_opinions"),
         max_attempts=_optional_int(args, "max_attempts"),
         timeout_minutes=_optional_int(args, "timeout_minutes"),
         min_acceptance_criteria=_optional_int(args, "min_acceptance_criteria"),
@@ -405,6 +411,7 @@ async def _tool_create_seed(
         staged=_optional_bool(args, "staged"),
         autonomy=_optional_str(args, "autonomy") or SeedAutonomy.SUPERVISED.value,
         budget_cap=_optional_float(args, "budget_cap"),
+        ideate_agent_ids=_optional_str_list(args, "ideate_agent_ids"),
     )
 
 
@@ -490,6 +497,12 @@ async def _tool_get_seed_changes(
         _require_str(args, "seed_id"),
         repo_id=_optional_id_or_int(args, "repo_id"),
     )
+
+
+async def _tool_get_seed_receipt(
+    client: GitSeedApiClient, args: dict[str, Any]
+) -> Any:
+    return await client.get_seed_receipt(_require_str(args, "seed_id"))
 
 
 async def _tool_list_seed_approvals(
@@ -903,6 +916,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "close_seed": _tool_close_seed,
     "reopen_seed": _tool_reopen_seed,
     "get_seed_changes": _tool_get_seed_changes,
+    "get_seed_receipt": _tool_get_seed_receipt,
     "list_seed_approvals": _tool_list_seed_approvals,
     "submit_seed_approval": _tool_submit_seed_approval,
     "list_seed_tasks": _tool_list_seed_tasks,
@@ -943,6 +957,11 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
 }
 
 
+_TOOLS_BY_NAME: dict[str, dict[str, Any]] = {
+    tool["name"]: tool for tool in TOOLS_CATALOG
+}
+
+
 # ── MCP Protocol Server Engine ────────────────────────────────────────
 
 
@@ -958,6 +977,28 @@ class GitSeedMCPServer:
         self.settings = settings or get_settings()
         self._http_transport = http_transport
         self._http_client: httpx.AsyncClient | None = None
+
+    def is_tool_enabled(self, tool_name: str) -> bool:
+        """Return True if tool_name passes read-only and toolset filters."""
+        descriptor = _TOOLS_BY_NAME.get(tool_name)
+        if descriptor is None:
+            return False
+        if self.settings.read_only and not bool(
+            descriptor.get("annotations", {}).get("readOnlyHint")
+        ):
+            return False
+        enabled_sets = self.settings.enabled_toolsets
+        if enabled_sets:
+            toolset = TOOLSET_BY_TOOL.get(tool_name)
+            if toolset not in enabled_sets and tool_name.lower() not in enabled_sets:
+                return False
+        return True
+
+    def visible_tools(self) -> list[dict[str, Any]]:
+        """Return tool descriptors permitted by active read-only and toolset settings."""
+        return [
+            tool for tool in TOOLS_CATALOG if self.is_tool_enabled(tool["name"])
+        ]
 
     def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -1134,7 +1175,7 @@ class GitSeedMCPServer:
                         "inputSchema": tool["inputSchema"],
                         "annotations": dict(tool["annotations"]),
                     }
-                    for tool in TOOLS_CATALOG
+                    for tool in self.visible_tools()
                 ]
             }
 
@@ -1194,6 +1235,10 @@ class GitSeedMCPServer:
             allow_env_fallback=allow_env_fallback,
         )
         try:
+            if not self.is_tool_enabled(tool_name):
+                raise ValueError(
+                    f"Tool '{tool_name}' is disabled by server configuration"
+                )
             data = await handler(client, arguments)
             formatted = json.dumps(data, indent=2, sort_keys=False, default=str)
             return {

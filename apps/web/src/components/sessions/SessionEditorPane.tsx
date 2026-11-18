@@ -103,6 +103,8 @@ export interface SessionEditorPaneProps {
   /** True while a coding agent is actively writing / running a turn in the container */
   isAgentBusy?: boolean
   agentHandle?: string | null
+  /** Default to the Diff view when auto-selecting a changed file (ideal for side-by-side Split mode). */
+  preferDiffOnInitialChange?: boolean
   onOpenPush?: () => void
   onChanged?: () => void
   className?: string
@@ -258,6 +260,7 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
   canContribute,
   isAgentBusy = false,
   agentHandle,
+  preferDiffOnInitialChange = false,
   onOpenPush,
   onChanged,
   className = 'h-[calc(100vh-13rem)] min-h-[580px]',
@@ -292,7 +295,7 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
   const filesQuery = useQuery({
     queryKey: filesKey,
     queryFn: () => api.projects.listSessionFiles(projectId, kind, sessionId),
-    refetchInterval: isAgentBusy ? 3_500 : 10_000,
+    refetchInterval: isAgentBusy ? 2_500 : 4_000,
   })
 
   const allFiles = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data])
@@ -300,28 +303,36 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
     () => filesQuery.data?.changed_files ?? [],
     [filesQuery.data]
   )
+  const autoSelectedFallbackRef = useRef(false)
 
-  // Auto-select first changed file or README / first source file on initial load
+  // Auto-select first changed file or README / first source file on initial load,
+  // and promote to the first changed file once the coding agent makes its first edit.
   useEffect(() => {
-    if (activePath || allFiles.length === 0) return
+    if (allFiles.length === 0) return
     const firstChanged = changedFiles.find((f) => f.status !== 'deleted')?.path
-    const readme = allFiles.find((f) =>
-      /^readme(\.md|\.txt)?$/i.test(f.path.split('/').pop() || '')
-    )?.path
-    const initial = firstChanged || readme || allFiles[0]?.path
-    if (initial) {
-      setActivePath(initial)
-      setOpenTabs((prev) => (prev.includes(initial) ? prev : [...prev, initial]))
-      const parts = initial.split('/')
-      if (parts.length > 1) {
-        const nextDirs: Record<string, boolean> = {}
-        for (let i = 1; i < parts.length; i++) {
-          nextDirs[parts.slice(0, i).join('/')] = true
+    if (!activePath || (autoSelectedFallbackRef.current && firstChanged)) {
+      const readme = allFiles.find((f) =>
+        /^readme(\.md|\.txt)?$/i.test(f.path.split('/').pop() || '')
+      )?.path
+      const initial = firstChanged || readme || allFiles[0]?.path
+      if (initial) {
+        autoSelectedFallbackRef.current = !firstChanged
+        setActivePath(initial)
+        if (firstChanged && preferDiffOnInitialChange) {
+          setViewMode('diff')
         }
-        setExpandedDirs((prev) => ({ ...nextDirs, ...prev }))
+        setOpenTabs((prev) => (prev.includes(initial) ? prev : [...prev, initial]))
+        const parts = initial.split('/')
+        if (parts.length > 1) {
+          const nextDirs: Record<string, boolean> = {}
+          for (let i = 1; i < parts.length; i++) {
+            nextDirs[parts.slice(0, i).join('/')] = true
+          }
+          setExpandedDirs((prev) => ({ ...nextDirs, ...prev }))
+        }
       }
     }
-  }, [activePath, allFiles, changedFiles])
+  }, [activePath, allFiles, changedFiles, preferDiffOnInitialChange])
 
   const fileContentKey = useMemo(
     () => ['sessionWorkspaceFile', kind, projectId, sessionId, activePath],
@@ -363,6 +374,25 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
       drafts[activePath] !== fileData.content
   )
 
+  // Live-refresh the open file/diff when the container modifies it on disk (and user has no unsaved draft)
+  const prevActiveSigRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activePath || !activeEntry) {
+      prevActiveSigRef.current = null
+      return
+    }
+    const sig = `${activePath}:${activeEntry.size ?? ''}:${activeEntry.status ?? ''}`
+    if (
+      prevActiveSigRef.current &&
+      prevActiveSigRef.current.startsWith(`${activePath}:`) &&
+      prevActiveSigRef.current !== sig &&
+      !isDirty
+    ) {
+      void queryClient.invalidateQueries({ queryKey: fileContentKey })
+    }
+    prevActiveSigRef.current = sig
+  }, [activePath, activeEntry, isDirty, fileContentKey, queryClient])
+
   const byteSize = useMemo(
     () => activeEntry?.size ?? new Blob([currentContent]).size,
     [activeEntry?.size, currentContent]
@@ -373,6 +403,7 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
     !canContribute || isAgentBusy || isLargeFile || isBinary
 
   const selectFile = useCallback((path: string) => {
+    autoSelectedFallbackRef.current = false
     setActivePath(path)
     setConfirmDeleteFile(false)
     setOpenTabs((prev) => (prev.includes(path) ? prev : [...prev, path]))
@@ -745,7 +776,7 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
             )}
             {badge && (
               <span
-                className={`px-1.5 py-0.5 rounded text-[11px] font-bold border ${badge.className}`}
+                className={`px-1.5 py-0.5 rounded text-xs font-bold border ${badge.className}`}
               >
                 {badge.short}
               </span>
@@ -860,7 +891,7 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
                   type="button"
                   onClick={() => setUseTreeView((v) => !v)}
                   title={useTreeView ? 'Switch to flat file list' : 'Switch to folder tree'}
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border cursor-pointer ${
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border cursor-pointer ${
                     useTreeView
                       ? 'bg-teal-500/12 border-teal-500/30 text-teal-700 dark:text-teal-300'
                       : 'bg-zinc-200/60 dark:bg-zinc-800 border-transparent text-zinc-500'
@@ -983,7 +1014,7 @@ export const SessionEditorPane: React.FC<SessionEditorPaneProps> = ({
                       )}
                       {badge && (
                         <span
-                          className={`px-1.5 py-0.5 rounded text-[11px] font-bold border ${badge.className}`}
+                          className={`px-1.5 py-0.5 rounded text-xs font-bold border ${badge.className}`}
                         >
                           {badge.short}
                         </span>

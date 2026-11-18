@@ -120,7 +120,7 @@ export const SeedAttachmentsCard: React.FC<{ seed: Seed; canContribute: boolean 
                 >
                   {f.filename}
                 </a>
-                <span className="text-[11px] text-zinc-400">
+                <span className="text-xs text-zinc-400">
                   {formatFileSize(f.size)}
                   {who(f.created_by) ? ` · ${who(f.created_by)}` : ''}
                   {f.created_at ? ` · ${formatRelativeTime(f.created_at)}` : ''}

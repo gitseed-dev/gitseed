@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import configparser
 import contextlib
 import json
 import logging
@@ -10,6 +11,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path, PurePosixPath
@@ -20,6 +22,7 @@ import httpx
 logger = logging.getLogger("gitseed_runner")
 
 MAX_CLI_AUTH_FILE_BYTES = 64 * 1024
+MAX_ARGV_PROMPT_BYTES = 96_000
 
 ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME: dict[str, frozenset[str]] = {
     "claude-code": frozenset(
@@ -334,10 +337,33 @@ class RuntimeAdapter(ABC):
         timeout: float | None = None,
     ) -> tuple[int, str]:
         """Execute the CLI command once, guaranteeing workspace secret cleanup in finally."""
+        ephemeral_prompt_file: Path | None = None
         try:
             env = self.prepare_workspace()
             env.pop("GITSEED_RUN_TOKEN", None)
-            cmd = self.build_command(prompt, continue_session=continue_session)
+            effective_prompt = prompt
+            if len(prompt.encode("utf-8")) > MAX_ARGV_PROMPT_BYTES:
+                prompt_dir = (
+                    self.output_file.parent
+                    if self.output_file.parent.name == ".gitseed"
+                    else (self.working_dir / ".gitseed")
+                )
+                prompt_dir.mkdir(parents=True, exist_ok=True)
+                ephemeral_prompt_file = prompt_dir / "prompt.md"
+                ephemeral_prompt_file.write_text(prompt, encoding="utf-8")
+                with contextlib.suppress(OSError):
+                    os.chmod(ephemeral_prompt_file, 0o600)
+                try:
+                    prompt_ref = ephemeral_prompt_file.resolve().relative_to(
+                        self.working_dir.resolve()
+                    ).as_posix()
+                except Exception:
+                    prompt_ref = str(ephemeral_prompt_file)
+                effective_prompt = (
+                    f"Read the complete stage instructions and context in `{prompt_ref}` "
+                    f"and execute them completely, writing the final stage output JSON to `{self.output_file}`."
+                )
+            cmd = self.build_command(effective_prompt, continue_session=continue_session)
             self.begin_invocation()
             spawn_kwargs: dict[str, Any] = (
                 {"start_new_session": True} if os.name != "nt" else {}
@@ -369,6 +395,9 @@ class RuntimeAdapter(ABC):
                 rendered_lines.append(line if parsed_line is None else parsed_line)
             return int(proc.returncode or 0), "".join(rendered_lines)
         finally:
+            if ephemeral_prompt_file is not None:
+                with contextlib.suppress(OSError):
+                    ephemeral_prompt_file.unlink(missing_ok=True)
             self.finish_invocation()
             self.cleanup_workspace()
 
@@ -406,6 +435,8 @@ class RuntimeAdapter(ABC):
             return None
         home_root = Path.home().resolve()
         runtime_name = str(self.ctx.get("runtime") or "").strip().lower()
+        if runtime_name in ("antigravity", "gemini"):
+            _sync_headless_linux_keyring_to_home(home_root, runtime_name=runtime_name)
         runtime_allowed = ALLOWED_CLI_AUTH_PATHS_BY_RUNTIME.get(
             runtime_name, ALL_ALLOWED_CLI_AUTH_PATHS
         )
@@ -956,13 +987,7 @@ class ClaudeCodeAdapter(RuntimeAdapter):
         return "claude"
 
     def _normalized_claude_model(self) -> str:
-        raw = (self.model or "").strip()
-        legacy_map = {
-            "claude-sonnet-5-5": "claude-sonnet-4-5",
-            "claude-opus-5": "claude-opus-4-1",
-            "claude-haiku-5": "claude-haiku-4-5",
-        }
-        return legacy_map.get(raw, raw)
+        return (self.model or "").strip()
 
     def prepare_workspace(self) -> dict[str, str]:
         self.restore_cli_auth_bundle()
@@ -977,6 +1002,29 @@ class ClaudeCodeAdapter(RuntimeAdapter):
                 pass
         claude_cfg["hasCompletedOnboarding"] = True
         claude_cfg["bypassPermissionsModeAccepted"] = True
+        claude_cfg.setdefault("theme", "dark")
+        projects_map = claude_cfg.get("projects")
+        if not isinstance(projects_map, dict):
+            projects_map = {}
+        for folder in dict.fromkeys(
+            [
+                "/workspace",
+                str(self.working_dir),
+                str(self.working_dir.resolve()),
+                str(Path.cwd()),
+                str(Path.home()),
+            ]
+        ):
+            proj_entry = projects_map.get(folder)
+            if not isinstance(proj_entry, dict):
+                proj_entry = {}
+            proj_entry["hasTrustDialogAccepted"] = True
+            proj_entry["hasTrustDialogHooksAccepted"] = True
+            proj_entry["hasCompletedProjectOnboarding"] = True
+            proj_entry.setdefault("allowedTools", [])
+            proj_entry.setdefault("projectOnboardingSeenCount", 1)
+            projects_map[folder] = proj_entry
+        claude_cfg["projects"] = projects_map
         mcp_map = self._build_standard_mcp_map()
         if mcp_map:
             claude_cfg["mcpServers"] = mcp_map
@@ -987,8 +1035,18 @@ class ClaudeCodeAdapter(RuntimeAdapter):
         if self.auth_mode == "cli_oauth":
             env.pop("ANTHROPIC_BASE_URL", None)
             env.pop("ANTHROPIC_AUTH_TOKEN", None)
-            if self.oauth_token:
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = self.oauth_token
+            resolved_oauth = self.oauth_token
+            if not resolved_oauth:
+                cred_file = Path.home() / ".claude" / ".credentials.json"
+                if cred_file.is_file():
+                    with contextlib.suppress(Exception):
+                        cred_doc = json.loads(cred_file.read_text(encoding="utf-8"))
+                        if isinstance(cred_doc, dict):
+                            tok = (cred_doc.get("claudeAiOauth") or {}).get("accessToken")
+                            if isinstance(tok, str) and tok.startswith("sk-ant-oat"):
+                                resolved_oauth = tok
+            if resolved_oauth:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = resolved_oauth
         else:
             env["ANTHROPIC_BASE_URL"] = self.gateway_anthropic_url
             env["ANTHROPIC_AUTH_TOKEN"] = self.gateway_api_key
@@ -1107,6 +1165,7 @@ class CodexAdapter(RuntimeAdapter):
             return env
 
         model_name = self.model if self.model and self.model != "default" else "default"
+        wire_api = str(self.gateway.get("wire_api") or "responses").strip() or "responses"
         config_toml = "\n".join(
             [
                 f'model = {json.dumps(model_name)}',
@@ -1116,7 +1175,7 @@ class CodexAdapter(RuntimeAdapter):
                 'name = "GitSeed LiteLLM Proxy"',
                 f'base_url = {json.dumps(self.gateway_base_url)}',
                 'env_key = "OPENAI_API_KEY"',
-                'wire_api = "chat"',
+                f"wire_api = {json.dumps(wire_api)}",
                 "",
                 *mcp_lines,
             ]
@@ -1162,13 +1221,13 @@ class CodexAdapter(RuntimeAdapter):
 
 
 def _normalize_google_cli_model(raw_model: str | None) -> str:
-    """Normalize model aliases and legacy placeholder names for `agy` and `gemini` CLIs."""
+    """Normalize short tier aliases for `agy` and `gemini` CLIs while preserving concrete model IDs."""
     normalized = (raw_model or "").strip()
     if normalized in ("default", ""):
         return ""
-    if normalized in ("flash", "flash_lite", "gemini-3.8-flash", "gemini-3.5-flash"):
+    if normalized in ("flash", "flash_lite"):
         return "gemini-2.5-flash"
-    if normalized in ("pro", "inherit", "gemini-4-argon", "gemini-4-carbon"):
+    if normalized in ("pro", "inherit"):
         return "gemini-2.5-pro"
     return normalized
 
@@ -1260,15 +1319,326 @@ def _write_antigravity_mcp_config(
     mcp_config_path.write_text(json.dumps(existing_doc, indent=2), encoding="utf-8")
 
 
+_HEADLESS_DBUS_STATE_FILE = Path("/tmp/.gitseed_dbus_env.json")
+_HEADLESS_XDG_RUNTIME_DIR = Path("/tmp/xdg-runtime-1000")
+
+
+def _is_linux_or_posix() -> bool:
+    return os.name != "nt"
+
+
+def _resolve_antigravity_keyring_seed(
+    gemini_dir: Path, fallback_oauth_token: str | None = None
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Extract restored Antigravity keyring items and primary OAuth token from `~/.gemini`."""
+    agy_dir = gemini_dir / "antigravity-cli"
+    keyring_items: list[dict[str, Any]] = []
+    auth_json = agy_dir / "auth.json"
+    if auth_json.is_file():
+        with contextlib.suppress(Exception):
+            parsed = json.loads(auth_json.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict) and isinstance(parsed.get("keyring_items"), list):
+                keyring_items = [
+                    item for item in parsed["keyring_items"] if isinstance(item, dict)
+                ]
+
+    for candidate in (
+        agy_dir / "keyring" / "antigravity-oauth-token",
+        agy_dir / "antigravity-oauth-token",
+        gemini_dir / "jetski-standalone-oauth-token",
+    ):
+        if candidate.is_file():
+            with contextlib.suppress(Exception):
+                val = candidate.read_text(encoding="utf-8", errors="ignore").strip()
+                if val:
+                    return val, keyring_items
+
+    for item in keyring_items:
+        sec = str(item.get("secret") or "").strip()
+        if sec:
+            return sec, keyring_items
+
+    clean_fallback = (fallback_oauth_token or "").strip()
+    return (clean_fallback or None), keyring_items
+
+
+def _ensure_headless_linux_keyring(
+    env: dict[str, str],
+    home_dir: Path,
+    *,
+    seed_token: str | None = None,
+    keyring_items: list[dict[str, Any]] | None = None,
+) -> None:
+    """Bootstrap or reuse a headless D-Bus + unlocked GNOME Keyring session for `agy` on Linux."""
+    if not _is_linux_or_posix():
+        return
+    if not (shutil.which("dbus-daemon") and shutil.which("gnome-keyring-daemon")):
+        return
+
+    try:
+        xdg_dir = _HEADLESS_XDG_RUNTIME_DIR
+        xdg_dir.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(xdg_dir, 0o700)
+        env["XDG_RUNTIME_DIR"] = str(xdg_dir)
+
+        kr_dir = home_dir / ".local" / "share" / "keyrings"
+        kr_dir.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(kr_dir, 0o700)
+        default_kr = kr_dir / "default"
+        if not default_kr.exists():
+            default_kr.write_text("login\n", encoding="utf-8")
+            with contextlib.suppress(OSError):
+                os.chmod(default_kr, 0o600)
+
+        reused_bus = False
+        if _HEADLESS_DBUS_STATE_FILE.is_file():
+            with contextlib.suppress(Exception):
+                cached = json.loads(_HEADLESS_DBUS_STATE_FILE.read_text(encoding="utf-8"))
+                if isinstance(cached, dict):
+                    cached_addr = str(cached.get("DBUS_SESSION_BUS_ADDRESS") or "").strip()
+                    cached_pid = int(cached.get("dbus_pid") or 0)
+                    if cached_addr and cached_pid > 0:
+                        os.kill(cached_pid, 0)
+                        env["DBUS_SESSION_BUS_ADDRESS"] = cached_addr
+                        cached_ctrl = str(cached.get("GNOME_KEYRING_CONTROL") or "").strip()
+                        if cached_ctrl:
+                            env["GNOME_KEYRING_CONTROL"] = cached_ctrl
+                        reused_bus = True
+
+        if not reused_bus:
+            dbus_res = subprocess.run(
+                ["dbus-daemon", "--session", "--print-address=1", "--print-pid=1", "--fork"],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=5,
+            )
+            dbus_pid = 0
+            if dbus_res.returncode == 0:
+                lines = [ln.strip() for ln in dbus_res.stdout.splitlines() if ln.strip()]
+                if lines:
+                    env["DBUS_SESSION_BUS_ADDRESS"] = lines[0]
+                if len(lines) >= 2 and lines[1].isdigit():
+                    dbus_pid = int(lines[1])
+
+            for gk_args in (
+                ["gnome-keyring-daemon", "--unlock"],
+                ["gnome-keyring-daemon", "--start", "--components=secrets"],
+            ):
+                gk_res = subprocess.run(
+                    gk_args,
+                    input="\n",
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=5,
+                )
+                for line in (gk_res.stdout or "").splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k.startswith("export "):
+                            k = k[7:].strip()
+                        if k:
+                            env[k] = v
+
+            if shutil.which("secret-tool") and env.get("DBUS_SESSION_BUS_ADDRESS"):
+                subprocess.run(
+                    [
+                        "secret-tool",
+                        "store",
+                        "--label=GitSeed Init",
+                        "service",
+                        "gitseed-init",
+                        "username",
+                        "init",
+                    ],
+                    input="1",
+                    text=True,
+                    capture_output=True,
+                    env=env,
+                    timeout=5,
+                )
+                subprocess.run(
+                    ["secret-tool", "clear", "service", "gitseed-init", "username", "init"],
+                    capture_output=True,
+                    env=env,
+                    timeout=5,
+                )
+
+            if env.get("DBUS_SESSION_BUS_ADDRESS"):
+                with contextlib.suppress(OSError):
+                    _HEADLESS_DBUS_STATE_FILE.write_text(
+                        json.dumps(
+                            {
+                                "DBUS_SESSION_BUS_ADDRESS": env["DBUS_SESSION_BUS_ADDRESS"],
+                                "GNOME_KEYRING_CONTROL": env.get("GNOME_KEYRING_CONTROL", ""),
+                                "dbus_pid": dbus_pid,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    os.chmod(_HEADLESS_DBUS_STATE_FILE, 0o600)
+
+        if shutil.which("secret-tool") and env.get("DBUS_SESSION_BUS_ADDRESS"):
+            for item in keyring_items or []:
+                item_secret = str(item.get("secret") or "").strip()
+                item_attrs = item.get("attributes")
+                item_label = str(item.get("label") or "Google Antigravity Session")
+                if item_secret and isinstance(item_attrs, dict) and item_attrs:
+                    store_cmd = ["secret-tool", "store", f"--label={item_label}"]
+                    for ak, av in item_attrs.items():
+                        if str(ak).strip():
+                            store_cmd.extend([str(ak).strip(), str(av)])
+                    if len(store_cmd) > 3:
+                        subprocess.run(
+                            store_cmd,
+                            input=item_secret,
+                            text=True,
+                            capture_output=True,
+                            env=env,
+                            timeout=5,
+                        )
+
+            clean_seed = (seed_token or "").strip()
+            if clean_seed:
+                for svc_name in ("gemini", "antigravity"):
+                    subprocess.run(
+                        [
+                            "secret-tool",
+                            "store",
+                            "--label=Google Antigravity Session",
+                            "service",
+                            svc_name,
+                            "username",
+                            "antigravity",
+                        ],
+                        input=clean_seed,
+                        text=True,
+                        capture_output=True,
+                        env=env,
+                        timeout=5,
+                    )
+    except Exception as exc:
+        logger.debug("Headless keyring initialization skipped: %s", exc)
+
+
+def _sync_headless_linux_keyring_to_home(
+    home_dir: Path, *, runtime_name: str = "antigravity"
+) -> None:
+    """Export any refreshed OAuth secrets from GNOME Keyring back into `~/.gemini/antigravity-cli`."""
+    if not _is_linux_or_posix():
+        return
+    env = os.environ.copy()
+    if not env.get("DBUS_SESSION_BUS_ADDRESS") and _HEADLESS_DBUS_STATE_FILE.is_file():
+        with contextlib.suppress(Exception):
+            cached = json.loads(_HEADLESS_DBUS_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(cached, dict):
+                if cached.get("DBUS_SESSION_BUS_ADDRESS"):
+                    env["DBUS_SESSION_BUS_ADDRESS"] = str(cached["DBUS_SESSION_BUS_ADDRESS"])
+                if cached.get("GNOME_KEYRING_CONTROL"):
+                    env["GNOME_KEYRING_CONTROL"] = str(cached["GNOME_KEYRING_CONTROL"])
+    env.setdefault("XDG_RUNTIME_DIR", str(_HEADLESS_XDG_RUNTIME_DIR))
+
+    token_val = ""
+    items: list[dict[str, Any]] = []
+    seen_sigs: set[Any] = set()
+
+    if shutil.which("secret-tool") and env.get("DBUS_SESSION_BUS_ADDRESS"):
+        for k1, v1, k2, v2 in (
+            ("service", "gemini", "username", "antigravity"),
+            ("service", "antigravity", "username", "antigravity"),
+            ("service", "gemini", "account", "antigravity"),
+            ("service", "antigravity", "account", "antigravity"),
+        ):
+            with contextlib.suppress(Exception):
+                res = subprocess.run(
+                    ["secret-tool", "lookup", k1, v1, k2, v2],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=3,
+                )
+                val = (res.stdout or "").strip()
+                if res.returncode == 0 and val:
+                    if not token_val:
+                        token_val = val
+                    lookup_sig: Any = (k1, v1, k2, v2, val)
+                    if lookup_sig not in seen_sigs:
+                        seen_sigs.add(lookup_sig)
+                        items.append(
+                            {
+                                "label": "Google Antigravity Session",
+                                "attributes": {k1: v1, k2: v2},
+                                "secret": val,
+                            }
+                        )
+
+    login_kr = home_dir / ".local" / "share" / "keyrings" / "login.keyring"
+    if login_kr.is_file():
+        with contextlib.suppress(Exception):
+            cp = configparser.RawConfigParser(interpolation=None)
+            cp.read_string(login_kr.read_text(encoding="utf-8", errors="ignore"))
+            for sec in cp.sections():
+                if not sec.isdigit():
+                    continue
+                sec_secret = cp.get(sec, "secret", fallback="").strip()
+                if not sec_secret:
+                    continue
+                attrs: dict[str, str] = {}
+                for sub in cp.sections():
+                    if sub.startswith(f"{sec}:attribute"):
+                        a_name = cp.get(sub, "name", fallback="").strip()
+                        a_val = cp.get(sub, "value", fallback="").strip()
+                        if a_name:
+                            attrs[a_name] = a_val
+                if attrs.get("service") == "gitseed-init":
+                    continue
+                if not token_val:
+                    token_val = sec_secret
+                kr_sig: Any = (tuple(sorted(attrs.items())), sec_secret)
+                if kr_sig not in seen_sigs:
+                    seen_sigs.add(kr_sig)
+                    items.append(
+                        {
+                            "label": cp.get(
+                                sec, "display-name", fallback="Google Antigravity Session"
+                            ),
+                            "attributes": attrs,
+                            "secret": sec_secret,
+                        }
+                    )
+
+    if not token_val and not items:
+        return
+
+    with contextlib.suppress(OSError):
+        agy_cli_dir = home_dir / ".gemini" / "antigravity-cli"
+        kr_out_dir = agy_cli_dir / "keyring"
+        kr_out_dir.mkdir(parents=True, exist_ok=True)
+        if token_val:
+            for out_file in (
+                kr_out_dir / "antigravity-oauth-token",
+                agy_cli_dir / "antigravity-oauth-token",
+            ):
+                out_file.write_text(token_val, encoding="utf-8")
+                os.chmod(out_file, 0o600)
+        if items and runtime_name == "antigravity":
+            auth_json = agy_cli_dir / "auth.json"
+            auth_json.write_text(
+                json.dumps({"keyring_items": items}, indent=2), encoding="utf-8"
+            )
+            os.chmod(auth_json, 0o600)
+
+
 class AntigravityAdapter(RuntimeAdapter):
     """Adapter for the Google Antigravity headless CLI (`agy -p --dangerously-skip-permissions`)."""
 
     @property
     def binary_name(self) -> str:
-        if shutil.which("agy") is not None:
-            return "agy"
-        if self.auth_mode == "cli_oauth" and shutil.which("gemini") is not None:
-            return "gemini"
         return "agy"
 
     def prepare_workspace(self) -> dict[str, str]:
@@ -1287,14 +1657,7 @@ class AntigravityAdapter(RuntimeAdapter):
                     agy_settings = loaded
             except Exception:
                 pass
-        if self.auth_mode == "cli_oauth":
-            if self.binary_name == "gemini":
-                agy_settings["selectedAuthType"] = "oauth-personal"
-                agy_settings["security"] = {
-                    "auth": {"selectedType": "oauth-personal"},
-                    "folderTrust": {"enabled": False},
-                }
-        else:
+        if self.auth_mode != "cli_oauth":
             agy_settings.setdefault("modelProvider", "gemini")
             agy_settings.setdefault("enableAdc", False)
         normalized_model = _normalize_google_cli_model(self.model)
@@ -1354,6 +1717,39 @@ class AntigravityAdapter(RuntimeAdapter):
         if self.auth_mode == "cli_oauth":
             env.pop("GEMINI_API_KEY", None)
             env.pop("GOOGLE_GEMINI_BASE_URL", None)
+            env["GEMINI_FORCE_FILE_STORAGE"] = "true"
+            env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] = "false"
+            gem_oauth = gemini_dir / "oauth_creds.json"
+            agy_oauth = agy_cfg_dir / "oauth_creds.json"
+            if gem_oauth.is_file() and not agy_oauth.exists():
+                with contextlib.suppress(OSError):
+                    agy_oauth.write_bytes(gem_oauth.read_bytes())
+                    os.chmod(agy_oauth, 0o600)
+            elif agy_oauth.is_file() and not gem_oauth.exists():
+                with contextlib.suppress(OSError):
+                    gem_oauth.write_bytes(agy_oauth.read_bytes())
+                    os.chmod(gem_oauth, 0o600)
+            seed_token, kr_items = _resolve_antigravity_keyring_seed(
+                gemini_dir, self.oauth_token or None
+            )
+            if seed_token:
+                kr_dir = agy_cfg_dir / "keyring"
+                with contextlib.suppress(OSError):
+                    kr_dir.mkdir(parents=True, exist_ok=True)
+                    for tok_path in (
+                        gemini_dir / "jetski-standalone-oauth-token",
+                        agy_cfg_dir / "antigravity-oauth-token",
+                        kr_dir / "antigravity-oauth-token",
+                    ):
+                        if not tok_path.exists():
+                            tok_path.write_text(seed_token, encoding="utf-8")
+                            os.chmod(tok_path, 0o600)
+            _ensure_headless_linux_keyring(
+                env,
+                Path.home(),
+                seed_token=seed_token,
+                keyring_items=kr_items,
+            )
             if self.oauth_token:
                 env["GOOGLE_CLOUD_ACCESS_TOKEN"] = self.oauth_token
                 env["GOOGLE_GENAI_USE_GCA"] = "true"
@@ -1369,24 +1765,6 @@ class AntigravityAdapter(RuntimeAdapter):
 
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
-        ws_root = self._multi_repo_workspace_root()
-        if self.binary_name == "gemini":
-            cmd = [
-                "gemini",
-                "-p",
-                prompt,
-                "--output-format",
-                "stream-json",
-                "--yolo",
-            ]
-            if ws_root is not None:
-                cmd.extend(["--include-directories", str(ws_root)])
-            if normalized_model:
-                cmd.extend(["--model", normalized_model])
-            if continue_session:
-                cmd.extend(["--resume", "latest"])
-            return cmd
-
         cmd = [
             "agy",
             "-p",
@@ -1406,14 +1784,6 @@ class AntigravityAdapter(RuntimeAdapter):
 
     def build_interactive_command(self) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
-        ws_root = self._multi_repo_workspace_root()
-        if self.binary_name == "gemini":
-            cmd = ["gemini", "--yolo"]
-            if ws_root is not None:
-                cmd.extend(["--include-directories", str(ws_root)])
-            if normalized_model:
-                cmd.extend(["--model", normalized_model])
-            return cmd
         cmd = ["agy", "--dangerously-skip-permissions"]
         if normalized_model:
             cmd.extend(["--model", normalized_model])
@@ -1505,6 +1875,18 @@ class GeminiAdapter(RuntimeAdapter):
         if self.auth_mode == "cli_oauth":
             env.pop("GEMINI_API_KEY", None)
             env.pop("GOOGLE_GEMINI_BASE_URL", None)
+            env["GEMINI_FORCE_FILE_STORAGE"] = "true"
+            env["GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] = "false"
+            if self.binary_name == "agy":
+                seed_token, kr_items = _resolve_antigravity_keyring_seed(
+                    gemini_cfg_dir, self.oauth_token or None
+                )
+                _ensure_headless_linux_keyring(
+                    env,
+                    Path.home(),
+                    seed_token=seed_token,
+                    keyring_items=kr_items,
+                )
             if self.oauth_token:
                 env["GOOGLE_CLOUD_ACCESS_TOKEN"] = self.oauth_token
                 env["GOOGLE_GENAI_USE_GCA"] = "true"

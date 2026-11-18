@@ -18,10 +18,10 @@ from sqlalchemy import or_
 from sqlmodel import col, select
 
 from gitseed_core.api.deps import CurrentUser, DBSession, bearer_scheme, cookie_scheme
-from gitseed_core.config import settings
 from gitseed_core.db import AsyncSessionLocal
 from gitseed_core.models.project import Project, ProjectMember
 from gitseed_core.models.user import User
+from gitseed_core.security import derive_domain_hmac_key
 from gitseed_core.services import auth as auth_service
 from gitseed_core.services.errors import Forbidden, Unauthorized
 from gitseed_core.services.events import format_sse_message, subscribe_events
@@ -39,6 +39,7 @@ def _get_session_factory() -> Any:
 
 SSE_STREAM_TOKEN_PREFIX = "gssse_"
 SSE_STREAM_TOKEN_TTL_SECONDS = 60
+_SSE_STREAM_TOKEN_HKDF_INFO = b"gitseed-sse-stream-token-v1"
 
 
 class StreamTokenResponse(BaseModel):
@@ -55,8 +56,9 @@ def create_sse_stream_token(
     exp = int(time.time()) + ttl_seconds
     payload = f"sse:{user_id}:{exp}".encode()
     payload_b64 = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    hmac_key = derive_domain_hmac_key(_SSE_STREAM_TOKEN_HKDF_INFO)
     sig = hmac.new(
-        settings.GITSEED_SECRET_KEY.encode(),
+        hmac_key,
         payload_b64.encode("ascii"),
         hashlib.sha256,
     ).hexdigest()
@@ -71,8 +73,9 @@ def verify_sse_stream_token(token: str) -> str | None:
     if "." not in body:
         return None
     payload_b64, sig = body.split(".", 1)
+    hmac_key = derive_domain_hmac_key(_SSE_STREAM_TOKEN_HKDF_INFO)
     expected_sig = hmac.new(
-        settings.GITSEED_SECRET_KEY.encode(),
+        hmac_key,
         payload_b64.encode("ascii"),
         hashlib.sha256,
     ).hexdigest()

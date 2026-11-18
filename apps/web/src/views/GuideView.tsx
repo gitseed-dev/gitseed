@@ -14,6 +14,7 @@ import {
   Sliders,
   Workflow,
 } from 'lucide-react'
+import { GettingStartedCard } from '../components/common/GettingStartedCard'
 import { PageBreadcrumb } from '../components/common/PageBreadcrumb'
 import { StageBadge } from '../components/common/StageBadge'
 import { SEED_STAGES, VIEWS } from '../constants'
@@ -204,6 +205,9 @@ export const GuideView: React.FC = () => {
           </p>
         </div>
       </div>
+
+      {/* Interactive Setup Checklist */}
+      <GettingStartedCard variant="guide" />
 
       {/* 1. What is a Seed & The 5-Stage Pipeline */}
       <Card className="p-6 border border-zinc-200/80 dark:border-zinc-700/80 bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md rounded-2xl shadow-xs flex flex-col gap-5 dark:ring-1 dark:ring-white/[0.04]">

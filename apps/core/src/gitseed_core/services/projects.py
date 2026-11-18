@@ -325,12 +325,24 @@ async def update_project(
         project.name = name.strip()
 
     if slug is not None and slug.strip().lower() != project.slug:
+        old_slug = project.slug
         new_slug = _validate_slug(slug)
         if project.archived_at is None:
             await _ensure_active_slug_available(
                 session, new_slug, exclude_project_id=project.id
             )
         project.slug = new_slug
+        local_repos = (
+            await session.execute(
+                select(ProjectRepository).where(
+                    ProjectRepository.project_id == project.id,
+                    ProjectRepository.full_name == f"local/{old_slug}",
+                )
+            )
+        ).scalars().all()
+        for lr in local_repos:
+            if isinstance(lr, ProjectRepository):
+                lr.full_name = f"local/{new_slug}"
 
     if description is not None:
         project.description = description.strip()
@@ -339,6 +351,8 @@ async def update_project(
     if visibility is not None:
         project.visibility = visibility
     if backends_restricted is not None:
+        if backends_restricted != project.backends_restricted and actor.org_role != OrgRole.ADMIN:
+            raise Forbidden("Only organization administrators can modify backends_restricted")
         project.backends_restricted = backends_restricted
     if sandbox_config is not None:
         existing_cfg = dict(project.sandbox_config or {})
@@ -739,6 +753,12 @@ async def add_repository(
     cleaned_name = full_name.strip().strip("/")
     if "/" not in cleaned_name:
         raise Invalid("Repository full_name must be in 'owner/repo' format")
+    if (backend.provider or "").strip().lower() == "local":
+        expected_local = f"local/{project.slug}"
+        if cleaned_name != expected_local:
+            raise Forbidden(
+                f"Local Git repository full_name must match '{expected_local}' for this project"
+            )
 
     existing = (
         await session.execute(
@@ -899,6 +919,10 @@ async def allow_project_backend(
 ) -> list[str]:
     """Allow a project to use a specific backend when backends_restricted is enabled."""
     project = await require_project_maintainer(session, actor, project_id_or_slug)
+    if actor.org_role != OrgRole.ADMIN:
+        raise Forbidden(
+            "Only organization administrators can modify project backend allowlists"
+        )
     backend = await session.get(Backend, backend_id)
     if backend is None:
         raise NotFound("Backend not found")
@@ -926,6 +950,10 @@ async def disallow_project_backend(
 ) -> list[str]:
     """Remove a backend from a project's allowed backend list."""
     project = await require_project_maintainer(session, actor, project_id_or_slug)
+    if actor.org_role != OrgRole.ADMIN:
+        raise Forbidden(
+            "Only organization administrators can modify project backend allowlists"
+        )
     existing = await session.get(ProjectBackend, (project.id, backend_id))
     if existing is not None:
         await session.delete(existing)

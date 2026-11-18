@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +20,9 @@ from gitseed_core.services.agents import get_runtime_model_compatibility_warning
 from gitseed_core.services.gateway import (
     build_litellm_model_payloads,
     derive_litellm_virtual_key,
+    extract_enabled_model_ids,
+    resolve_backend_default_model,
+    resolve_model_context_limit,
 )
 from gitseed_core.services.scheduler import _order_candidates_by_strategy
 from gitseed_core.services.seeds import extract_agent_mentions
@@ -219,6 +223,9 @@ def test_runner_adapter_uses_litellm_virtual_key_not_run_token(
     assert cc_env["ANTHROPIC_BASE_URL"] == "http://litellm:4000"
     assert cc_env["ANTHROPIC_AUTH_TOKEN"] == "sk-gsr-run_123-virtualkey"
     assert "ANTHROPIC_API_KEY" not in cc_env
+    claude_cfg = json.loads((fake_home / ".claude.json").read_text(encoding="utf-8"))
+    assert claude_cfg["projects"]["/workspace"]["hasTrustDialogAccepted"] is True
+    assert claude_cfg["projects"][str(tmp_path)]["hasTrustDialogAccepted"] is True
 
     # Verify Codex adapter (`codex exec`)
     codex_ctx = {**ctx, "runtime": "codex"}
@@ -394,3 +401,60 @@ def test_extract_agent_mentions() -> None:
     assert mentions == {"architect", "coder"}
     assert extract_agent_mentions("Looks good to me, LGTM!") == set()
     assert Decimal("0.01") > Decimal("0")
+
+
+def test_backend_default_model_and_context_limits() -> None:
+    backend = Backend(
+        id="bkd_gemini",
+        name="Gemini Cloud",
+        type=BackendType.INFERENCE,
+        provider="gemini",
+        config={
+            "models": [
+                {"id": "gemini-4-argon", "enabled": True},
+                {"id": "gemini-4-hydrogen", "enabled": True, "is_default": True},
+                {"id": "gemini-4-carbon", "enabled": False},
+                {"id": "gemini-3.8-flash", "enabled": True},
+            ],
+            "default_model": "gemini-4-hydrogen",
+        },
+        secrets_encrypted=None,
+    )
+    assert resolve_backend_default_model(backend) == "gemini-4-hydrogen"
+    assert extract_enabled_model_ids(backend) == [
+        "gemini-4-hydrogen",
+        "gemini-4-argon",
+        "gemini-3.8-flash",
+    ]
+    assert resolve_model_context_limit("gemini-4-hydrogen") == 1_000_000
+    assert resolve_model_context_limit("pro") == 1_000_000
+    assert resolve_model_context_limit("grok-4.3") == 1_000_000
+
+
+def test_claude_cli_auth_ansi_and_token_extraction() -> None:
+    from gitseed_core.services.cli_auth import (
+        _build_pty_auth_script,
+        _extract_claude_oauth_token,
+        _strip_ansi,
+    )
+
+    ink_prompt = "Paste\x1b[1Ccode\x1b[1Chere\x1b[1Cif\x1b[1Cprompted\x1b[1C>"
+    assert _strip_ansi(ink_prompt) == "Paste code here if prompted >"
+
+    token_part1 = "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789"
+    token_part2 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijk-0123456789AA"
+    full_token = token_part1 + token_part2
+    wrapped_output = (
+        "✓ Long-lived authentication token created successfully!\n\n"
+        "Your OAuth token (valid for 1 year):\n\n"
+        f"{token_part1}\n{token_part2}\n\n"
+        "Store this token securely.\n"
+    )
+    assert _extract_claude_oauth_token(wrapped_output) == full_token
+
+    pty_script = _build_pty_auth_script(["claude", "setup-token"])
+    assert ".gitseed_pty_v2" in pty_script
+    assert "pending_enters" in pty_script
+    assert ".credentials.json" in pty_script
+
+

@@ -19,7 +19,10 @@ import { queryKeys } from '../../api/queryClient'
 import { VIEWS } from '../../constants'
 import { StageBadge } from '../common/StageBadge'
 import { useData } from '../../context/DataContext'
-import { getRuntimeDefinition } from '../../utils/agents'
+import {
+  filterStageAgentsForStage,
+  getRuntimeDefinition,
+} from '../../utils/agents'
 import { STAGE_METADATA } from '../../utils/policies'
 import type {
   ProjectRole,
@@ -66,8 +69,14 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const stageAgents = useMemo(
-    () => agents.filter((a) => !a.archived_at && a.kind === 'stage'),
-    [agents]
+    () =>
+      policy
+        ? filterStageAgentsForStage(agents, policy.stage, [
+          agentId,
+          policy.agent_id,
+        ])
+        : agents.filter((a) => !a.archived_at && a.kind === 'stage'),
+    [agents, policy, agentId]
   )
 
   useEffect(() => {
@@ -82,7 +91,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
     setAllowAutoApprove(policy.allow_auto_approve)
     setAllowSecondOpinions(
       policy.allow_second_opinions ??
-        ['ideate', 'plan', 'review'].includes(policy.stage)
+      ['ideate', 'plan', 'review'].includes(policy.stage)
     )
     setMaxAttempts(policy.max_attempts)
     setTimeoutMinutes(policy.timeout_minutes)
@@ -266,7 +275,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                 Stage Policy
               </h2>
               {projectName && (
-                <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/20">
+                <span className="px-2 py-0.5 rounded-md text-xs font-medium bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/20">
                   {projectName}
                 </span>
               )}
@@ -301,7 +310,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                 <div className="text-xs sm:text-sm font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
                   <span>Stage Execution</span>
                   {meta.isRequired && (
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-zinc-200/80 dark:bg-zinc-700/80 text-zinc-600 dark:text-zinc-300">
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-zinc-200/80 dark:bg-zinc-700/80 text-zinc-600 dark:text-zinc-300">
                       <Lock size={10} />
                       <span>Required</span>
                     </span>
@@ -319,8 +328,8 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                   type="button"
                   onClick={() => setEnabled((prev) => !prev)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer shrink-0 flex items-center gap-2 ${enabled
-                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700/80'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700/80'
                     }`}
                 >
                   <span
@@ -371,9 +380,8 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
 
             {['ideate', 'plan', 'review'].includes(policy.stage) && (
               <div
-                className={`pt-3 border-t border-zinc-200 dark:border-zinc-700/80 ${
-                  !enabled ? 'opacity-50 pointer-events-none' : ''
-                }`}
+                className={`pt-3 border-t border-zinc-200 dark:border-zinc-700/80 ${!enabled ? 'opacity-50 pointer-events-none' : ''
+                  }`}
               >
                 <button
                   type="button"
@@ -389,11 +397,10 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                     </div>
                   </div>
                   <div
-                    className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${
-                      allowSecondOpinions
+                    className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${allowSecondOpinions
                         ? 'bg-teal-600 border-teal-600 text-white'
                         : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700/80'
-                    }`}
+                      }`}
                   >
                     {allowSecondOpinions && <Check size={11} />}
                   </div>
@@ -418,7 +425,7 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
             </div>
             {inheritedInstructions && (
               <div className="rounded-xl border border-zinc-200 dark:border-zinc-700/80 bg-zinc-50/70 dark:bg-zinc-800/40">
-                <div className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <div className="px-3 pt-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
                   From organization defaults
                 </div>
                 <div className="px-3 pb-2.5 pt-1 text-xs text-zinc-600 dark:text-zinc-300 whitespace-pre-wrap max-h-32 overflow-y-auto">
@@ -458,8 +465,8 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                 type="button"
                 onClick={() => setRequiresApproval(true)}
                 className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-1 ${requiresApproval
-                    ? 'border-teal-500 bg-teal-500/10'
-                    : 'border-zinc-200 dark:border-zinc-700/80 bg-zinc-50/60 dark:bg-zinc-800/40 hover:border-zinc-300 dark:hover:border-zinc-600'
+                  ? 'border-teal-500 bg-teal-500/10'
+                  : 'border-zinc-200 dark:border-zinc-700/80 bg-zinc-50/60 dark:bg-zinc-800/40 hover:border-zinc-300 dark:hover:border-zinc-600'
                   }`}
               >
                 <div className="flex items-center justify-between">
@@ -480,8 +487,8 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                 type="button"
                 onClick={() => setRequiresApproval(false)}
                 className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-1 ${!requiresApproval
-                    ? 'border-teal-500 bg-teal-500/10'
-                    : 'border-zinc-200 dark:border-zinc-700/80 bg-zinc-50/60 dark:bg-zinc-800/40 hover:border-zinc-300 dark:hover:border-zinc-600'
+                  ? 'border-teal-500 bg-teal-500/10'
+                  : 'border-zinc-200 dark:border-zinc-700/80 bg-zinc-50/60 dark:bg-zinc-800/40 hover:border-zinc-300 dark:hover:border-zinc-600'
                   }`}
               >
                 <div className="flex items-center justify-between">
@@ -552,8 +559,8 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                     </div>
                     <div
                       className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${allowSelfApproval
-                          ? 'bg-teal-600 border-teal-600 text-white'
-                          : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700/80'
+                        ? 'bg-teal-600 border-teal-600 text-white'
+                        : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700/80'
                         }`}
                     >
                       {allowSelfApproval && <Check size={11} />}
@@ -575,8 +582,8 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                     </div>
                     <div
                       className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${allowAutoApprove
-                          ? 'bg-teal-600 border-teal-600 text-white'
-                          : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700/80'
+                        ? 'bg-teal-600 border-teal-600 text-white'
+                        : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700/80'
                         }`}
                     >
                       {allowAutoApprove && <Check size={11} />}
@@ -642,9 +649,9 @@ export const PolicyDrawer: React.FC<PolicyDrawerProps> = ({
                         key={preset}
                         type="button"
                         onClick={() => setTimeoutMinutes(preset)}
-                        className={`px-1.5 py-1 rounded-lg text-[11px] font-mono font-semibold transition cursor-pointer ${timeoutMinutes === preset
-                            ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30'
-                            : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                        className={`px-1.5 py-1 rounded-lg text-xs font-mono font-semibold transition cursor-pointer ${timeoutMinutes === preset
+                          ? 'bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/30'
+                          : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                           }`}
                       >
                         {preset}m

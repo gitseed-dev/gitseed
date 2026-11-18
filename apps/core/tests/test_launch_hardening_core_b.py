@@ -224,6 +224,7 @@ async def test_ensure_docker_network_sets_internal_true() -> None:
 @pytest.mark.asyncio
 async def test_ensure_k8s_namespace_applies_default_egress_network_policy() -> None:
     created_policies: list[dict[str, Any]] = []
+    updated_policies: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET" and request.url.path == "/api/v1/namespaces/gitseed-alpha":
@@ -237,6 +238,13 @@ async def test_ensure_k8s_namespace_applies_default_egress_network_policy() -> N
         ):
             created_policies.append(json.loads(request.content.decode("utf-8")))
             return httpx.Response(409, json={"reason": "AlreadyExists"})
+        if (
+            request.method == "PUT"
+            and request.url.path
+            == "/apis/networking.k8s.io/v1/namespaces/gitseed-alpha/networkpolicies/gitseed-default-egress"
+        ):
+            updated_policies.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={"metadata": {"name": "gitseed-default-egress"}})
         return httpx.Response(500)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -251,7 +259,8 @@ async def test_ensure_k8s_namespace_applies_default_egress_network_policy() -> N
 
     assert ns == "gitseed-alpha"
     assert len(created_policies) == 1
-    np_spec = created_policies[0]["spec"]
+    assert len(updated_policies) == 1
+    np_spec = updated_policies[0]["spec"]
     assert np_spec["policyTypes"] == ["Egress"]
     ip_blocks = [
         rule["to"][0]["ipBlock"]

@@ -220,48 +220,54 @@ async def advance_seed_after_succeeded_run(
                 session, seed, pr_info=pr_info
             )
             return
-        if pr_info.get("state") == "open" and not pr_info.get(
-            "ready_to_merge", True
-        ):
+        if not pr_info.get("ready_to_merge", False):
             seed.status = SeedStatus.AWAITING_APPROVAL
-            seed.blocked_reason = None
+            seed.blocked_reason = pr_info.get("block_reason")
             seed.updated_at = now
             return
 
-    if (
-        seed.autonomy == SeedAutonomy.AUTONOMOUS
-        and pol.requires_approval
-        and pol.allow_auto_approve
-    ):
-        auto_approval = Approval(
-            seed_id=seed.id,
-            stage=effective_stage,
-            snapshot=await build_stage_approval_snapshot(
-                session, seed, effective_stage, cycle_runs=cycle_runs
-            ),
-            decision=ApprovalDecision.APPROVED,
-            automatic=True,
-            decided_by=None,
-            approver_role=None,
-            created_at=now,
-        )
-        session.add(auto_approval)
-        await session.flush()
-        record(
-            session,
-            type=ActivityType.APPROVAL_GRANTED,
-            actor_type=ActorType.SYSTEM,
-            actor_id=None,
-            project_id=seed.project_id,
-            seed_id=seed.id,
-            data={
-                "stage": str(effective_stage),
-                "approval_id": auto_approval.id,
-                "automatic": True,
-            },
-        )
     if effective_stage == SeedStage.MERGE:
         merge_sha = await merge_seed_branch_into_default(session, seed)
+        if not merge_sha:
+            seed.stage = SeedStage.MERGE
+            seed.status = SeedStatus.AWAITING_APPROVAL
+            seed.blocked_reason = (
+                "Automatic branch merge did not complete; verify PR status and approve merge."
+            )
+            seed.updated_at = now
+            return
+        if (
+            seed.autonomy == SeedAutonomy.AUTONOMOUS
+            and pol.requires_approval
+            and pol.allow_auto_approve
+        ):
+            auto_approval = Approval(
+                seed_id=seed.id,
+                stage=effective_stage,
+                snapshot=await build_stage_approval_snapshot(
+                    session, seed, effective_stage, cycle_runs=cycle_runs
+                ),
+                decision=ApprovalDecision.APPROVED,
+                automatic=True,
+                decided_by=None,
+                approver_role=None,
+                created_at=now,
+            )
+            session.add(auto_approval)
+            await session.flush()
+            record(
+                session,
+                type=ActivityType.APPROVAL_GRANTED,
+                actor_type=ActorType.SYSTEM,
+                actor_id=None,
+                project_id=seed.project_id,
+                seed_id=seed.id,
+                data={
+                    "stage": str(effective_stage),
+                    "approval_id": auto_approval.id,
+                    "automatic": True,
+                },
+            )
         seed.stage = SeedStage.MERGE
         seed.status = SeedStatus.MERGED
         seed.blocked_reason = None
@@ -270,6 +276,10 @@ async def advance_seed_after_succeeded_run(
         merged_data: dict[str, Any] = {"run_id": run.id}
         if merge_sha:
             merged_data["merge_commit_sha"] = merge_sha
+            run.output = {
+                **(run.output if isinstance(run.output, dict) else {}),
+                "merge_commit_sha": merge_sha,
+            }
         record(
             session,
             type=ActivityType.SEED_MERGED,
@@ -280,6 +290,38 @@ async def advance_seed_after_succeeded_run(
             data=merged_data,
         )
     else:
+        if (
+            seed.autonomy == SeedAutonomy.AUTONOMOUS
+            and pol.requires_approval
+            and pol.allow_auto_approve
+        ):
+            auto_approval = Approval(
+                seed_id=seed.id,
+                stage=effective_stage,
+                snapshot=await build_stage_approval_snapshot(
+                    session, seed, effective_stage, cycle_runs=cycle_runs
+                ),
+                decision=ApprovalDecision.APPROVED,
+                automatic=True,
+                decided_by=None,
+                approver_role=None,
+                created_at=now,
+            )
+            session.add(auto_approval)
+            await session.flush()
+            record(
+                session,
+                type=ActivityType.APPROVAL_GRANTED,
+                actor_type=ActorType.SYSTEM,
+                actor_id=None,
+                project_id=seed.project_id,
+                seed_id=seed.id,
+                data={
+                    "stage": str(effective_stage),
+                    "approval_id": auto_approval.id,
+                    "automatic": True,
+                },
+            )
         next_stage = await next_enabled_stage(session, seed.project_id, effective_stage)
         if next_stage is not None:
             old_stage = seed.stage
@@ -701,6 +743,16 @@ async def update_run(
 
     if "container_id" in fields:
         run.container_id = _validate_safe_container_id(run.id, container_id)
+    if (
+        input_tokens is not None
+        or output_tokens is not None
+        or cost is not None
+        or output is not None
+        or "exit_code" in fields
+    ) and actor.org_role != OrgRole.ADMIN:
+        raise Forbidden(
+            "Organization admin privileges required to manually override run telemetry, cost, or output"
+        )
     if input_tokens is not None:
         run.input_tokens = input_tokens
     if output_tokens is not None:

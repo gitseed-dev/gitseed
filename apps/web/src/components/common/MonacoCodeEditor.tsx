@@ -557,12 +557,12 @@ const FallbackCodeSurface: React.FC<FallbackCodeSurfaceProps> = ({
       }
     >
       {bannerKind === 'phone' ? (
-        <div className="px-3 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-100/80 dark:bg-zinc-900/80 text-[11px] text-zinc-600 dark:text-zinc-400 flex items-center gap-1.5">
+        <div className="px-3 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-100/80 dark:bg-zinc-900/80 text-xs text-zinc-600 dark:text-zinc-400 flex items-center gap-1.5">
           <Smartphone size={12} className="text-teal-500 shrink-0" />
           <span>Read-only view on small screens</span>
         </div>
       ) : (
-        <div className="px-3 py-1.5 border-b border-amber-500/25 bg-amber-500/10 text-[11px] text-amber-800 dark:text-amber-300 flex items-center justify-between gap-2">
+        <div className="px-3 py-1.5 border-b border-amber-500/25 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between gap-2">
           <span>
             App assets were updated since this tab was opened. Reload to load the full editor runtime.
           </span>
@@ -626,7 +626,7 @@ const FallbackCodeSurface: React.FC<FallbackCodeSurfaceProps> = ({
                           ? () => onLineSelect?.(oldSelectable, 'original')
                           : undefined
                       }
-                      className={`w-9 px-1.5 text-right select-none text-[10px] text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70 ${
+                      className={`w-9 px-1.5 text-right select-none text-xs text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70 ${
                         canClickOld
                           ? 'cursor-pointer hover:text-teal-600 dark:hover:text-teal-400'
                           : ''
@@ -640,7 +640,7 @@ const FallbackCodeSurface: React.FC<FallbackCodeSurfaceProps> = ({
                           ? () => onLineSelect?.(newSelectable, 'modified')
                           : undefined
                       }
-                      className={`w-9 px-1.5 text-right select-none text-[10px] text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70 ${
+                      className={`w-9 px-1.5 text-right select-none text-xs text-zinc-400 border-r border-zinc-200/70 dark:border-zinc-800/70 ${
                         canClickNew
                           ? 'cursor-pointer hover:text-teal-600 dark:hover:text-teal-400'
                           : ''

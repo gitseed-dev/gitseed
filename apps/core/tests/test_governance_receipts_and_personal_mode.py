@@ -56,6 +56,8 @@ async def test_personal_mode_backend_acknowledgement_and_access_control(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _make_session()
+    session.scalar = AsyncMock(return_value=1)
+    session.execute = AsyncMock(return_value=_exec_result(scalars_all=[]))
     owner = _make_user("usr_owner123", name="Owner User")
     other_user = _make_user("usr_other456", name="Other User")
 

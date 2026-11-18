@@ -8,11 +8,11 @@ from gitseed_common.enums import OrgRole, UserStatus
 
 class LoginRequest(BaseModel):
     email: str
-    password: str
+    password: str = Field(max_length=1024)
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
+    current_password: str = Field(max_length=1024)
     new_password: str = Field(min_length=8, max_length=200)
 
 

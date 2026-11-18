@@ -160,14 +160,18 @@ async def fetch_finalize_context(
     finalize_token: str,
 ) -> dict[str, Any]:
     """Fetch trusted finalize context (base_heads, blocked_paths, repositories) from Core."""
+    url = f"{api_url.rstrip('/')}/api/v1/runner/finalize-context"
+    headers = {"Authorization": f"Bearer {finalize_token}"}
     async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.get(
-            f"{api_url.rstrip('/')}/api/v1/runner/finalize-context",
-            headers={"Authorization": f"Bearer {finalize_token}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data if isinstance(data, dict) else {}
+        for attempt in range(6):
+            resp = await client.get(url, headers=headers)
+            if resp.status_code in (409, 502, 503, 504) and attempt < 5:
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            return data if isinstance(data, dict) else {}
+    return {}
 
 
 async def request_git_push_credential(
@@ -384,6 +388,7 @@ async def run_prepare_mode(
         **clone_kwargs,
     )
 
+    remote_seed_heads = _get_remote_seed_heads(repo_dirs, seed_branch)
     prep_error: str | None = None
     if repo_list and not repo_dirs and stage in ("execute", "review", "merge"):
         prep_error = (
@@ -395,10 +400,17 @@ async def run_prepare_mode(
         and repo_dirs
         and not has_remote_seed_branch(repo_dirs, project_slug, seed_number)
     ):
-        prep_error = (
-            f"Seed branch '{seed_branch}' does not exist on the remote repository. "
-            "Move the seed back to Execute to push the branch before reviewing."
-        )
+        if any(str(v).strip() for v in remote_seed_heads.values()):
+            prep_error = (
+                f"Failed to check out remote seed branch '{seed_branch}' in /workspace."
+            )
+        else:
+            prep_error = (
+                f"Seed branch '{seed_branch}' does not exist on the remote repository. "
+                "Move the seed back to Execute to push the branch before reviewing."
+            )
+    if prep_error:
+        logger.error("prepare: %s", prep_error)
 
     # Ensure every cloned repo has neutralized hooks/config and zero credentials on disk
     known_repo_dirs = {p.resolve() for p in repo_dirs.values()}
@@ -482,8 +494,8 @@ async def run_prepare_mode(
         workspace_root / ".gitseed" / "related",
     )
 
-    # Report trusted base_heads to Core
-    with suppress(Exception):
+    # Report trusted base_heads to Core (fail prepare if Core cannot record trusted heads)
+    try:
         await post_prepare_complete(
             api_url,
             prepare_token,
@@ -492,6 +504,10 @@ async def run_prepare_mode(
             seed_branch=seed_branch,
             error=prep_error,
         )
+    except Exception as exc:
+        logger.error("prepare: failed to report prepare-complete to Core: %s", exc)
+        if not prep_error:
+            prep_error = f"Failed to report prepare completion to Control Plane: {exc}"
 
     # Write trusted prepare metadata to /gitseed-secrets (if writable) and /gitseed-ctl
     meta_payload: dict[str, Any] = {
@@ -726,17 +742,18 @@ async def run_finalize_mode(
     run_id = str(fin_ctx.get("run_id") or run_id_env or "run")
     local_meta: dict[str, Any] = {}
     meta_from_secrets = False
+    secrets_dir = get_secrets_dir()
     meta_candidates = [run_id]
     if run_id_env and run_id_env not in meta_candidates:
         meta_candidates.append(run_id_env)
     for cand_id in meta_candidates:
-        meta_path = _meta_file_path(cand_id, prefer_secrets=True)
-        if meta_path.is_file() and not meta_path.is_symlink():
+        secrets_meta = secrets_dir / f"{(cand_id or 'run').strip() or 'run'}.meta.json"
+        if secrets_meta.is_file() and not secrets_meta.is_symlink():
             with suppress(Exception):
-                loaded_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                loaded_meta = json.loads(secrets_meta.read_text(encoding="utf-8"))
                 if isinstance(loaded_meta, dict):
                     local_meta = loaded_meta
-                    meta_from_secrets = (meta_path.parent == get_secrets_dir())
+                    meta_from_secrets = True
                     break
 
     stage = str(fin_ctx.get("stage") or local_meta.get("stage") or "ideate").lower()
@@ -745,17 +762,20 @@ async def run_finalize_mode(
     project_slug = str(fin_ctx.get("project_slug") or local_meta.get("project_slug") or "")
     runtime = str(fin_ctx.get("runtime") or "opencode")
     model = str(fin_ctx.get("model") or "default")
+    canonical_seed_branch = format_seed_branch(project_slug, seed_number) if project_slug else ""
     seed_branch = str(
         fin_ctx.get("seed_branch")
-        or local_meta.get("seed_branch")
+        or canonical_seed_branch
         or format_seed_branch(project_slug, seed_number)
     )
+    if canonical_seed_branch and seed_branch != canonical_seed_branch:
+        seed_branch = canonical_seed_branch
     raw_base_heads: dict[str, Any] = (
         dict(fin_ctx["base_heads"])
         if isinstance(fin_ctx.get("base_heads"), dict) and fin_ctx.get("base_heads")
         else (
             dict(local_meta["base_heads"])
-            if isinstance(local_meta.get("base_heads"), dict)
+            if meta_from_secrets and isinstance(local_meta.get("base_heads"), dict)
             else {}
         )
     )
@@ -771,7 +791,7 @@ async def run_finalize_mode(
         if isinstance(fin_ctx.get("remote_seed_heads"), dict) and fin_ctx.get("remote_seed_heads")
         else (
             dict(local_meta["remote_seed_heads"])
-            if isinstance(local_meta.get("remote_seed_heads"), dict)
+            if meta_from_secrets and isinstance(local_meta.get("remote_seed_heads"), dict)
             else {}
         )
     )
@@ -804,7 +824,10 @@ async def run_finalize_mode(
 
     status = str(agent_result.get("status") or "failed")
     raw_exit_code = agent_result.get("exit_code")
-    exit_code = int(raw_exit_code) if isinstance(raw_exit_code, (int, str)) else 1
+    exit_code = 1
+    if isinstance(raw_exit_code, (int, str)) and not isinstance(raw_exit_code, bool):
+        with suppress(TypeError, ValueError):
+            exit_code = int(raw_exit_code)
     error_msg: str | None = (
         str(agent_result["error"]) if agent_result.get("error") else None
     )
@@ -1024,6 +1047,19 @@ async def run_finalize_mode(
                 any_pushed = True
                 if primary_commit_sha is None or bool(repo.get("is_primary")):
                     primary_commit_sha = commit_res.commit_sha
+
+            if (
+                status == "succeeded"
+                and repo_dirs
+                and not any_pushed
+                and not any(str(v).strip() for v in remote_seed_heads.values())
+            ):
+                status = "failed"
+                exit_code = 1
+                error_msg = (
+                    f"Execute stage completed without creating or modifying any tracked "
+                    f"repository files to push to branch '{seed_branch}'."
+                )
 
             trusted_result["blocked_paths_violations"] = sorted(set(all_violations))
             trusted_result["secret_scan_findings"] = all_secret_findings

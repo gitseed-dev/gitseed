@@ -183,12 +183,12 @@ export const ProjectOverviewTab: React.FC<ProjectOverviewTabProps> = ({
                               {repo.full_name}
                             </span>
                             {isLocalRepo && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 shrink-0">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 shrink-0">
                                 On-Device Local
                               </span>
                             )}
                             {repo.is_primary && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25 shrink-0">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25 shrink-0">
                                 <Star size={10} className="fill-current" />
                                 Primary
                               </span>

@@ -809,8 +809,8 @@ async def _run_cli_with_steering(
             )
             logger.error(err_msg)
             return 127, "", err_msg
-        logger.info(
-            "CLI binary '%s' not found on PATH; synthesizing output via Model Gateway",
+        logger.warning(
+            "CLI binary '%s' not found on PATH; synthesizing non-editing stage output via Model Gateway fallback",
             adapter.binary_name,
         )
         ok = await synthesize_output_via_gateway(
@@ -1709,7 +1709,9 @@ async def _run_prepared_stage_session(
             )
             logs += "\n" + r_logs
             exit_code = r_code
-            re_out, _ = _load_and_validate_output_file(stage, output_file)
+            re_out, _ = _load_and_validate_output_file(
+                stage, output_file, **policy_bounds_kwargs, enforce_bounds=False
+            )
             if re_out is not None:
                 validated_output = re_out
 
@@ -1722,9 +1724,32 @@ async def _run_prepared_stage_session(
                     stage=stage,
                     require_files=True,
                 )
-                re_out, _ = _load_and_validate_output_file(stage, output_file)
+                re_out, _ = _load_and_validate_output_file(
+                    stage, output_file, **policy_bounds_kwargs, enforce_bounds=False
+                )
                 if re_out is not None:
                     validated_output = re_out
+                if (
+                    any((d / ".git").exists() for d in repo_dirs.values())
+                    and not has_workspace_code_changes(repo_dirs, initial_heads)
+                    and not has_remote_seed_branch(repo_dirs, project_slug, seed_number)
+                ):
+                    err_msg = (
+                        "Execute stage completed without creating or modifying any "
+                        "repository files in /workspace."
+                    )
+                    logger.error(err_msg)
+                    await _finish_agent_or_report(
+                        is_broker_agent_mode=is_broker_agent_mode,
+                        run_id=run_id,
+                        api_url=api_url,
+                        run_token=run_token,
+                        status="failed",
+                        exit_code=exit_code or 1,
+                        error=err_msg,
+                        log_tail=logs,
+                    )
+                    return 1
             else:
                 err_msg = (
                     "Strict CLI execution enabled: Execute stage completed without modifying "
@@ -2000,7 +2025,12 @@ async def _run_prepared_stage_session(
                                     continue_session=False,
                                     **cli_kwargs,
                                 )
-                                w_validated, _ = _load_and_validate_output_file(stage, w_out)
+                                w_validated, _ = _load_and_validate_output_file(
+                                    stage,
+                                    w_out,
+                                    **policy_bounds_kwargs,
+                                    enforce_bounds=False,
+                                )
                                 return c_code, c_logs, c_abort, w_validated
                             finally:
                                 w_adapter.cleanup_workspace()
@@ -2029,10 +2059,14 @@ async def _run_prepared_stage_session(
                         ) in zip(wt_specs, wt_results, strict=False):
                             tid = str(t_item["id"])
                             logs += f"\n[Parallel Worktree `{wt_branch}`]\n" + c_logs
-                            adapter.finish_invocation()
                             adapter.input_tokens += wt_adapter.input_tokens
                             adapter.output_tokens += wt_adapter.output_tokens
                             adapter.cached_input_tokens += wt_adapter.cached_input_tokens
+                            adapter.turn_count += wt_adapter.turn_count
+                            adapter.peak_context_tokens = max(
+                                adapter.peak_context_tokens,
+                                wt_adapter.peak_context_tokens,
+                            )
                             adapter.finish_invocation()
                             adapter.cost = round(adapter.cost + wt_adapter.cost, 10)
                             if c_abort is not None or c_code != 0:
@@ -2096,7 +2130,9 @@ async def _run_prepared_stage_session(
                     t_abort,
                 )
                 break
-            re_out, _ = _load_and_validate_output_file(stage, output_file)
+            re_out, _ = _load_and_validate_output_file(
+                stage, output_file, **policy_bounds_kwargs, enforce_bounds=False
+            )
             if re_out is not None:
                 validated_output = re_out
             completed_task_ids.append(next_tid)
@@ -2160,10 +2196,13 @@ async def _run_prepared_stage_session(
                 api_url=api_url,
                 run_token=run_token,
                 continue_session=True,
+                **cli_kwargs,
             )
             logs += "\n" + r_logs
             exit_code = r_code
-            re_out, _ = _load_and_validate_output_file(stage, output_file)
+            re_out, _ = _load_and_validate_output_file(
+                stage, output_file, **policy_bounds_kwargs, enforce_bounds=False
+            )
             if re_out is not None:
                 validated_output = re_out
 

@@ -13,6 +13,7 @@ import {
   formatProviderName,
   getBackendAccessSummary,
   getBackendCapacityUsage,
+  getBackendDefaultModel,
   getBackendModels,
   getBackendRepositories,
   getEnabledBackendModels,
@@ -138,12 +139,18 @@ describe('utils/backends & constants/backends', () => {
     })
     assert.equal(CORE_BACKEND_REQUIREMENTS.length, 3)
     assert.ok(DEFAULT_CLOUD_MODELS.anthropic.includes('claude-sonnet-4-6'))
+    assert.ok(DEFAULT_CLOUD_MODELS.gemini.includes('gemini-4-hydrogen'))
+    assert.ok(DEFAULT_CLOUD_MODELS.antigravity.includes('gemini-4-hydrogen'))
+    assert.ok(DEFAULT_CLOUD_MODELS.xai.includes('grok-4.20-reasoning'))
     assert.ok(BACKEND_PROVIDER_DEFINITIONS.git.some((p) => p.value === 'github'))
 
     const anthropicDef = getProviderDefinition('inference', 'ANTHROPIC')
     assert.equal(anthropicDef.value, 'anthropic')
     assert.equal(anthropicDef.supportsCliOAuth, true)
     assert.equal(anthropicDef.cliBinary, 'claude')
+
+    const xaiDef = getProviderDefinition('inference', 'xai')
+    assert.equal(xaiDef.supportsCliOAuth, false)
 
     const fallbackDef = getProviderDefinition('inference', 'unknown-provider')
     assert.equal(fallbackDef.value, BACKEND_PROVIDER_DEFINITIONS.inference[0].value)
@@ -405,12 +412,15 @@ describe('utils/backends & constants/backends', () => {
       config: {
         models: [
           { id: 'gpt-5.4', enabled: true },
+          { id: 'gpt-5.3-codex', enabled: true, is_default: true },
           { id: 'gpt-5.1', enabled: false },
         ],
       },
     })
-    assert.equal(getBackendModels(modelBackend).length, 2)
-    assert.equal(getEnabledBackendModels(modelBackend).length, 1)
+    assert.equal(getBackendModels(modelBackend).length, 3)
+    assert.equal(getEnabledBackendModels(modelBackend).length, 2)
+    assert.equal(getBackendDefaultModel(modelBackend), 'gpt-5.3-codex')
+    assert.equal(getEnabledBackendModels(modelBackend)[0].id, 'gpt-5.3-codex')
 
     assert.deepEqual(getMissingCoreBackends([gitBackend]), ['Compute', 'Inference'])
   })

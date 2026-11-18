@@ -25,9 +25,14 @@ def register_error_handlers(app: FastAPI) -> None:
     """Register a single exception handler mapping service-layer errors to HTTP status codes."""
 
     @app.exception_handler(ServiceError)
-    async def handle_service_error(_request: Request, exc: ServiceError) -> JSONResponse:
+    async def handle_service_error(request: Request, exc: ServiceError) -> JSONResponse:
         status_code = _STATUS_MAP.get(type(exc), status.HTTP_400_BAD_REQUEST)
-        headers = {"WWW-Authenticate": "Bearer"} if isinstance(exc, Unauthorized) else None
+        headers: dict[str, str] | None = None
+        if isinstance(exc, Unauthorized):
+            if request.url.path.startswith("/api/v1/local-git/"):
+                headers = {"WWW-Authenticate": 'Basic realm="GitSeed Local Git"'}
+            else:
+                headers = {"WWW-Authenticate": "Bearer"}
         return JSONResponse(
             status_code=status_code,
             content={"detail": exc.message},

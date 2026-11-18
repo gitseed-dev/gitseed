@@ -59,6 +59,20 @@ spec:
                 secretKeyRef:
                   name: {{ include "gitseed.secretName" . }}
                   key: LITELLM_DATABASE_URL
+          readinessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 25
+            periodSeconds: 20
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.litellm.resources | nindent 12 }}
 {{- end }}

@@ -318,14 +318,34 @@ export interface ModelBackendEntry {
   id: string
   owned_by?: string
   enabled: boolean
+  is_default?: boolean
 }
+
+const KNOWN_MODEL_PRIORITY: Record<string, number> = Object.values(
+  DEFAULT_CLOUD_MODELS
+).reduce<Record<string, number>>((acc, list) => {
+  list.forEach((id, idx) => {
+    const key = id.toLowerCase()
+    if (acc[key] === undefined) {
+      acc[key] = idx
+    }
+  })
+  return acc
+}, {})
 
 export function getBackendModels(backend?: Backend | null): ModelBackendEntry[] {
   if (!backend || backend.type !== 'inference') return []
   const rawModels = backend.config?.models
   const legacyDiscovered = backend.config?.discovered_models
+  const cfgDefault =
+    typeof backend.config?.default_model === 'string' &&
+      backend.config.default_model.trim()
+      ? backend.config.default_model.trim().toLowerCase()
+      : null
   const result: ModelBackendEntry[] = []
   const seen = new Set<string>()
+  const originalIndex = new Map<string, number>()
+  let explicitDefaultKey: string | null = null
 
   if (Array.isArray(rawModels)) {
     for (const item of rawModels) {
@@ -340,13 +360,20 @@ export function getBackendModels(backend?: Backend | null): ModelBackendEntry[] 
         const key = modelId.toLowerCase()
         if (seen.has(key)) continue
         seen.add(key)
+        originalIndex.set(key, result.length)
+        const enabled = rec.enabled !== false
+        const isDef = Boolean(rec.is_default) && enabled
+        if (isDef && !explicitDefaultKey) {
+          explicitDefaultKey = key
+        }
         result.push({
           id: modelId,
           owned_by:
             typeof rec.owned_by === 'string' && rec.owned_by.trim()
               ? rec.owned_by.trim()
               : undefined,
-          enabled: rec.enabled !== false,
+          enabled,
+          is_default: isDef,
         })
       }
     }
@@ -359,6 +386,7 @@ export function getBackendModels(backend?: Backend | null): ModelBackendEntry[] 
         const key = modelId.toLowerCase()
         if (seen.has(key)) continue
         seen.add(key)
+        originalIndex.set(key, result.length)
         result.push({
           id: modelId,
           owned_by: backend.provider,
@@ -371,25 +399,82 @@ export function getBackendModels(backend?: Backend | null): ModelBackendEntry[] 
   if (result.length === 0) {
     const fallback = DEFAULT_CLOUD_MODELS[backend.provider.toLowerCase()]
     if (fallback) {
-      for (const modelId of fallback) {
+      fallback.forEach((modelId, idx) => {
+        const key = modelId.toLowerCase()
+        originalIndex.set(key, idx)
         result.push({
           id: modelId,
           owned_by: backend.provider,
           enabled: true,
+          is_default: idx === 0,
         })
+      })
+      if (fallback.length > 0) {
+        explicitDefaultKey = fallback[0].toLowerCase()
       }
     }
   }
 
-  return result.sort((a, b) =>
-    a.id.localeCompare(b.id, undefined, { sensitivity: 'base' })
-  )
+  if (!explicitDefaultKey && cfgDefault) {
+    const matched = result.find(
+      (m) => m.enabled && m.id.toLowerCase() === cfgDefault
+    )
+    if (matched) {
+      explicitDefaultKey = matched.id.toLowerCase()
+    }
+  }
+
+  result.sort((a, b) => {
+    const keyA = a.id.toLowerCase()
+    const keyB = b.id.toLowerCase()
+    const defA = explicitDefaultKey && keyA === explicitDefaultKey ? 0 : 1
+    const defB = explicitDefaultKey && keyB === explicitDefaultKey ? 0 : 1
+    if (defA !== defB) return defA - defB
+
+    const prioA = KNOWN_MODEL_PRIORITY[keyA]
+    const prioB = KNOWN_MODEL_PRIORITY[keyB]
+    if (prioA !== undefined && prioB !== undefined && prioA !== prioB) {
+      return prioA - prioB
+    }
+    if (prioA !== undefined && prioB === undefined) return -1
+    if (prioA === undefined && prioB !== undefined) return 1
+
+    const idxA = originalIndex.get(keyA) ?? 999
+    const idxB = originalIndex.get(keyB) ?? 999
+    if (idxA !== idxB) return idxA - idxB
+    return a.id.localeCompare(b.id, undefined, { sensitivity: 'base' })
+  })
+
+  const finalDefaultKey =
+    explicitDefaultKey ||
+    result.find((m) => m.enabled)?.id.toLowerCase() ||
+    null
+
+  return result.map((m) => ({
+    ...m,
+    is_default: Boolean(
+      finalDefaultKey && m.enabled && m.id.toLowerCase() === finalDefaultKey
+    ),
+  }))
 }
 
 export function getEnabledBackendModels(
   backend?: Backend | null
 ): ModelBackendEntry[] {
-  return getBackendModels(backend).filter((m) => m.enabled)
+  const enabled = getBackendModels(backend).filter((m) => m.enabled)
+  const defIdx = enabled.findIndex((m) => m.is_default)
+  if (defIdx > 0) {
+    const [defEntry] = enabled.splice(defIdx, 1)
+    enabled.unshift(defEntry)
+  }
+  return enabled
+}
+
+export function getBackendDefaultModel(
+  backend?: Backend | null
+): string | null {
+  const enabled = getEnabledBackendModels(backend)
+  return enabled[0]?.id || null
 }
 
 export function getMissingCoreBackends(backends: Backend[]): string[] {

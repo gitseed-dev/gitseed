@@ -21,6 +21,36 @@ from gitseed_core.services import users as users_service
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
+def _extract_client_ip(request: Request | None) -> str | None:
+    """Resolve client IP address, honoring `X-Forwarded-For` only when `TRUST_PROXY_HEADERS` is enabled."""
+    if request is None:
+        return None
+    if bool(getattr(settings, "TRUST_PROXY_HEADERS", False)):
+        xff = (request.headers.get("x-forwarded-for") or "").strip()
+        if xff:
+            first_ip = xff.split(",")[0].strip()
+            if first_ip:
+                return first_ip
+    return request.client.host if request.client else None
+
+
+def _is_secure_cookie_request(request: Request | None = None) -> bool:
+    """Return True when the session cookie should carry the `Secure` attribute."""
+    if getattr(settings, "ENVIRONMENT", "").strip().lower() == "production":
+        return True
+    if (getattr(settings, "PUBLIC_WEB_URL", "") or "").strip().lower().startswith("https://"):
+        return True
+    if request is not None:
+        url_obj = getattr(request, "url", None)
+        if getattr(url_obj, "scheme", "").lower() == "https":
+            return True
+        if bool(getattr(settings, "TRUST_PROXY_HEADERS", False)):
+            xfp = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+            if xfp == "https":
+                return True
+    return False
+
+
 @router.post("/login", response_model=CurrentUserResponse)
 async def login(
     payload: LoginRequest,
@@ -29,7 +59,7 @@ async def login(
     session: DBSession,
 ) -> CurrentUserResponse:
     """Authenticate with email and password and set a web session cookie."""
-    client_ip = request.client.host if request.client else None
+    client_ip = _extract_client_ip(request)
     user, session_id = await auth_service.authenticate(
         session,
         payload.email,
@@ -42,7 +72,7 @@ async def login(
         max_age=settings.SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=settings.ENVIRONMENT == "production",
+        secure=_is_secure_cookie_request(request),
     )
     return CurrentUserResponse.model_validate(user)
 
@@ -77,6 +107,7 @@ async def get_invite_preview(
 @router.post("/accept-invite", response_model=CurrentUserResponse)
 async def accept_invite(
     payload: AcceptInviteRequest,
+    request: Request,
     response: Response,
     session: DBSession,
 ) -> CurrentUserResponse:
@@ -93,7 +124,7 @@ async def accept_invite(
         max_age=settings.SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=settings.ENVIRONMENT == "production",
+        secure=_is_secure_cookie_request(request),
     )
     return CurrentUserResponse.model_validate(user)
 

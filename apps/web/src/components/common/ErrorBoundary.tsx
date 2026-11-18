@@ -65,7 +65,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
             {this.state.error?.message && (
               <div className="p-3 rounded-xl bg-zinc-100 dark:bg-zinc-950/90 text-rose-700 dark:text-rose-300 font-mono text-xs overflow-x-auto border border-zinc-200 dark:border-zinc-800">
-                <div className="font-semibold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase tracking-wider mb-1">
+                <div className="font-semibold text-zinc-500 dark:text-zinc-400 text-xs uppercase tracking-wider mb-1">
                   Exception Details:
                 </div>
                 <code>{this.state.error.message}</code>

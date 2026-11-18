@@ -118,7 +118,7 @@ export const SkillsTable: React.FC<SkillsTableProps> = ({
                     {usingAgents.map((ag) => (
                       <span
                         key={ag.id}
-                        className="px-2 py-0.5 rounded-md font-mono text-[11px] bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700/80"
+                        className="px-2 py-0.5 rounded-md font-mono text-xs bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700/80"
                       >
                         @{ag.handle}
                       </span>

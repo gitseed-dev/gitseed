@@ -84,6 +84,7 @@ from gitseed_core.services.gateway import (
     create_run_virtual_key,
     estimate_model_token_cost,
     finalize_run_litellm_key,
+    is_personal_mode_backend,
     merge_run_context_window,
     resolve_models_backend_for_run,
     revoke_run_virtual_key,
@@ -304,6 +305,24 @@ def _validate_credential_json_fields(
             raise Invalid(f"Disallowed credential field '{raw_k}' in '{source_name}'")
         if _is_primitive_or_str_list(val):
             continue
+        if (
+            depth == 0
+            and lower_k == "keyring_items"
+            and isinstance(val, list)
+            and len(val) <= 32
+            and all(
+                isinstance(entry, dict)
+                and isinstance(entry.get("label", ""), str)
+                and isinstance(entry.get("secret", ""), str)
+                and isinstance(entry.get("attributes", {}), dict)
+                and all(
+                    isinstance(ak, str) and isinstance(av, str)
+                    for ak, av in entry.get("attributes", {}).items()
+                )
+                for entry in val
+            )
+        ):
+            continue
         if isinstance(val, dict) and depth < 2:
             if lower_k in _ALLOWED_CREDENTIAL_WRAPPER_KEYS:
                 _validate_credential_json_fields(
@@ -326,6 +345,48 @@ def _validate_credential_json_fields(
         )
 
 
+_CLI_AUTH_IDENTITY_KEYS: frozenset[str] = frozenset(
+    {
+        "email",
+        "account_id",
+        "accountid",
+        "user_id",
+        "userid",
+        "sub",
+        "client_id",
+        "clientid",
+        "org_id",
+        "orgid",
+        "organization_id",
+        "organizationid",
+    }
+)
+
+
+def _extract_identity_bindings(
+    obj: dict[str, Any],
+    *,
+    prefix: str = "",
+    depth: int = 0,
+) -> dict[str, str]:
+    """Extract non-empty identity fields from a credential JSON object for continuity checks."""
+    bindings: dict[str, str] = {}
+    if depth > 2:
+        return bindings
+    for k, v in obj.items():
+        if not isinstance(k, str):
+            continue
+        low_k = k.strip().lower()
+        path_k = f"{prefix}.{low_k}" if prefix else low_k
+        if low_k in _CLI_AUTH_IDENTITY_KEYS and isinstance(v, str | int) and not isinstance(v, bool):
+            val_str = str(v).strip()
+            if val_str:
+                bindings[path_k] = val_str
+        elif isinstance(v, dict) and depth < 2:
+            bindings.update(_extract_identity_bindings(v, prefix=path_k, depth=depth + 1))
+    return bindings
+
+
 def _validate_and_merge_refreshed_cli_auth_bundle(
     raw_bundle: Any,
     *,
@@ -333,7 +394,7 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
     existing_raw_json: str | None,
     backend_provider: str | None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Enforce <=65,536-byte cap, dict type, provider preservation, and primitive credential fields."""
+    """Enforce <=65,536-byte cap, dict type, provider/identity continuity, and primitive credential fields."""
     if not isinstance(raw_bundle, dict):
         raise Invalid("cli_auth_bundle must be a JSON object")
     try:
@@ -370,6 +431,14 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
                 f"cli_auth_bundle provider '{inc_prov}' does not match existing provider '{expected_provider}'"
             )
 
+    prev_flat_identities = _extract_identity_bindings(
+        {
+            k: v
+            for k, v in prev_b.items()
+            if isinstance(k, str) and k.strip().lower() in _ALLOWED_FLAT_CREDENTIAL_KEYS
+        }
+    )
+
     flat_updates: dict[str, Any] = {}
     path_candidates: dict[str, Any] = {}
     for k, v in raw_bundle.items():
@@ -385,9 +454,26 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
                 raise Invalid(
                     f"Credential field '{k}' in cli_auth_bundle must be a string or primitive value"
                 )
+            if (
+                lower_k in prev_flat_identities
+                and isinstance(v, str | int)
+                and not isinstance(v, bool)
+                and str(v).strip() != prev_flat_identities[lower_k]
+            ):
+                raise Invalid(
+                    f"cli_auth_bundle cannot mutate bound identity field '{k}'"
+                )
             flat_updates[k] = v
         else:
             path_candidates[k] = v
+
+    prev_validated_paths: dict[str, str] = {}
+    if prev_b:
+        prev_validated_paths = validate_and_filter_cli_auth_bundle(
+            prev_b,
+            provider=backend_provider,
+            strict=False,
+        )
 
     validated_paths: dict[str, str] = {}
     if path_candidates:
@@ -402,16 +488,27 @@ def _validate_and_merge_refreshed_cli_auth_bundle(
                 if not isinstance(parsed_doc, dict):
                     raise Invalid(f"Credential file '{norm_path}' must contain a JSON object")
                 _validate_credential_json_fields(norm_path, parsed_doc)
+                prev_raw_doc = prev_validated_paths.get(norm_path)
+                if prev_raw_doc:
+                    try:
+                        loaded_prev_doc = json.loads(prev_raw_doc)
+                    except Exception:
+                        loaded_prev_doc = None
+                    if isinstance(loaded_prev_doc, dict):
+                        prev_doc_ids = _extract_identity_bindings(loaded_prev_doc)
+                        inc_doc_ids = _extract_identity_bindings(parsed_doc)
+                        for id_field, expected_id_val in prev_doc_ids.items():
+                            if (
+                                id_field in inc_doc_ids
+                                and inc_doc_ids[id_field] != expected_id_val
+                            ):
+                                raise Invalid(
+                                    f"Credential file '{norm_path}' cannot mutate bound identity field '{id_field}'"
+                                )
 
     merged_bundle: dict[str, Any] = {}
     if prev_b:
-        merged_bundle.update(
-            validate_and_filter_cli_auth_bundle(
-                prev_b,
-                provider=backend_provider,
-                strict=False,
-            )
-        )
+        merged_bundle.update(prev_validated_paths)
         for pk, pv in prev_b.items():
             if (
                 isinstance(pk, str)
@@ -617,10 +714,55 @@ def _enforce_endpoint_token_scope(
     return token_scope
 
 
+def _sync_scalar_one_or_none(result: Any) -> Any:
+    """Return `result.scalar_one_or_none()`, tolerating mocked/coroutine results (returns None)."""
+    if inspect.iscoroutine(result):
+        result.close()
+        return None
+    cand_fn = getattr(result, "scalar_one_or_none", None)
+    if not callable(cand_fn) or inspect.iscoroutinefunction(cand_fn):
+        return None
+    cand = cand_fn()
+    if inspect.iscoroutine(cand):
+        cand.close()
+        return None
+    return cand
+
+
+async def _lock_run_row(session: AsyncSession, run: Run) -> Run:
+    """`SELECT ... FOR UPDATE` the Run row (refreshing it in-place) and verify it is still active.
+
+    Serializes read-modify-write of single-use broker flags stored in `run.output["_broker"]`.
+    Fails the request (409) instead of continuing unlocked when the lock cannot be acquired.
+    """
+    try:
+        res_run = await session.execute(
+            select(Run)
+            .where(Run.id == run.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    except Exception as exc:
+        logger.warning("Failed to acquire row lock on run %s: %s", run.id, exc)
+        raise Conflict(
+            f"Could not acquire a lock on run '{run.id}'; retry the request"
+        ) from exc
+    locked = _sync_scalar_one_or_none(res_run)
+    locked_run = locked if isinstance(locked, Run) else run
+    if locked_run.status not in (RunStatus.STARTING, RunStatus.RUNNING):
+        raise Conflict(
+            f"Run '{run.id}' is no longer active after lock acquisition (status={locked_run.status})"
+        )
+    return locked_run
+
+
 async def _try_lock_run_and_seed(
     session: AsyncSession, run_id: str, seed_id: str
 ) -> None:
-    """Acquire SELECT ... FOR UPDATE row locks on Run and Seed and verify Run is still active."""
+    """Acquire SELECT ... FOR UPDATE row locks on Run and Seed and verify Run is still active.
+
+    Lock failures abort the request with 409 Conflict rather than proceeding without locks.
+    """
     locked_run: Run | None = None
     try:
         res_run = await session.execute(
@@ -629,16 +771,9 @@ async def _try_lock_run_and_seed(
             .with_for_update()
             .execution_options(populate_existing=True)
         )
-        if inspect.iscoroutine(res_run):
-            res_run.close()
-        else:
-            cand_fn = getattr(res_run, "scalar_one_or_none", None)
-            if callable(cand_fn) and not inspect.iscoroutinefunction(cand_fn):
-                cand = cand_fn()
-                if inspect.iscoroutine(cand):
-                    cand.close()
-                elif isinstance(cand, Run):
-                    locked_run = cand
+        cand = _sync_scalar_one_or_none(res_run)
+        if isinstance(cand, Run):
+            locked_run = cand
         res_seed = await session.execute(
             select(Seed)
             .where(Seed.id == seed_id)
@@ -647,8 +782,13 @@ async def _try_lock_run_and_seed(
         )
         if inspect.iscoroutine(res_seed):
             res_seed.close()
-    except Exception:
-        return
+    except Exception as exc:
+        logger.warning(
+            "Failed to acquire row locks on run %s / seed %s: %s", run_id, seed_id, exc
+        )
+        raise Conflict(
+            f"Could not acquire locks on run '{run_id}'; retry the request"
+        ) from exc
     if locked_run is not None and locked_run.status not in (
         RunStatus.STARTING,
         RunStatus.RUNNING,
@@ -656,6 +796,96 @@ async def _try_lock_run_and_seed(
         raise Conflict(
             f"Run '{run_id}' is no longer active after lock acquisition (status={locked_run.status})"
         )
+
+
+_SEED_TERMINAL_STATUSES = frozenset(
+    {SeedStatus.CLOSED, SeedStatus.MERGED, SeedStatus.FAILED, SeedStatus.STOPPED}
+)
+
+
+def _seed_detached_from_run(seed: Seed, run: Run) -> str | None:
+    """Reason string when a (late) run completion must not transition the seed, else None.
+
+    A seed that is closed/merged/failed/stopped, or that has moved to a different stage than
+    the run, must not be revived or advanced by a stale run's completion.
+    """
+    if seed.status in _SEED_TERMINAL_STATUSES:
+        return f"seed status is '{seed.status}'"
+    if seed.stage != run.stage:
+        return f"seed stage '{seed.stage}' differs from run stage '{run.stage}'"
+    return None
+
+
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
+
+
+def _is_valid_seed_branch_for_seed(
+    branch: str, project_slug: str | None, seed_number: int
+) -> bool:
+    cand = branch.strip()
+    if not cand or ".." in cand or "//" in cand or cand.endswith(("/", ".lock")):
+        return False
+    slug = (project_slug or "").strip().strip("/")
+    slug_part = rf"(?:{re.escape(slug)}/)?" if slug else ""
+    pattern = rf"^gitseed/{slug_part}seed-{int(seed_number)}(?:-[A-Za-z0-9._-]+)?$"
+    return bool(re.fullmatch(pattern, cand))
+
+
+async def _project_repo_full_names(session: AsyncSession, project_id: str) -> list[str]:
+    """Return the full_names of all repositories attached to the project."""
+    from gitseed_core.models.project import ProjectRepository
+
+    rows = (
+        await session.execute(
+            select(ProjectRepository).where(
+                ProjectRepository.project_id == project_id
+            )
+        )
+    ).scalars().all()
+    names: list[str] = []
+    for r in rows:
+        if r is None:
+            continue
+        raw_name = getattr(r, "full_name", r)
+        if isinstance(raw_name, str) and raw_name.strip():
+            names.append(raw_name.strip())
+    return names
+
+
+def _validate_prepare_heads(
+    raw: dict[str, Any] | None,
+    *,
+    field: str,
+    repo_names: list[str],
+    allow_empty: bool,
+) -> dict[str, str]:
+    """Validate a {repo_full_name: sha} map reported by the prepare container.
+
+    Keys must be repositories attached to the project (when project repos are configured);
+    values must be valid hex Git SHAs (or empty when `allow_empty`, meaning "branch absent on remote").
+    """
+    canonical = {n.strip().lower(): n for n in repo_names if n and n.strip()}
+    cleaned: dict[str, str] = {}
+    for k, v in (raw or {}).items():
+        key = str(k).strip()
+        if not key or "/" not in key or ".." in key:
+            raise Invalid(f"{field}: '{key}' is not a valid repository full_name")
+        if canonical:
+            repo = canonical.get(key.lower())
+            if repo is None:
+                raise Invalid(f"{field}: '{key}' is not a repository of this project")
+        else:
+            repo = key
+        val = str(v).strip().lower() if v is not None else ""
+        if not val:
+            if allow_empty:
+                cleaned[repo] = ""
+                continue
+            raise Invalid(f"{field}: missing Git object SHA for '{repo}'")
+        if not _GIT_SHA_RE.fullmatch(val):
+            raise Invalid(f"{field}: value for '{repo}' is not a valid Git object SHA")
+        cleaned[repo] = val
+    return cleaned
 
 
 def _extract_task_target_files(description: str) -> list[str]:
@@ -753,12 +983,13 @@ async def get_runner_context(
     """Transition the Run to 'running' and return its complete execution context (prepare scope, single-use)."""
     _enforce_endpoint_token_scope(raw_token, {"prepare"})
     run, seed, project, agent = await _authenticate_active_run(session, raw_token)
+    run = await _lock_run_row(session, run)
     broker_state = _get_broker_state(run)
     if broker_state.get("prepare_context_used"):
         raise Forbidden("Runner execution context has already been fetched for this run")
     now = datetime.now(UTC)
 
-    if run.status == RunStatus.STARTING:
+    if _seed_detached_from_run(seed, run) is None and run.status == RunStatus.STARTING:
         run.status = RunStatus.RUNNING
         if run.started_at is None:
             run.started_at = now
@@ -1171,8 +1402,12 @@ async def resolve_runner_attachment(
     if not run_id:
         raise Unauthorized("Invalid or expired run token")
     run = await session.get(Run, run_id)
+    if run is None or run.status not in (RunStatus.STARTING, RunStatus.RUNNING):
+        raise Unauthorized(
+            f"Run '{run_id}' is not active (status={run.status if run else 'missing'})"
+        )
     att = await session.get(SeedAttachment, attachment_id)
-    if run is None or att is None or att.seed_id != run.seed_id:
+    if att is None or att.seed_id != run.seed_id:
         raise NotFound("Attachment not found")
     path = attachment_path(att)
     if not path.is_file():
@@ -1188,23 +1423,32 @@ async def complete_runner_prepare(
     """Record trusted repository base SHAs and remote branch heads from the prepare container."""
     _enforce_endpoint_token_scope(raw_token, {"prepare"})
     run, seed, project, _ = await _authenticate_active_run(session, raw_token)
+    run = await _lock_run_row(session, run)
     broker_state = _get_broker_state(run)
     if broker_state.get("prepare_complete_used"):
         raise Forbidden("Prepare completion has already been recorded for this run")
-    clean_base_heads = {
-        str(k).strip(): str(v).strip()
-        for k, v in (payload.base_heads or {}).items()
-        if str(k).strip() and str(v).strip()
-    }
-    clean_remote_heads = {
-        str(k).strip(): (str(v).strip() if v is not None else "")
-        for k, v in (payload.remote_seed_heads or {}).items()
-        if str(k).strip()
-    }
-    seed_branch = (
-        payload.seed_branch.strip()
-        if payload.seed_branch and payload.seed_branch.strip()
-        else _default_seed_branch(project.slug, seed.number)
+    expected_seed_branch = _default_seed_branch(project.slug, seed.number)
+    if payload.seed_branch and payload.seed_branch.strip():
+        cand_branch = payload.seed_branch.strip()
+        if not _is_valid_seed_branch_for_seed(cand_branch, project.slug, seed.number):
+            raise Invalid(
+                f"seed_branch '{cand_branch}' does not match canonical seed branch '{expected_seed_branch}'"
+            )
+        seed_branch = cand_branch
+    else:
+        seed_branch = expected_seed_branch
+    repo_names = await _project_repo_full_names(session, project.id)
+    clean_base_heads = _validate_prepare_heads(
+        payload.base_heads,
+        field="base_heads",
+        repo_names=repo_names,
+        allow_empty=False,
+    )
+    clean_remote_heads = _validate_prepare_heads(
+        payload.remote_seed_heads,
+        field="remote_seed_heads",
+        repo_names=repo_names,
+        allow_empty=True,
     )
     broker_state["prepare_complete_used"] = True
     broker_state["base_heads"] = clean_base_heads
@@ -1351,15 +1595,27 @@ async def refresh_runner_cli_auth(
         )
 
     _enforce_endpoint_token_scope(raw_token, {"agent"})
+    if not settings.GITSEED_ALLOW_PERSONAL_CLI_OAUTH:
+        raise Forbidden(
+            "Personal Mode (subscription CLI OAuth) is disabled on this instance "
+            "(GITSEED_ALLOW_PERSONAL_CLI_OAUTH=false)."
+        )
     run, _, project, _ = await _authenticate_active_run(session, raw_token)
     runtime_str = str(run.runtime or "").strip().lower()
 
     models_backend, _ = await resolve_models_backend_for_run(session, run, project)
-    m_secrets = (
-        decrypt_secrets(models_backend.secrets_encrypted)
-        if models_backend is not None
-        else {}
+    if models_backend is None or not is_personal_mode_backend(models_backend):
+        raise Forbidden(
+            "CLI auth bundle refresh is only permitted for Personal Mode (cli_oauth) backends"
+        )
+    bound_bid = (
+        str(run.output.get("models_backend_id") or "").strip()
+        if isinstance(run.output, dict)
+        else ""
     )
+    if bound_bid and str(models_backend.id) != bound_bid:
+        raise Forbidden("Run backend mismatch during CLI auth bundle refresh")
+    m_secrets = decrypt_secrets(models_backend.secrets_encrypted)
     merged_bundle, updated_keys = _validate_and_merge_refreshed_cli_auth_bundle(
         raw_bundle,
         runtime=runtime_str,
@@ -1596,6 +1852,35 @@ async def complete_runner_execution(
     )
 
     pol = await get_effective_stage_policy(session, project.id, run.stage)
+    raw_proj_sbx = (
+        (getattr(project, "sandbox_config", None) or {}) if project is not None else {}
+    )
+    raw_proj_blocked = (
+        raw_proj_sbx.get("blocked_paths") if isinstance(raw_proj_sbx, dict) else []
+    )
+    snap_blocked_paths = (
+        [str(p).strip() for p in raw_proj_blocked if str(p).strip()]
+        if isinstance(raw_proj_blocked, list)
+        else []
+    )
+    raw_min_role = getattr(pol, "min_approver_role", None) if pol is not None else None
+    snap_min_role = str(
+        getattr(raw_min_role, "value", raw_min_role)
+        if raw_min_role is not None
+        else "developer"
+    )
+    snap_prevent_self = not bool(getattr(pol, "allow_self_approval", True))
+    if isinstance(raw_proj_sbx, dict):
+        if raw_proj_sbx.get("min_approver_role"):
+            snap_min_role = str(raw_proj_sbx["min_approver_role"])
+        if "prevent_self_approval" in raw_proj_sbx:
+            snap_prevent_self = bool(raw_proj_sbx["prevent_self_approval"])
+    broker_state["policy_snapshot"] = {
+        "stage": str(getattr(run.stage, "value", run.stage)),
+        "min_approver_role": snap_min_role,
+        "prevent_self_approval": snap_prevent_self,
+        "blocked_paths": snap_blocked_paths,
+    }
     ideate_pol = (
         pol
         if run.stage == SeedStage.IDEATE
@@ -1694,7 +1979,7 @@ async def complete_runner_execution(
         dict(raw_ctx_win) if isinstance(raw_ctx_win, dict) else None
     )
 
-    if payload.updated_cli_auth_bundle:
+    if payload.updated_cli_auth_bundle and settings.GITSEED_ALLOW_PERSONAL_CLI_OAUTH:
         try:
             try:
                 models_backend, _ = await resolve_models_backend_for_run(
@@ -1704,7 +1989,12 @@ async def complete_runner_execution(
                 models_backend, _ = await resolve_models_backend_for_run(
                     session, run, project
                 )
-            if models_backend is not None:
+            bound_bid = str(preserved_run_meta.get("models_backend_id") or "").strip()
+            if (
+                models_backend is not None
+                and is_personal_mode_backend(models_backend)
+                and (not bound_bid or str(models_backend.id) == bound_bid)
+            ):
                 m_secrets = decrypt_secrets(models_backend.secrets_encrypted)
                 merged_bundle, updated_keys = _validate_and_merge_refreshed_cli_auth_bundle(
                     payload.updated_cli_auth_bundle,
@@ -1768,7 +2058,7 @@ async def complete_runner_execution(
             )
 
         # Reconcile seed status across parallel opinions or retry automatically
-        if seed.status != SeedStatus.BLOCKED:
+        if seed.status != SeedStatus.BLOCKED and _seed_detached_from_run(seed, run) is None:
             handled_by_sibling = False
             if was_multi_opinion and run.stage in MULTI_OPINION_STAGES:
                 cycle_runs = await list_stage_cycle_runs(session, seed, run.stage)
@@ -1896,11 +2186,14 @@ async def complete_runner_execution(
                 for r in other_succeeded
             )
             should_apply_to_seed = (
-                not other_succeeded
-                or (
-                    not user_already_picked
-                    and run.agent_id == pol.agent_id
-                    and not was_second_opinion
+                _seed_detached_from_run(seed, run) is None
+                and (
+                    not other_succeeded
+                    or (
+                        not user_already_picked
+                        and run.agent_id == pol.agent_id
+                        and not was_second_opinion
+                    )
                 )
             )
             if should_apply_to_seed:
@@ -1950,11 +2243,14 @@ async def complete_runner_execution(
                 for r in other_succeeded
             )
             should_apply_to_seed = (
-                not other_succeeded
-                or (
-                    not user_already_picked
-                    and run.agent_id == pol.agent_id
-                    and not was_second_opinion
+                _seed_detached_from_run(seed, run) is None
+                and (
+                    not other_succeeded
+                    or (
+                        not user_already_picked
+                        and run.agent_id == pol.agent_id
+                        and not was_second_opinion
+                    )
                 )
             )
             plan_dump = plan_out.model_dump()
@@ -2125,6 +2421,13 @@ async def complete_runner_execution(
     )
 
     await session.flush()
+
+    # If the seed was closed/stopped/merged or advanced away from this run's stage, do not revive or advance it
+    if _seed_detached_from_run(seed, run) is not None:
+        await session.commit()
+        await revoke_run_virtual_key(run.id)
+        await session.refresh(run)
+        return run
 
     # If the seed was blocked by budget/checkpoint during the final call, keep it blocked
     if seed.status == SeedStatus.BLOCKED:

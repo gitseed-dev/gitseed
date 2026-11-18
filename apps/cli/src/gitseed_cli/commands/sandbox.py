@@ -10,7 +10,6 @@ from gitseed_common.schemas import (
     SandboxInputRequest,
     SendAgentSessionMessageRequest,
 )
-from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
@@ -19,9 +18,11 @@ from gitseed_cli.config import RuntimeOptions, get_opts, make_client
 from gitseed_cli.formatting import (
     console,
     dump_json,
+    escape,
     extract_log_tail_delta,
     print_agent_sessions_table,
     print_sessions_table,
+    sanitize_terminal,
 )
 
 sandbox_app = typer.Typer(
@@ -198,7 +199,7 @@ def sandbox_logs(
 
     printed_text = sbx.log_tail or ""
     if printed_text:
-        console.print(printed_text, end="", highlight=False, markup=False)
+        console.print(sanitize_terminal(printed_text), end="", highlight=False, markup=False)
 
     if not follow:
         if printed_text and not printed_text.endswith("\n"):
@@ -212,7 +213,7 @@ def sandbox_logs(
             updated_log = sbx.log_tail or ""
             delta = extract_log_tail_delta(printed_text, updated_log)
             if delta:
-                console.print(delta, end="", highlight=False, markup=False)
+                console.print(sanitize_terminal(delta), end="", highlight=False, markup=False)
             if updated_log:
                 printed_text = updated_log
     except KeyboardInterrupt:
@@ -391,7 +392,7 @@ def session_show(
     for msg in sess.messages:
         role_label = escape(msg.role.upper())
         console.print(
-            Panel(Text(msg.content or ""), title=f"{role_label} ({escape(msg.id)})", expand=False)
+            Panel(Text(sanitize_terminal(msg.content or "")), title=f"{role_label} ({escape(msg.id)})", expand=False)
         )
 
 

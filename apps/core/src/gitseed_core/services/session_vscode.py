@@ -67,6 +67,39 @@ DEFAULT_OPENVSCODE_IMAGE = "gitpod/openvscode-server:latest"
 MIN_VSCODE_MEMORY_MB = 4096
 EXTRA_VSCODE_MEMORY_MB = 1024
 MAX_AUTO_BUMP_MEMORY_MB = 8192
+MAX_VSCODE_HTTP_BODY_BYTES = 32 * 1024 * 1024
+
+
+def _trusted_host_header(headers: Any) -> str:
+    """Extract request host, honoring `X-Forwarded-Host` only when `TRUST_PROXY_HEADERS` is True."""
+    if bool(getattr(settings, "TRUST_PROXY_HEADERS", False)):
+        raw = headers.get("x-forwarded-host") or headers.get("host") or ""
+    else:
+        raw = headers.get("host") or ""
+    return str(raw).split(",", 1)[0].strip().lower()
+
+
+async def _read_bounded_vscode_body(request: Request) -> bytes:
+    """Read upstream VS Code proxy HTTP request body with a strict 32 MiB memory cap."""
+    raw_cl = request.headers.get("content-length")
+    if raw_cl:
+        try:
+            if int(raw_cl.strip()) > MAX_VSCODE_HTTP_BODY_BYTES:
+                raise Invalid(
+                    f"VS Code proxy request body exceeds maximum size ({MAX_VSCODE_HTTP_BODY_BYTES} bytes)"
+                )
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_VSCODE_HTTP_BODY_BYTES:
+            raise Invalid(
+                f"VS Code proxy request body exceeds maximum size ({MAX_VSCODE_HTTP_BODY_BYTES} bytes)"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @dataclass
@@ -164,12 +197,7 @@ def _enforce_sandbox_origin(headers: Any) -> None:
     is_loopback_sandbox_default = expected_host in ("127.0.0.1", "localhost")
     web_port = str(getattr(settings, "WEB_PORT", 8421) or 8421)
 
-    host_hdr = (
-        (headers.get("x-forwarded-host") or headers.get("host") or "")
-        .split(",", 1)[0]
-        .strip()
-        .lower()
-    )
+    host_hdr = _trusted_host_header(headers)
     req_host, req_port = _split_netloc_host_port(host_hdr, expected_scheme) if host_hdr else ("", "")
 
     if is_loopback_sandbox_default and expected_port != web_port:
@@ -201,6 +229,10 @@ def _enforce_sandbox_origin(headers: Any) -> None:
         raise Forbidden("VS Code proxy request host does not match configured SANDBOX_ORIGIN")
 
 
+_VSCODE_PROXY_TOKEN_HKDF_INFO = b"gitseed-vscode-proxy-token-v1"
+_VSCODE_UPSTREAM_TOKEN_HKDF_INFO = b"gitseed-vscode-upstream-token-v1"
+
+
 def mint_vscode_token(
     session_key: str,
     container_id: str = "",
@@ -209,6 +241,8 @@ def mint_vscode_token(
     now: int | None = None,
 ) -> str:
     """Mint an expiring, HMAC-authenticated VS Code proxy token (`<exp_hex>.<hmac_hex>`)."""
+    from gitseed_core.security import derive_domain_hmac_key
+
     effective_ttl = (
         int(ttl_seconds)
         if ttl_seconds is not None and int(ttl_seconds) > 0
@@ -218,7 +252,7 @@ def mint_vscode_token(
     exp_ts = cur_ts + effective_ttl
     exp_hex = f"{exp_ts:x}"
     sig_hex = hmac.new(
-        settings.GITSEED_SECRET_KEY.encode("utf-8"),
+        derive_domain_hmac_key(_VSCODE_PROXY_TOKEN_HKDF_INFO),
         f"vscode:{session_key}:{container_id}:{exp_hex}".encode(),
         hashlib.sha256,
     ).hexdigest()[:48]
@@ -234,11 +268,14 @@ def verify_vscode_token(
     now: int | None = None,
 ) -> bool:
     """Verify an expiring `<exp_hex>.<hmac_hex>` VS Code proxy token in constant time."""
+    from gitseed_core.security import derive_domain_hmac_key
+
     cand = (candidate_token or "").strip()
     if not cand:
         return False
     if expected_token is not None and not secrets.compare_digest(expected_token, cand):
         return False
+    hmac_key = derive_domain_hmac_key(_VSCODE_PROXY_TOKEN_HKDF_INFO)
     if "." in cand:
         exp_hex, sig_hex = cand.split(".", 1)
         if not exp_hex or not sig_hex:
@@ -251,7 +288,7 @@ def verify_vscode_token(
         if cur_ts > exp_ts:
             return False
         expected_sig = hmac.new(
-            settings.GITSEED_SECRET_KEY.encode("utf-8"),
+            hmac_key,
             f"vscode:{session_key}:{container_id}:{exp_hex}".encode(),
             hashlib.sha256,
         ).hexdigest()[:48]
@@ -259,7 +296,7 @@ def verify_vscode_token(
     if expected_token is not None:
         return True
     legacy_mac = hmac.new(
-        settings.GITSEED_SECRET_KEY.encode("utf-8"),
+        hmac_key,
         f"vscode:{session_key}:{container_id}".encode(),
         hashlib.sha256,
     ).digest()
@@ -272,8 +309,10 @@ _derive_vscode_token = mint_vscode_token
 
 def derive_vscode_upstream_token(session_key: str, container_id: str) -> str:
     """Derive a per-container connection token gating `openvscode-server` on the bridge network."""
+    from gitseed_core.security import derive_domain_hmac_key
+
     return hmac.new(
-        settings.GITSEED_SECRET_KEY.encode("utf-8"),
+        derive_domain_hmac_key(_VSCODE_UPSTREAM_TOKEN_HKDF_INFO),
         f"vscode-upstream:{session_key}:{container_id}".encode(),
         hashlib.sha256,
     ).hexdigest()[:48]
@@ -333,12 +372,7 @@ def _build_vscode_frame_headers(
         sbx_scheme = (sbx_parsed.scheme or "http").lower()
         sbx_host = (sbx_parsed.hostname or "").strip().lower()
         if sbx_host in ("127.0.0.1", "localhost"):
-            host_hdr = (
-                (request_headers.get("x-forwarded-host") or request_headers.get("host") or "")
-                .split(",", 1)[0]
-                .strip()
-                .lower()
-            )
+            host_hdr = _trusted_host_header(request_headers)
             req_host, _ = _split_netloc_host_port(host_hdr, sbx_scheme) if host_hdr else ("", "")
             if req_host and req_host not in ("127.0.0.1", "localhost"):
                 web_port = int(getattr(settings, "WEB_PORT", 8421) or 8421)
@@ -1335,9 +1369,13 @@ async def proxy_vscode_http(
     await _touch_vscode_activity(state)
     target_cid = state.sidecar_container_id or state.container_id
 
-    cookie_path = f"/api/v1/vscode/{session_key}"
+    raw_req_path = request.scope.get("raw_path", b"").decode("latin-1", errors="ignore")
+    raw_parts = raw_req_path.split("/") if raw_req_path.startswith("/api/v1/vscode/") else []
+    raw_session_seg = raw_parts[4] if len(raw_parts) > 4 and raw_parts[4] else session_key
+    cookie_path = f"/api/v1/vscode/{raw_session_seg}"
     is_secure = request.url.scheme == "https" or (
-        (request.headers.get("x-forwarded-proto") or "").strip().lower() == "https"
+        bool(getattr(settings, "TRUST_PROXY_HEADERS", False))
+        and (request.headers.get("x-forwarded-proto") or "").strip().lower() == "https"
     )
 
     # If the token was supplied via ?token=..., exchange it for a path-scoped HttpOnly cookie
@@ -1364,7 +1402,6 @@ async def proxy_vscode_http(
     target_path = f"{base_path}/{clean_sub}" if clean_sub else f"{base_path}/"
     # Browser may percent-encode ':' as '%3A' in the request URL; inspect raw scope path
     # so we match whichever encoding the browser used when resolving relative `./out/...` assets.
-    raw_req_path = request.scope.get("raw_path", b"").decode("latin-1", errors="ignore")
     if raw_req_path and not raw_req_path.endswith("/") and not clean_sub:
         redir_target = f"{raw_req_path}/"
         if request.url.query:
@@ -1381,10 +1418,12 @@ async def proxy_vscode_http(
         return redir_slash
     if request.url.query:
         target_path = f"{target_path}?{request.url.query}"
+    # Authenticate upstream HTTP via `Cookie: vscode-tkn=<upstream_tkn>` only — passing `?tkn=`
+    # on HTTP causes openvscode-server (`webClientServer.ts`) to issue a 302 redirect stripping
+    # `tkn` and the trailing slash, creating a 302 <-> 307 redirect loop.
     upstream_tkn = derive_vscode_upstream_token(session_key, state.container_id)
-    target_path = _append_upstream_vscode_token(target_path, upstream_tkn)
 
-    body = await request.body()
+    body = await _read_bounded_vscode_body(request)
     upstream_req_headers: dict[str, str] = {
         "Host": request.headers.get("host", "localhost"),
         "Cookie": f"vscode-tkn={upstream_tkn}",
@@ -1503,6 +1542,8 @@ async def proxy_vscode_http(
                         defaults = {}
                     defaults.update(_default_vscode_settings_dict(req_theme))
                     cfg_obj["configurationDefaults"] = defaults
+                    if upstream_tkn:
+                        cfg_obj["connectionToken"] = upstream_tkn
                     if "defaultLayout" not in cfg_obj:
                         cfg_obj["defaultLayout"] = {
                             "views": [{"id": "workbench.explorer.fileView"}],
@@ -1526,11 +1567,27 @@ async def proxy_vscode_http(
             count=1,
         )
         bg_hex = "#ffffff" if (req_theme or "").strip().lower() == "light" else "#1f1f1f"
+        tkn_js = json.dumps(upstream_tkn)
+        cpath_js = json.dumps(cookie_path)
         init_layout_script = (
             f"<style>html,body,#workbench\\.parts\\.editor,.monaco-workbench{{height:100%!important;min-height:100dvh!important;margin:0!important;padding:0!important;overflow:hidden!important;background-color:{bg_hex}!important;}}</style>"
             "<script>"
             "(function(){"
             "try{"
+            f"var tkn={tkn_js},cp={cpath_js};"
+            "if(tkn){"
+            "try{document.cookie='vscode-tkn='+encodeURIComponent(tkn)+'; path='+cp+'; SameSite=Lax';}catch(e){}"
+            "if((document.cookie||'').indexOf('vscode-tkn=')===-1){"
+            "var d=Object.getOwnPropertyDescriptor(Document.prototype,'cookie')||Object.getOwnPropertyDescriptor(HTMLDocument.prototype,'cookie');"
+            "if(d&&d.get){"
+            "Object.defineProperty(document,'cookie',{"
+            "configurable:true,"
+            "get:function(){var c=d.get.call(document)||'';return c.indexOf('vscode-tkn=')!==-1?c:(c?c+'; ':'')+'vscode-tkn='+encodeURIComponent(tkn);},"
+            "set:function(v){if(d.set)d.set.call(document,v);}"
+            "});"
+            "}"
+            "}"
+            "}"
             f"var k='gitseed.vscode.layout.v2.{token[:12]}';"
             "if(!sessionStorage.getItem(k)){"
             "sessionStorage.setItem(k,'1');"
@@ -1572,6 +1629,15 @@ async def proxy_vscode_http(
             value=state.token,
             path=cookie_path,
             httponly=True,
+            samesite="lax",
+            secure=is_secure,
+        )
+    if not clean_sub and upstream_tkn:
+        final_resp.set_cookie(
+            key="vscode-tkn",
+            value=upstream_tkn,
+            path=cookie_path,
+            httponly=False,
             samesite="lax",
             secure=is_secure,
         )

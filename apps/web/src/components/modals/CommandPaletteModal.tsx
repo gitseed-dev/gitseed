@@ -104,7 +104,7 @@ const CoordinatorThinking: React.FC<{ handle: string; mode: 'brainstorm' | 'gene
       <span key={step} className="animate-fadeIn">
         @{handle} {step}…
       </span>
-      {elapsed >= 5 && <span className="text-[11px] text-zinc-400 tabular-nums">{elapsed}s</span>}
+      {elapsed >= 5 && <span className="text-xs text-zinc-400 tabular-nums">{elapsed}s</span>}
     </div>
   )
 }
@@ -482,7 +482,7 @@ export const CommandPaletteModal: React.FC = () => {
           <div className="flex items-center gap-1.5">
             <StageBadge stage={seed.stage} isClosed={seed.status === 'closed'} />
             <span
-              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${getSeedStatusClasses(
+              className={`px-1.5 py-0.5 rounded text-xs font-semibold border ${getSeedStatusClasses(
                 seed.status
               )}`}
             >
@@ -522,7 +522,7 @@ export const CommandPaletteModal: React.FC = () => {
         title: proj.name,
         subtitle: proj.description || proj.slug,
         badge: (
-          <span className="font-mono text-[11px] px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+          <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
             {proj.slug}
           </span>
         ),
@@ -553,7 +553,7 @@ export const CommandPaletteModal: React.FC = () => {
           title: b.name,
           subtitle: [b.provider, b.endpoint].filter(Boolean).join(' · '),
           badge: (
-            <span className="font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+            <span className="font-mono text-xs uppercase tracking-wider px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
               {b.type}
             </span>
           ),
@@ -592,7 +592,7 @@ export const CommandPaletteModal: React.FC = () => {
           title: a.name,
           subtitle: `${a.runtime} · ${a.model}`,
           badge: (
-            <span className="font-mono text-[11px] px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+            <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
               @{a.handle}
             </span>
           ),
@@ -621,7 +621,7 @@ export const CommandPaletteModal: React.FC = () => {
           title: u.preferred_name || u.name || u.email,
           subtitle: u.email,
           badge: (
-            <span className="font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
+            <span className="font-mono text-xs uppercase tracking-wider px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/80">
               {u.org_role}
             </span>
           ),
@@ -903,7 +903,7 @@ export const CommandPaletteModal: React.FC = () => {
             ) : (
               groupedSections.map((group) => (
                 <div key={group.section} className="space-y-1">
-                  <div className="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                  <div className="px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                     {group.section}
                   </div>
                   <div className="space-y-0.5">
@@ -1020,7 +1020,7 @@ export const CommandPaletteModal: React.FC = () => {
                           msg.referencedFiles &&
                           msg.referencedFiles.length > 0 && (
                             <div
-                              className="mt-2 flex items-center gap-1 text-[11px] text-zinc-400"
+                              className="mt-2 flex items-center gap-1 text-xs text-zinc-400"
                               title={msg.referencedFiles.join('\n')}
                             >
                               <FileCode2 size={11} />
@@ -1231,7 +1231,7 @@ export const CommandPaletteModal: React.FC = () => {
                             </div>
                           )}
                       </div>
-                      <div className="flex items-center gap-2 text-[11px] text-zinc-400 mt-1 px-1">
+                      <div className="flex items-center gap-2 text-xs text-zinc-400 mt-1 px-1">
                         <span>{msg.timestamp}</span>
                         {msg.role === 'assistant' && msg.model && (
                           <span>· {msg.model}</span>
@@ -1303,7 +1303,7 @@ export const CommandPaletteModal: React.FC = () => {
           </div>
         )}
 
-        <div className="px-4 py-2 border-t border-zinc-200 dark:border-zinc-700/80 flex items-center justify-between text-[11px] text-zinc-400">
+        <div className="px-4 py-2 border-t border-zinc-200 dark:border-zinc-700/80 flex items-center justify-between text-xs text-zinc-400">
           <span>{activeTab === 'search' ? t('coordinator.pressEnterToNavigate') : 'Enter to send'}</span>
           <span className="font-mono">Esc to close</span>
         </div>
