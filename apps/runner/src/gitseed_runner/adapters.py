@@ -1765,6 +1765,7 @@ class AntigravityAdapter(RuntimeAdapter):
 
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
+        ws_root = self._multi_repo_workspace_root()
         cmd = [
             "agy",
             "-p",
@@ -1773,18 +1774,22 @@ class AntigravityAdapter(RuntimeAdapter):
             "stream-json",
             "--dangerously-skip-permissions",
         ]
+        if ws_root is not None:
+            cmd.extend(["--add-dir", str(ws_root)])
         if normalized_model:
             cmd.extend(["--model", normalized_model])
-        max_turns = self._resolve_max_turns()
-        if max_turns is not None:
-            cmd.extend(["--max-turns", str(max_turns)])
+        # Note: `agy` does not define a `--max-turns` CLI flag; `self.max_turns`
+        # is enforced on the `stream-json` event stream by the runner supervisor.
         if continue_session:
             cmd.append("--continue")
         return cmd
 
     def build_interactive_command(self) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
+        ws_root = self._multi_repo_workspace_root()
         cmd = ["agy", "--dangerously-skip-permissions"]
+        if ws_root is not None:
+            cmd.extend(["--add-dir", str(ws_root)])
         if normalized_model:
             cmd.extend(["--model", normalized_model])
         return cmd
@@ -1900,6 +1905,7 @@ class GeminiAdapter(RuntimeAdapter):
 
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
+        ws_root = self._multi_repo_workspace_root()
         if self.binary_name == "agy":
             cmd = [
                 "agy",
@@ -1909,6 +1915,8 @@ class GeminiAdapter(RuntimeAdapter):
                 "stream-json",
                 "--dangerously-skip-permissions",
             ]
+            if ws_root is not None:
+                cmd.extend(["--add-dir", str(ws_root)])
             if normalized_model:
                 cmd.extend(["--model", normalized_model])
             if continue_session:
@@ -1923,7 +1931,6 @@ class GeminiAdapter(RuntimeAdapter):
             "stream-json",
             "--yolo",
         ]
-        ws_root = self._multi_repo_workspace_root()
         if ws_root is not None:
             cmd.extend(["--include-directories", str(ws_root)])
         if normalized_model:
@@ -1934,13 +1941,15 @@ class GeminiAdapter(RuntimeAdapter):
 
     def build_interactive_command(self) -> list[str]:
         normalized_model = _normalize_google_cli_model(self.model)
+        ws_root = self._multi_repo_workspace_root()
         if self.binary_name == "agy":
             cmd = ["agy", "--dangerously-skip-permissions"]
+            if ws_root is not None:
+                cmd.extend(["--add-dir", str(ws_root)])
             if normalized_model:
                 cmd.extend(["--model", normalized_model])
             return cmd
         cmd = ["gemini", "--yolo"]
-        ws_root = self._multi_repo_workspace_root()
         if ws_root is not None:
             cmd.extend(["--include-directories", str(ws_root)])
         if normalized_model:

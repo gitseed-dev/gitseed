@@ -327,6 +327,14 @@ def test_multirepo_workspace_flags_grok_user_settings_and_prompt(
     assert "--include-directories" not in gem_single.build_command("Single repo")
     assert "--include-directories" not in gem_single.build_interactive_command()
 
+    agy_single = AntigravityAdapter(
+        ctx={"runtime": "antigravity", "model": "default"},
+        working_dir=ws_root,
+        output_file=output_file,
+    )
+    assert "--add-dir" not in agy_single.build_command("Single repo")
+    assert "--add-dir" not in agy_single.build_interactive_command()
+
     # Multi-repo layout: working_dir is /workspace/backend-api, output_file is /workspace/.gitseed/output.json
     codex_multi = CodexAdapter(
         ctx={"runtime": "codex", "model": "gpt-5-codex"},
@@ -337,6 +345,19 @@ def test_multirepo_workspace_flags_grok_user_settings_and_prompt(
     codex_resume = codex_multi.build_command("Continue", continue_session=True)
     codex_tui = codex_multi.build_interactive_command()
     for argv in (codex_cmd, codex_resume, codex_tui):
+        idx = argv.index("--add-dir")
+        assert argv[idx + 1] == str(ws_root)
+
+    agy_multi = AntigravityAdapter(
+        ctx={"runtime": "antigravity", "model": "default"},
+        working_dir=primary_repo,
+        output_file=output_file,
+    )
+    for argv in (
+        agy_multi.build_command("Multi repo"),
+        agy_multi.build_command("Continue", continue_session=True),
+        agy_multi.build_interactive_command(),
+    ):
         idx = argv.index("--add-dir")
         assert argv[idx + 1] == str(ws_root)
 

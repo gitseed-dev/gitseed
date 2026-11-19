@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from gitseed_runner.adapters import (
+    AntigravityAdapter,
     ClaudeCodeAdapter,
     OpenCodeAdapter,
     synthesize_stage_output_from_text,
@@ -536,6 +537,17 @@ def test_max_turns_broker_marker_and_ephemeral_paths(
     argv = claude.build_command("Run checks")
     assert "--max-turns" in argv
     assert argv[argv.index("--max-turns") + 1] == "18"
+
+    # Antigravity (`agy`) does not define `--max-turns`; supervisor enforces `adapter.max_turns`
+    agy = AntigravityAdapter(
+        ctx={"runtime": "antigravity", "model": "default", "max_turns": 18},
+        working_dir=tmp_path,
+        output_file=tmp_path / "output.json",
+    )
+    assert agy.max_turns == 18
+    agy_argv = agy.build_command("Run checks")
+    assert "--max-turns" not in agy_argv
+    assert "-max-turns" not in agy_argv
 
     # Dynamic finalize wait timeout
     monkeypatch.delenv("GITSEED_FINALIZE_WAIT_SECONDS", raising=False)
