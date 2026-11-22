@@ -276,8 +276,8 @@ def build_stage_prompt(
         lines.extend(["", "### Current Acceptance Criteria", crit_lines])
     _track("spec", mark)
     mark = len(lines)
-    # The plan only matters to the stages that refine or carry it out
-    if plan and stage in ("plan", "execute"):
+    # The plan matters to the stages that refine, carry out, or audit it
+    if plan and stage in ("plan", "execute", "review"):
         lines.extend(["", "### Current Plan", _cap(plan, _PLAN_CAP, "plan")])
     _track("plan", mark)
 

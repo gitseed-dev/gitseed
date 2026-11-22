@@ -1154,15 +1154,25 @@ class TestRunnerMainEndToEnd:
         assert "## Workspace Git History & Branch Diff Summary" in prompt
         assert "gitseed/demo/seed-9" in prompt
 
-        # Review works from the diff: no tree. Ideate gets a shallow tree and no diff.
+        # Review works from the diff + spec + criteria + plan: no tree. Ideate gets a shallow tree and no diff.
         review = build_stage_prompt(
-            {"stage": "review", "seed_number": 9, "project_slug": "demo"},
+            {
+                "stage": "review",
+                "seed_number": 9,
+                "project_slug": "demo",
+                "specification": "## Spec\nVerify auth",
+                "acceptance_criteria": ["Criterion 1"],
+                "plan": "## Plan\nUpdate engine.py",
+            },
             tmp_path / ".gitseed" / "output.json",
             workspace_dir=tmp_path,
             git_diff_summary=diff,
         )
         assert "Workspace File Tree Snapshot" not in review
         assert "## Workspace Git History & Branch Diff Summary" in review
+        assert "### Current Specification" in review
+        assert "### Current Acceptance Criteria" in review
+        assert "### Current Plan" in review
         (tmp_path / "pkg" / "sub" / "deep").mkdir(parents=True)
         (tmp_path / "pkg" / "sub" / "deep" / "leaf.py").write_text("", encoding="utf-8")
         ideate = build_stage_prompt(
