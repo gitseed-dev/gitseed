@@ -4,13 +4,16 @@
 
 # GitSeed
 
-<h3>Your SDLC, run by agents, governed by you.</h3>
+<h3>Your agents write the code. They never get your keys.</h3>
 
-Self-hosted, vendor-neutral control plane for AI software engineering. Run **Claude Code**, **Codex**, **Gemini**, **OpenCode**, and more inside isolated 3-phase containers (`prepare` → `agent` → `finalize`) on your own infrastructure, complete with Ed25519-signed PR **Governance Receipts**, parallel 3-model **Second Opinions**, and live docked sandbox rescue.
+GitSeed is a self-hosted, open-source control plane for AI coding agents. It runs **Claude Code**, **Codex**, **Gemini CLI**, **Antigravity**, and **OpenCode** in sandboxed containers that hold no Git credentials. A separate read-only broker scans each diff for secrets and blocked paths, then opens the PR after you approve. Every PR carries an Ed25519-signed receipt.
 
+Apache 2.0 · zero telemetry · Docker, Kubernetes, or fully air-gapped with Ollama/vLLM
+
+[![CI](https://github.com/gitseed-dev/gitseed/actions/workflows/ci.yml/badge.svg)](https://github.com/gitseed-dev/gitseed/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/gitseed-dev/gitseed?color=5FD6C6&label=Release)](https://github.com/gitseed-dev/gitseed/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-5FD6C6.svg)](./LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](./pyproject.toml)
-[![Docker & Helm](https://img.shields.io/badge/Deploy-Docker_%7C_Helm-0E1A2B.svg)](#quickstart)
 
 [**Quickstart**](#quickstart) · [**Why GitSeed?**](#why-gitseed) · [**How It Works**](#how-it-works-the-5-stage-sdlc) · [**Models & Personal Mode**](#frontier-models-personal-mode--local-open-weight-llms) · [**Security & Receipts**](#broker-enforced-security--signed-governance-receipts) · [**CLI & TUI**](#developer-cli-gitseed) · [**MCP Server**](#mcp-server-gitseed-mcp) · [**Architecture**](#architecture--monorepo-layout) · [**Concepts**](./docs/concepts.md)
 
@@ -22,35 +25,49 @@ https://github.com/user-attachments/assets/9d0242be-21e1-4ae0-8b82-43e528eb3c2a
 
 ## Quickstart
 
-Up and running locally in **under 5 minutes** with Docker (no cloud account or external Git host required):
+**Prerequisites:** Docker 24+ with Compose v2, ~4 GB RAM, and ~6 GB free disk space (first build compiles the control plane and runner image with 5 agent CLIs in ~2–3 minutes; no cloud account or external Git host required).
 
 ```bash
 git clone https://github.com/gitseed-dev/gitseed.git && cd gitseed
-./scripts/init.sh             # generates .env secrets & prints your initial admin login (Windows: .\scripts\init.ps1)
+./scripts/init.sh             # or `make init` (Windows PowerShell: .\scripts\init.ps1)
 docker compose up -d --build  # starts Web UI (:8421), API (:8420), MCP (:8422), LiteLLM & Postgres
 ```
 
 ### First 60 Seconds in the UI
 
-1. **Sign in at [`http://localhost:8421`](http://localhost:8421)** using the `admin@gitseed.local` credentials printed by `./scripts/init.sh` (or set `GITSEED_ADMIN_PASSWORD` in `.env` beforehand).
+1. **Sign in at [`http://localhost:8421`](http://localhost:8421)** using the `admin@gitseed.local` credentials printed by `./scripts/init.sh` / `make init` (or set `GITSEED_ADMIN_PASSWORD` in `.env` beforehand).
 2. **Connect a Model & Repo (1-Click Wizard)**:
-   - Pick an API key (Anthropic, OpenAI, Gemini, xAI), local **Ollama / vLLM**, or single-user **Personal Mode CLI OAuth** (`Claude Code`, `Codex`, `Gemini`, `Antigravity`, `Grok`). This automatically provisions all 5 stage agents (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`) plus `@coordinator`.
+   - Pick an API key (Anthropic, OpenAI, Gemini, xAI), local **Ollama / vLLM**, or single-user **Personal Mode CLI OAuth** (`Claude Code`, `Codex`, `Gemini`, `Antigravity`). This automatically provisions all 5 stage agents (`@ideator`, `@planner`, `@coder`, `@reviewer`, `@merger`) plus `@coordinator`.
    - Connect Git via **1-Click GitHub App**, GitLab/Bitbucket token, or point directly at a **Local Folder** on disk.
 3. **Plant Your First Seed**: Create a project and submit a prompt (full 5-stage pipeline, **⚡ Fast-Track** straight to code, or **2–3 parallel model opinions**), or click **`+ New ▾`** to open a live Coding Agent chat, Browser PTY terminal, or embedded VS Code Web session.
+
+| Area | Status |
+| :--- | :--- |
+| **Docker Compose, Web UI, 3-phase broker, receipts** | Stable |
+| **5 CLI runtimes (`opencode`, `claude-code`, `codex`, `antigravity`, `gemini`)** | Stable (built into local runner image) |
+| **`grok-build` runtime** | Adapter only (bring your own binary) |
+| **Helm chart (`charts/gitseed`)** | Beta |
+| **Pre-built registry images** | Not yet published (builds locally via Compose) |
 
 <details>
 <summary><strong>Kubernetes (Helm) Deployment &amp; Service Port Map</strong></summary>
 
 <br />
 
-Deploy to Kubernetes from the included Helm chart after pushing images to your cluster registry (see [`charts/gitseed/README.md`](./charts/gitseed/README.md)):
+Pre-built images are not published to GHCR yet. Build and push the two images to your cluster registry first, then install the included Helm chart (see [`charts/gitseed/README.md`](./charts/gitseed/README.md)):
 
 ```bash
+docker build -t <your-registry>/gitseed:0.1.0 .
+docker build --build-arg INCLUDE_PROPRIETARY_CLIS=false -t <your-registry>/gitseed-runner:0.1.0 ./apps/runner
+docker push <your-registry>/gitseed:0.1.0 && docker push <your-registry>/gitseed-runner:0.1.0
+
 helm upgrade --install gitseed ./charts/gitseed \
   --namespace gitseed \
   --create-namespace \
-  --set image.repository=ghcr.io/gitseed-dev/gitseed \
-  --set runnerImage.repository=ghcr.io/gitseed-dev/runner
+  --set image.repository=<your-registry>/gitseed \
+  --set image.tag=0.1.0 \
+  --set runnerImage.repository=<your-registry>/gitseed-runner \
+  --set runnerImage.tag=0.1.0
 ```
 
 | Service | Default URL / Port | Description |
@@ -69,26 +86,27 @@ helm upgrade --install gitseed ./charts/gitseed \
 
 ## Why GitSeed?
 
-Ad-hoc coding prompts work for single files, but shipping production software with agents requires isolated execution, untrusted-agent containment, review gates, provenance, and spend controls:
+**Why not just run `claude`, `codex`, or `opencode` on your laptop?** Local CLIs are great for interactive work, but they run on your host OS with your SSH keys, cloud credentials, and Git push access, and they leave no verifiable record of what ran or who approved it. GitSeed runs those same CLIs in isolated containers where agents never see your Git credentials:
 
 - **Untrusted Agent, Trusted Broker (`prepare` → `agent` → `finalize`)**: Coding agents run with zero Git credentials behind an SSRF-hardened `egress-proxy`; a separate read-only `finalize` container enforces `blocked_paths` and added-line secret scanning before pushing.
+- **Don't trust us, try to break it**: The threat model and [Known Residual Risks](./SECURITY.md#4-known-residual-risks) are documented up front in [`SECURITY.md`](./SECURITY.md), and the adversarial "evil agent" red-team suite runs with `uv run python -m pytest apps/core/tests/test_evil_agent_redteam.py`.
 - **Ed25519-Signed PR Governance Receipts**: Every Pull Request receives a cryptographically signed receipt (`gitseed.receipt.v1`) attesting to the locked spec, models, spend mode, security scans, and human approvals, verifiable offline via `gitseed receipt verify`.
 - **Parallel 3-Model "Second Opinions"**: Dispatch up to **3 agents in parallel** during `Ideate`, `Plan`, or `Review` to compare competing specs, task plans, or code reviews side-by-side before approving.
 - **Cloud BYOK, Local GPUs & Single-User "Personal Mode"**: Enforce hard per-run USD caps via **LiteLLM** (cloud APIs or local **Ollama / vLLM / LM Studio**), or sign in with your personal **Claude Pro/Max**, **ChatGPT Plus/Pro**, or **Gemini** subscription inside an isolated container.
-- **Autonomous Pipelines + Live Sandbox Rescue**: Drop into any workspace from the persistent **`SessionDock`** (persistent browser PTY terminal, Monaco, and isolated **VS Code Web**), leave inline diff comments, or `@coder`-steer an active run without losing progress.
+- **Autonomous Pipelines + Live Sandbox Rescue**: Drop into any workspace from the persistent **`SessionDock`** (side-by-side browser PTY terminal + code/diff editor, or isolated **VS Code Web**), leave inline diff comments, or `@coder`-steer an active run without losing progress.
 - **5-Stage SDLC or ⚡ Fast-Track + Self-Healing CI**: Lock specs across `Ideate → Plan → Execute → Review → Merge` for complex features, **⚡ Fast-Track** (`Execute → Review → Merge`) for quick fixes, auto-remediate failing PR CI checks, or sync against a zero-remote **Local Folder**.
 
 ### How GitSeed Compares
 
-| Capability | Local Worktree Wrappers *(Desktop CLI Multiplexers)* | Cloud SaaS Agent Bots *(Managed Coding Services)* | **GitSeed Control Plane** |
+| Capability | Agent CLIs on your laptop | Hosted cloud agents | **GitSeed** |
 | :--- | :--- | :--- | :--- |
-| **Execution & Trust Boundary** | Local `git worktree` on your host OS (shares host filesystem & credentials) | Vendor-hosted cloud VM (source code leaves your network) | **3-phase `prepare` → `agent` → `finalize` containers** on your infra; agent holds zero Git creds; `:ro` finalize enforces `blocked_paths` & secret scan |
-| **Model & Auth Freedom** | Local CLI binaries installed on host | Tied to vendor credits & selected models | **6 CLI Runtimes** (`opencode`, `claude-code`, `codex`, `antigravity`, `gemini`, `grok-build`) + **Team LiteLLM APIs**, **Local Ollama/vLLM**, & single-user **Personal Mode OAuth** |
-| **Workflow & Second Opinions** | Ad-hoc parallel prompts & manual branch comparison | Single-stage autonomous agent loop | **5-Stage SDLC or ⚡ Fast-Track** + **up to 3 parallel agent opinions** per stage with locked specs |
-| **Provenance & Auditability** | Unstructured local terminal scrollback | Opaque vendor logs | **Ed25519-signed Governance Receipts (`gitseed.receipt.v1`)** posted to PRs + CLI offline verification (`gitseed receipt verify`) |
-| **Spend Controls** | Passive token display after spend occurs | Subscription seat & usage credits | **Enforced** per-run LiteLLM virtual-key dollar caps (API mode) & **Estimated** token telemetry + hard timeout/turn caps (Personal Mode) |
-| **Git & CI Automation** | Single local repo per worktree | Remote cloud repos only | **Multi-repo PRs** (GitHub/GitLab/Bitbucket), **zero-remote Local Folder auto-sync**, & **self-healing CI remediation** |
-| **Interactive + Autonomous** | Interactive split terminals | Asynchronous web ticket portal | **Both**: Autonomous pipeline **plus** docked Live Agent Sessions, Browser PTY, Monaco, & **VS Code Web** across Web, CLI/TUI, & MCP |
+| **Trust boundary** | Runs on host with your keys | Code leaves your network | **3-phase containers; agent holds zero keys** |
+| **Runtimes & models** | Local CLI binaries on host | Locked to vendor models | **5 bundled CLIs (+ `grok-build` adapter), LiteLLM, Ollama** |
+| **Workflow & review** | Ad-hoc prompts & manual diffs | Single-model agent loop | **5-stage gates, ⚡ Fast-Track, 3 parallel opinions** |
+| **PR provenance** | Local terminal scrollback | Opaque vendor logs | **Ed25519-signed receipt on every PR** |
+| **Spend limits** | Passive token counter | Vendor seat & credit tiers | **Hard LiteLLM USD caps or Personal Mode timeouts** |
+| **Git & CI** | Single local checkout | Cloud repos only | **Multi-repo PRs, Local Folder sync, CI auto-fix** |
+| **Access** | Local terminal only | Web ticket portal | **Web UI, split terminal+diff dock, CLI/TUI, MCP** |
 
 ---
 
@@ -149,24 +167,32 @@ See [**`SECURITY.md`**](./SECURITY.md) for the complete Threat Model, Enforced v
 
 ## Developer CLI (`gitseed`)
 
-Install the CLI & interactive TUI (`gitseed tui`) via `uv` or `pip` (or invoke via `docker compose exec api gitseed`):
+Install the CLI & interactive split-pane TUI (`gitseed tui`) via `uv` or `pip` (or invoke via `docker compose exec api gitseed`):
 
 ```bash
-# Authenticate against your control plane
 gitseed login http://localhost:8420
+gitseed create seed "Fix OAuth callback timeout" -p my-project --fast-track
+gitseed logs my-project#1 -f
+gitseed receipt verify receipt.json --public-key-file pubkey.pem
+gitseed tui
+```
 
+<details>
+<summary><strong>More CLI Commands (<code>get</code>, <code>steer</code>, <code>approve</code>, <code>session</code>, <code>sandbox</code>, <code>ask</code>)</strong></summary>
+
+<br />
+
+```bash
 # Inspect projects, seeds, runs, and governance policies
 gitseed get projects
 gitseed get seeds -p my-project
 gitseed describe seed my-project#1
 
-# Create or sync seeds from declarative Markdown manifests (or Fast-Track straight to Execute)
+# Create or sync seeds from declarative Markdown manifests
 gitseed create seed -f seed.md
-gitseed create seed "Fix OAuth callback timeout" -p my-project --summary "Increase timeout to 15s" --fast-track
 gitseed apply -f .gitseed/manifests/
 
-# Stream live container logs, inspect diffs, and steer, fast-track, or approve stages
-gitseed logs my-project#1 -f
+# Inspect diffs, steer an active run, fast-track, or approve stages
 gitseed diff my-project#1
 gitseed steer my-project#1 "Also add rate-limit headers to the response" -a @coder
 gitseed advance my-project#1 --fast-track
@@ -182,12 +208,11 @@ gitseed session start -p my-project --agent @coder -m "Investigate flaky auth te
 
 # Ask @coordinator to triage blocked seeds or summarize spend
 gitseed ask "Which seeds are awaiting review and what is our spend this week?"
-
-# Launch the interactive split-pane Terminal UI (k9s / lazygit style)
-gitseed tui
 ```
 
 All inspection commands support `-o table` (default), `-o wide`, `-o json`, and `-o md` (GitHub-Flavored Markdown for CI summaries). See [`apps/cli/README.md`](./apps/cli/README.md) for the complete command reference.
+
+</details>
 
 ---
 
@@ -279,6 +304,11 @@ See [**`docs/architecture.md`**](./docs/architecture.md) and [**`docs/concepts.m
 
 ## Single-Image Entrypoint Modes & Local Development
 
+<details>
+<summary><strong>Contributor Setup, Entrypoint Modes &amp; Verification Commands</strong></summary>
+
+<br />
+
 The root [`Dockerfile`](./Dockerfile) packages the entire control plane into `gitseed/gitseed`, selectable via container command (`api | web | scheduler | egress-proxy | mcp | cli | migrate | help`):
 
 ```bash
@@ -305,6 +335,8 @@ pnpm --filter web test
 pnpm --filter web build
 ```
 
+</details>
+
 ---
 
 ## License & Trademarks
@@ -314,3 +346,7 @@ pnpm --filter web build
 - **Privacy**: Self-hosted GitSeed sends zero telemetry; your code, prompts, and credentials stay on your infrastructure. See [`PRIVACY.md`](./PRIVACY.md).
 - **Contributions**: External pull requests require accepting the [GitSeed Contributor License Agreement](./CLA.md) (one PR comment, handled by a bot). See [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
 - **Third-party agent CLIs & model providers**: GitSeed orchestrates third-party tools (e.g., Claude Code, Codex, Gemini CLI) and model APIs that have their own licenses and terms of service. Claude Code is proprietary (installed locally at image build time unless `INCLUDE_PROPRIETARY_CLIS=false`) and is not part of GitSeed's Apache-2.0 source distribution; redistributed container images must omit proprietary vendor CLIs. You are responsible for complying with each provider's terms, including any restrictions on using consumer subscriptions with third-party tools.
+
+---
+
+Early project, built by one person. Feedback, bug reports, and stars all help — open a thread in [**GitHub Discussions**](https://github.com/gitseed-dev/gitseed/discussions) or check out [**good first issues**](https://github.com/gitseed-dev/gitseed/labels/good%20first%20issue).
