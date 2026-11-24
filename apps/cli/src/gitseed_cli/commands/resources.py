@@ -9,7 +9,6 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
-import click
 import typer
 from gitseed_common.enums import RUN_ACTIVE_STATUSES, SeedAutonomy, SeedStage
 from gitseed_common.schemas import CreateSeedRequest, RunResponse
@@ -843,11 +842,17 @@ def register_resource_commands(app: typer.Typer) -> None:
             if editor:
                 subprocess.run(_split_editor_command(editor) + [str(tmp_path)], check=True)
             else:
-                edited_text = click.edit(original_md, extension=".md")
-                if edited_text is None:
-                    console.print("[dim]Edit cancelled, no changes made.[/dim]")
-                    return
-                tmp_path.write_text(edited_text, encoding="utf-8")
+                try:
+                    import click  # type: ignore[import-not-found]
+
+                    edited_text = click.edit(original_md, extension=".md")
+                    if edited_text is None:
+                        console.print("[dim]Edit cancelled, no changes made.[/dim]")
+                        return
+                    tmp_path.write_text(edited_text, encoding="utf-8")
+                except ImportError:
+                    fallback_editor = "notepad" if os.name == "nt" else "vi"
+                    subprocess.run([fallback_editor, str(tmp_path)], check=True)
 
             updated_md = tmp_path.read_text(encoding="utf-8")
             if updated_md.strip() == original_md.strip():

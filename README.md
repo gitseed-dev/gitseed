@@ -349,4 +349,4 @@ pnpm --filter web build
 
 ---
 
-Early project, built by one person. Feedback, bug reports, and stars all help — open a thread in [**GitHub Discussions**](https://github.com/gitseed-dev/gitseed/discussions) or check out [**good first issues**](https://github.com/gitseed-dev/gitseed/labels/good%20first%20issue).
+Early project. Feedback, bug reports, and stars all help — open a thread in [**GitHub Discussions**](https://github.com/gitseed-dev/gitseed/discussions) or check out [**good first issues**](https://github.com/gitseed-dev/gitseed/labels/good%20first%20issue).

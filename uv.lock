@@ -385,6 +385,7 @@ name = "gitseed-cli"
 version = "0.1.0"
 source = { editable = "apps/cli" }
 dependencies = [
+    { name = "click" },
     { name = "cryptography" },
     { name = "gitseed-common" },
     { name = "httpx" },
@@ -396,6 +397,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.1.0" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "gitseed-common", editable = "packages/common" },
     { name = "httpx", specifier = ">=0.27" },
