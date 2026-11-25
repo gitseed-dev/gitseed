@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Setup Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
       - name: Lint Helm chart
         run: helm lint charts/gitseed
       - name: Render Helm chart templates
