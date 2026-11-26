@@ -486,6 +486,16 @@ def test_opencode_adapter_cleans_up_config_and_parses_ndjson_telemetry(
         + "\n",
         json.dumps(
             {
+                "type": "codemode",
+                "part": {
+                    "type": "codemode",
+                    "state": {"status": "completed", "output": "chained 3 mcp calls"},
+                },
+            }
+        )
+        + "\n",
+        json.dumps(
+            {
                 "type": "step_finish",
                 "part": {
                     "type": "step-finish",
@@ -515,6 +525,7 @@ def test_opencode_adapter_cleans_up_config_and_parses_ndjson_telemetry(
     ]
     rendered = "".join(_format_cli_stream_line(ln, adapter3) for ln in ndjson_lines)
     assert "Inspecting files...\n" in rendered
+    assert "[tool:ok] codemode -> chained 3 mcp calls\n" in rendered
     assert "plain fallback stdout line\n" in rendered
     assert adapter3.input_tokens == 1570  # (1000 + (200 // 10) + 50) + 500
     assert adapter3.cached_input_tokens == 200

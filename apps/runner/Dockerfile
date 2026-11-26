@@ -55,8 +55,9 @@ ARG GITSEED_VERSION=dev
 LABEL org.opencontainers.image.source="https://github.com/gitseed-dev/gitseed" \
       org.opencontainers.image.licenses="Apache-2.0"
 # Bounded semver ranges for pre-installed agent CLIs (override via `--build-arg <NAME>_VERSION=<ver>`).
-ARG OPENCODE_VERSION=">=1.0.0 <2.0.0"
-ARG CLAUDE_CODE_VERSION=">=1.0.0 <3.0.0"
+ARG OPENCODE_PACKAGE="@opencode/cli"
+ARG OPENCODE_VERSION=">=2.0.0 <3.0.0"
+ARG CLAUDE_CODE_VERSION=">=2.0.0 <3.0.0"
 ARG INCLUDE_PROPRIETARY_CLIS=false
 ARG INSTALL_CLAUDE_CODE=${INCLUDE_PROPRIETARY_CLIS}
 ARG INSTALL_ANTIGRAVITY=${INCLUDE_PROPRIETARY_CLIS}
@@ -100,12 +101,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          && mv /usr/bin/gnome-keyring-daemon.nocap /usr/bin/gnome-keyring-daemon \
          && chmod 0755 /usr/bin/gnome-keyring-daemon; \
        fi \
-    && npm install -g \
-    "opencode-ai@${OPENCODE_VERSION}" \
+    && npm install -g --foreground-scripts \
+    "${OPENCODE_PACKAGE}@${OPENCODE_VERSION}" \
     "@openai/codex@${CODEX_VERSION}" \
     "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
+    && command -v opencode >/dev/null 2>&1 \
     && if [ "${INSTALL_CLAUDE_CODE}" = "true" ]; then \
-         npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
+         npm install -g --foreground-scripts "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
        fi \
     && npm cache clean --force \
     && groupadd -g 1000 runner \

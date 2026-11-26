@@ -615,7 +615,11 @@ class OpenCodeAdapter(RuntimeAdapter):
         elif lower_model.startswith(("gpt-", "o1-", "o3-", "o4-", "codex-")) or lower_model in (
             "o1",
             "o3",
+            "o4",
             "o4-mini",
+            "gpt-latest",
+            "sol",
+            "astra",
         ):
             inferred = "openai"
         elif lower_model.startswith("gemini-"):
@@ -631,9 +635,41 @@ class OpenCodeAdapter(RuntimeAdapter):
             return f"{explicit_provider}/{raw}"
         return raw
 
+    @staticmethod
+    def _default_v2_permissions() -> list[dict[str, str]]:
+        """Ordered OpenCode 2.0 permission rules allowing autonomous execution inside the sandbox."""
+        return [
+            {"action": "*", "resource": "*", "effect": "allow"},
+            {"action": "shell", "resource": "*", "effect": "allow"},
+            {"action": "edit", "resource": "*", "effect": "allow"},
+            {"action": "webfetch", "resource": "*", "effect": "allow"},
+            {"action": "external_directory", "resource": "*", "effect": "allow"},
+        ]
+
+    @staticmethod
+    def _ensure_v2_cli_config(home_root: Path) -> None:
+        """Ensure `~/.config/opencode/cli.json` exists with the OpenCode 2.0 CLI/TUI schema."""
+        cli_cfg_dir = home_root / ".config" / "opencode"
+        cli_cfg_path = cli_cfg_dir / "cli.json"
+        with contextlib.suppress(OSError):
+            cli_cfg_dir.mkdir(parents=True, exist_ok=True)
+            if cli_cfg_path.is_symlink():
+                return
+            doc: dict[str, Any] = {}
+            if cli_cfg_path.is_file():
+                with contextlib.suppress(Exception):
+                    loaded = json.loads(cli_cfg_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        doc = loaded
+            doc.setdefault("$schema", "https://opencode.ai/v2/cli.json")
+            cli_cfg_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
     def prepare_workspace(self) -> dict[str, str]:
         self.restore_cli_auth_bundle()
+        home_root = Path.home().resolve()
+        self._ensure_v2_cli_config(home_root)
         env = os.environ.copy()
+        env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
         mcp_cfg_full: dict[str, Any] = {}
         mcp_cfg_workspace: dict[str, Any] = {}
         if self.mcp_servers:
@@ -660,12 +696,14 @@ class OpenCodeAdapter(RuntimeAdapter):
                             "type": "local",
                             "command": parts,
                             "enabled": True,
+                            "codemode": True,
                             "environment": raw_env,
                         }
                         mcp_cfg_workspace[slug] = {
                             "type": "local",
                             "command": parts,
                             "enabled": True,
+                            "codemode": True,
                             "environment": redacted_env,
                         }
                 else:
@@ -681,51 +719,53 @@ class OpenCodeAdapter(RuntimeAdapter):
                         "type": "remote",
                         "url": endpoint,
                         "enabled": True,
+                        "codemode": True,
                         "headers": raw_headers,
                     }
                     mcp_cfg_workspace[slug] = {
                         "type": "remote",
                         "url": endpoint,
                         "enabled": True,
+                        "codemode": True,
                         "headers": redacted_headers,
                     }
 
+        v2_permissions = self._default_v2_permissions()
         if self.auth_mode == "cli_oauth":
             oauth_model = self._resolve_opencode_oauth_model()
             opencode_config_full: dict[str, Any] = {
                 "$schema": "https://opencode.ai/config.json",
-                "permission": {
-                    "edit": "allow",
-                    "bash": "allow",
-                    "webfetch": "allow",
-                },
+                "permissions": v2_permissions,
             }
             if oauth_model:
                 opencode_config_full["model"] = oauth_model
             opencode_config_workspace = dict(opencode_config_full)
         else:
+            model_entry = {
+                "name": self.model,
+                "tool_call": True,
+                "capabilities": {
+                    "tools": True,
+                    "input": ["text"],
+                    "output": ["text"],
+                },
+            }
             opencode_config_full = {
                 "$schema": "https://opencode.ai/config.json",
                 "model": f"gitseed/{self.model}",
                 "small_model": f"gitseed/{self.model}",
-                "permission": {
-                    "edit": "allow",
-                    "bash": "allow",
-                    "webfetch": "allow",
-                },
-                "provider": {
+                "permissions": v2_permissions,
+                "providers": {
                     "gitseed": {
-                        "npm": "@ai-sdk/openai-compatible",
                         "name": "GitSeed LiteLLM Proxy",
-                        "options": {
+                        "package": "@opencode/ai/providers/openai-compatible",
+                        "env": ["OPENAI_API_KEY"],
+                        "settings": {
                             "baseURL": self.gateway_base_url,
                             "apiKey": self.gateway_api_key,
                         },
                         "models": {
-                            self.model: {
-                                "name": self.model,
-                                "tool_call": True,
-                            }
+                            self.model: model_entry,
                         },
                     }
                 },
@@ -734,32 +774,26 @@ class OpenCodeAdapter(RuntimeAdapter):
                 "$schema": "https://opencode.ai/config.json",
                 "model": f"gitseed/{self.model}",
                 "small_model": f"gitseed/{self.model}",
-                "permission": {
-                    "edit": "allow",
-                    "bash": "allow",
-                    "webfetch": "allow",
-                },
-                "provider": {
+                "permissions": v2_permissions,
+                "providers": {
                     "gitseed": {
-                        "npm": "@ai-sdk/openai-compatible",
                         "name": "GitSeed LiteLLM Proxy",
-                        "options": {
+                        "package": "@opencode/ai/providers/openai-compatible",
+                        "env": ["OPENAI_API_KEY"],
+                        "settings": {
                             "baseURL": self.gateway_base_url,
                             "apiKey": "{env:OPENAI_API_KEY}",
                         },
                         "models": {
-                            self.model: {
-                                "name": self.model,
-                                "tool_call": True,
-                            }
+                            self.model: model_entry,
                         },
                     }
                 },
             }
 
         if mcp_cfg_full:
-            opencode_config_full["mcp"] = mcp_cfg_full
-            opencode_config_workspace["mcp"] = mcp_cfg_workspace
+            opencode_config_full["mcp"] = {"servers": mcp_cfg_full}
+            opencode_config_workspace["mcp"] = {"servers": mcp_cfg_workspace}
 
         # Write full credentialed config outside /workspace so SIGKILL never leaves secrets in repo
         ext_dir = Path(tempfile.gettempdir())
@@ -954,11 +988,16 @@ class OpenCodeAdapter(RuntimeAdapter):
             return ""
 
         raw_state = part.get("state")
-        if (ev_type in ("tool_use", "tool") or part_type == "tool") and isinstance(
-            raw_state, dict
-        ):
+        if (
+            ev_type in ("tool_use", "tool", "codemode", "code_mode")
+            or part_type in ("tool", "codemode", "code_mode", "script")
+        ) and isinstance(raw_state, dict):
             state = raw_state
-            t_name = str(part.get("tool") or ev.get("name") or "tool")
+            t_name = str(
+                part.get("tool")
+                or ev.get("name")
+                or ("codemode" if "code" in (ev_type + part_type) else "tool")
+            )
             st_status = str(state.get("status") or "").lower()
             if st_status in ("completed", "error"):
                 tag = "error" if st_status == "error" else "ok"
@@ -1220,15 +1259,17 @@ class CodexAdapter(RuntimeAdapter):
         return cmd
 
 
-def _normalize_google_cli_model(raw_model: str | None) -> str:
+def _normalize_google_cli_model(raw_model: str | None, *, binary: str = "agy") -> str:
     """Normalize short tier aliases for `agy` and `gemini` CLIs while preserving concrete model IDs."""
     normalized = (raw_model or "").strip()
-    if normalized in ("default", ""):
+    if normalized in ("default", "inherit", "auto", ""):
         return ""
-    if normalized in ("flash", "flash_lite"):
-        return "gemini-2.5-flash"
-    if normalized in ("pro", "inherit"):
-        return "gemini-2.5-pro"
+    if normalized == "pro":
+        return "pro"
+    if normalized == "flash":
+        return "flash"
+    if normalized in ("flash_lite", "flash-lite"):
+        return "flash-lite" if binary == "gemini" else "flash"
     return normalized
 
 
@@ -1660,7 +1701,7 @@ class AntigravityAdapter(RuntimeAdapter):
         if self.auth_mode != "cli_oauth":
             agy_settings.setdefault("modelProvider", "gemini")
             agy_settings.setdefault("enableAdc", False)
-        normalized_model = _normalize_google_cli_model(self.model)
+        normalized_model = _normalize_google_cli_model(self.model, binary=self.binary_name)
         if normalized_model:
             agy_settings["model"] = normalized_model
         else:
@@ -1867,7 +1908,7 @@ class GeminiAdapter(RuntimeAdapter):
                 dict.fromkeys([str(self.working_dir), str(Path.cwd()), "/workspace"])
             ),
         }
-        normalized_model = _normalize_google_cli_model(self.model)
+        normalized_model = _normalize_google_cli_model(self.model, binary=self.binary_name)
         if normalized_model:
             agy_settings["model"] = normalized_model
         if mcp_map:
@@ -1904,7 +1945,7 @@ class GeminiAdapter(RuntimeAdapter):
         return env
 
     def build_command(self, prompt: str, *, continue_session: bool = False) -> list[str]:
-        normalized_model = _normalize_google_cli_model(self.model)
+        normalized_model = _normalize_google_cli_model(self.model, binary=self.binary_name)
         ws_root = self._multi_repo_workspace_root()
         if self.binary_name == "agy":
             cmd = [
@@ -1940,7 +1981,7 @@ class GeminiAdapter(RuntimeAdapter):
         return cmd
 
     def build_interactive_command(self) -> list[str]:
-        normalized_model = _normalize_google_cli_model(self.model)
+        normalized_model = _normalize_google_cli_model(self.model, binary=self.binary_name)
         ws_root = self._multi_repo_workspace_root()
         if self.binary_name == "agy":
             cmd = ["agy", "--dangerously-skip-permissions"]

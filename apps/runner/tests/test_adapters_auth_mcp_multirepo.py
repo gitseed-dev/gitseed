@@ -111,10 +111,20 @@ def test_opencode_adapter_personal_cli_oauth_mode(
 
     cfg = json.loads((work_dir / "opencode.json").read_text(encoding="utf-8"))
     assert "provider" not in cfg
+    assert "providers" not in cfg
     assert cfg["model"] == "anthropic/claude-sonnet-4-5"
     assert "small_model" not in cfg
-    assert cfg["permission"] == {"edit": "allow", "bash": "allow", "webfetch": "allow"}
-    assert cfg["mcp"]["gitseed-tools"]["url"] == "http://mcp:8000/mcp"
+    assert {r["action"]: r["effect"] for r in cfg["permissions"]} == {
+        "*": "allow",
+        "shell": "allow",
+        "edit": "allow",
+        "webfetch": "allow",
+        "external_directory": "allow",
+    }
+    assert cfg["mcp"]["servers"]["gitseed-tools"]["url"] == "http://mcp:8000/mcp"
+    assert cfg["mcp"]["servers"]["gitseed-tools"]["codemode"] is True
+    assert (home_dir / ".config" / "opencode" / "cli.json").is_file()
+    assert env_ant["OPENCODE_DISABLE_AUTOUPDATE"] == "true"
     assert "OPENAI_BASE_URL" not in env_ant
     assert "OPENAI_API_KEY" not in env_ant
     assert "ANTHROPIC_BASE_URL" not in env_ant
@@ -481,10 +491,13 @@ def test_normalize_google_cli_model_preserves_gemini_3_1_and_maps_aliases() -> N
     assert _normalize_google_cli_model("gemini-3.1-pro-preview") == "gemini-3.1-pro-preview"
     assert _normalize_google_cli_model("gemini-3.1-flash-lite") == "gemini-3.1-flash-lite"
     assert _normalize_google_cli_model("gemini-2.5-pro") == "gemini-2.5-pro"
-    assert _normalize_google_cli_model("pro") == "gemini-2.5-pro"
-    assert _normalize_google_cli_model("inherit") == "gemini-2.5-pro"
-    assert _normalize_google_cli_model("flash") == "gemini-2.5-flash"
-    assert _normalize_google_cli_model("flash_lite") == "gemini-2.5-flash"
+    assert _normalize_google_cli_model("pro") == "pro"
+    assert _normalize_google_cli_model("pro", binary="gemini") == "pro"
+    assert _normalize_google_cli_model("inherit") == ""
+    assert _normalize_google_cli_model("auto") == ""
+    assert _normalize_google_cli_model("flash") == "flash"
+    assert _normalize_google_cli_model("flash_lite") == "flash"
+    assert _normalize_google_cli_model("flash_lite", binary="gemini") == "flash-lite"
     assert _normalize_google_cli_model("default") == ""
 
 
@@ -526,6 +539,10 @@ def test_opencode_secret_isolation_oauth_prefix_and_codex_auth(
         ws_cfg_text = (ws / "opencode.json").read_text(encoding="utf-8")
         assert "sk-gsr-top-secret-gateway-key" not in ws_cfg_text
         assert "mcp-secret-header-token" not in ws_cfg_text
+        ws_cfg = json.loads(ws_cfg_text)
+        assert ws_cfg["providers"]["gitseed"]["package"] == "@opencode/ai/providers/openai-compatible"
+        assert ws_cfg["providers"]["gitseed"]["settings"]["apiKey"] == "{env:OPENAI_API_KEY}"
+        assert ws_cfg["mcp"]["servers"]["corp-mcp"]["codemode"] is True
         ext_cfg_path = Path(env["OPENCODE_CONFIG"])
         assert ext_cfg_path.is_file()
         assert not ext_cfg_path.resolve().is_relative_to(ws.resolve())
@@ -536,7 +553,7 @@ def test_opencode_secret_isolation_oauth_prefix_and_codex_auth(
         oc.cleanup_workspace()
     assert not ext_cfg_path.exists()
 
-    # OpenCode cli_oauth infers unambiguous provider prefix when model lacks `/`
+    # OpenCode cli_oauth infers unambiguous provider prefix when model lacks `/` (including v2 aliases)
     oc_oauth = OpenCodeAdapter(
         ctx={
             "runtime": "opencode",
@@ -555,6 +572,28 @@ def test_opencode_secret_isolation_oauth_prefix_and_codex_auth(
     )
     oauth_cmd = oc_oauth.build_command("Plan feature")
     assert oauth_cmd[oauth_cmd.index("--model") + 1] == "anthropic/claude-sonnet-4-5"
+
+    oc_v2_alias = OpenCodeAdapter(
+        ctx={
+            "runtime": "opencode",
+            "model": "gpt-latest",
+            "gateway": {
+                "auth_mode": "cli_oauth",
+                "cli_auth_bundle": {
+                    ".local/share/opencode/auth.json": json.dumps(
+                        {
+                            "openai": {"type": "oauth", "access": "oa-tok"},
+                            "anthropic": {"type": "oauth", "access": "ant-tok"},
+                        }
+                    )
+                },
+            },
+        },
+        working_dir=ws,
+        output_file=out,
+    )
+    v2_alias_cmd = oc_v2_alias.build_command("Implement")
+    assert v2_alias_cmd[v2_alias_cmd.index("--model") + 1] == "openai/gpt-latest"
 
     # Codex OAuth fallback writes both top-level and nested `tokens.access_token`, and API key mode uses `wire_api = "responses"`
     codex_oauth = CodexAdapter(

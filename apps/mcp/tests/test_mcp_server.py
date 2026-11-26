@@ -1132,9 +1132,11 @@ def test_runner_adapters_mcp_config_injection(
     )
     opencode_adapter.prepare_workspace()
     opencode_cfg = json.loads((work_dir / "opencode.json").read_text(encoding="utf-8"))
-    assert "gitseed-mcp" in opencode_cfg["mcp"]
-    assert opencode_cfg["mcp"]["gitseed-mcp"]["url"] == "http://mcp:8422/sse"
-    assert opencode_cfg["mcp"]["local-stdio"]["command"] == ["gitseed-mcp", "--stdio"]
+    assert "gitseed-mcp" in opencode_cfg["mcp"]["servers"]
+    assert opencode_cfg["mcp"]["servers"]["gitseed-mcp"]["url"] == "http://mcp:8422/sse"
+    assert opencode_cfg["mcp"]["servers"]["gitseed-mcp"]["codemode"] is True
+    assert opencode_cfg["mcp"]["servers"]["local-stdio"]["command"] == ["gitseed-mcp", "--stdio"]
+    assert opencode_cfg["mcp"]["servers"]["local-stdio"]["codemode"] is True
 
     claude_adapter = create_runtime_adapter(
         ctx={**ctx, "runtime": "claude-code"},
